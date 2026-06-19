@@ -12,52 +12,66 @@ module pe_tb;
     logic signed [7:0]  in_weight;
     logic signed [7:0]  out_weight;
 
-    // UUT Instance
+    int errors = 0; // Track failures
+
     pe uut (.*);
 
-    // Clock Generation
     always #5 clk = ~clk;
 
+    // --- HELPER TASK FOR SELF-CHECKING ---
+    task check_compute(
+        input logic signed [7:0]  test_activation,
+        input logic signed [15:0] test_partial_sum,
+        input logic signed [15:0] expected_partial_sum,
+        input logic signed [7:0]  expected_activation
+    );
+        begin
+            in_activation = test_activation;
+            in_partial_sum = test_partial_sum;
+            @(posedge clk);
+            #1;
+            
+            if (out_partial_sum !== expected_partial_sum || out_activation !== expected_activation) begin
+                $error("[FAIL] Time: %0t | Activation: %d, Partial Sum In: %d | Got: %d (Expected: %d)", 
+                       $time, test_activation, test_partial_sum, out_partial_sum, expected_partial_sum);
+                errors++;
+            end else begin
+                $display("[PASS] Time: %0t | Partial Sum Out: %d", $time, out_partial_sum);
+            end
+        end
+    endtask
+
     initial begin
-        clk = 0;
-        reset = 1;
-        in_activation = 0;
-        in_partial_sum = 0;
-        loading_phase = 0;
-        capture_weight = 0;
-        in_weight = 0;
+        clk = 0; reset = 1;
+        in_activation = 0; in_partial_sum = 0;
+        loading_phase = 0; capture_weight = 0; in_weight = 0;
         
-        #10;
-        reset = 0;
-        #10;
+        #15 reset = 0;
 
-        // Load Weight = 5
-        loading_phase = 1;
-        capture_weight = 1;
-        in_weight = 8'd5;
-        #10;
+        // --- STEP 1: LOAD WEIGHT ---
+        @(posedge clk);
+        loading_phase = 1; capture_weight = 1; in_weight = 8'd5;
+        @(posedge clk);
+        loading_phase = 0; capture_weight = 0; in_weight = 8'd0;
+
+        // --- STEP 2: TEST CASES ---
+        $display("--- Starting PE Compute Tests ---");
         
-        // Turn off loading flags
-        loading_phase = 0;
-        capture_weight = 0;
-        in_weight = 8'd0;
-        #10;
-
-        // Step 2: Test Compute Mode (5 * 3 + 10 = 25)
-        in_activation = 8'd3;
-        in_partial_sum = 16'd10;
-        #10;
-        $display("[TB] Out Partial_Sum: %d (Expected: 25)", out_partial_sum);
-        $display("[TB] Out Activation  : %d (Expected: 3)", out_activation);
+        // Normal positive numbers: 5 * 3 + 10 = 25
+        check_compute(8'd3, 16'd10, 16'd25, 8'd3);
         
-        // Step 3: Negative numbers test (5 * -2 + 0 = -10)
-        in_activation = -8'd2;
-        in_partial_sum = 16'd0;
-        #10;
-        $display("[TB] Out Partial_Sum: %d (Expected: -10)", out_partial_sum);
+        // Negative activation: 5 * (-2) + 0 = -10
+        check_compute(-8'd2, 16'd0, -16'd10, -8'd2);
+        
+        // Zero activation: 5 * 0 + 100 = 100
+        check_compute(8'd0, 16'd100, 16'd100, 8'd0);
+        
+        // Edge case (Max positive 8-bit): 5 * 127 + 0 = 635
+        check_compute(8'd127, 16'd0, 16'd635, 8'd127);
 
-        reset = 1;
-        #10;
+        // --- SUMMARY ---
+        if (errors == 0) $display("\n>>> ALL PE TESTS PASSED! <<<");
+        else $display("\n>>> %d PE TESTS FAILED <<<", errors);
 
         $finish;
     end
