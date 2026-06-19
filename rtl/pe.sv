@@ -10,7 +10,7 @@ module pe (
     input  logic signed [15:0]  in_partial_sum,
     output logic signed [15:0]  out_partial_sum,
 
-    input  logic                pass_weight,
+    input  logic                loading_phase,
     input  logic                capture_weight,
     input  logic signed [7:0]   in_weight,
     output logic signed [7:0]   out_weight
@@ -26,7 +26,7 @@ module pe (
             weight <= 8'd0;
         end else begin
             // Weight loading mode
-            if (pass_weight) begin
+            if (loading_phase) begin
                 out_weight <= in_weight;
                 if (capture_weight) begin
                     weight <= in_weight;
@@ -35,7 +35,7 @@ module pe (
                 out_weight <= 8'd0;
             end
 
-            if (!pass_weight) begin
+            if (!loading_phase) begin
                 // Compute mode
                 out_activation <= in_activation;
                 out_partial_sum <= weight * in_activation + in_partial_sum;
