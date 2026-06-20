@@ -4,19 +4,16 @@ module pe (
     input  logic                clk,
     input  logic                reset,
 
-    // Activation (Horizontal or Vertical stream)
     input  logic signed [7:0]   in_activation,
     output logic signed [7:0]   out_activation,
     input  logic                in_activation_valid,
     output logic                out_activation_valid,
 
-    // Partial Sum (Typically Vertical stream)
     input  logic signed [15:0]  in_partial_sum,
     output logic signed [15:0]  out_partial_sum,
     input  logic                in_partial_sum_valid,
     output logic                out_partial_sum_valid,
 
-    // Weight Configuration / Pass-through
     input  logic                loading_phase,
     input  logic                capture_weight,
     input  logic signed [7:0]   in_weight,
@@ -64,13 +61,13 @@ module pe (
                 out_activation_valid <= in_activation_valid;
 
                 // Multiply-Accumulate logic gates on valid input data
-                if (in_activation_valid && in_partial_sum_valid) begin
-                    out_partial_sum       <= (weight_reg * in_activation) + in_partial_sum;
+                if (in_activation_valid) begin
+                    out_partial_sum       <= (weight_reg * in_activation) + (in_partial_sum_valid ? in_partial_sum : 16'sd0);
                     out_partial_sum_valid <= 1'b1;
                 end else begin
-                    // Maintain current output or clear out if stream breaks
-                    out_partial_sum       <= 16'sd0;
-                    out_partial_sum_valid <= 1'b0;
+                    // no activation this cycle, pass incoming partial sum straight through unchanged
+                    out_partial_sum       <= in_partial_sum;
+                    out_partial_sum_valid <= in_partial_sum_valid;
                 end
             end else begin
                 // Clear execution channels when explicitly loading weights
