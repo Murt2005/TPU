@@ -4,7 +4,7 @@
 // No awareness of the MMU, PSums, weights, or rows -- pure storage primitive.
 // Reusable anywhere a simple synchronous FIFO is needed (weight loading,
 // accumulator column buffers, unified_buffer, etc).
-module weight_fifo #(
+module fifo #(
     parameter int WIDTH = 16,
     parameter int DEPTH = 4                       // must be a power of 2
 ) (
