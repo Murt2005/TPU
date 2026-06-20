@@ -4,12 +4,12 @@ module mmu_tb;
     logic clk;
     logic reset;
     logic loading_phase;
-    logic capture_weight_col0;
-    logic capture_weight_col1;
+    logic capture_weight_col_0;
+    logic capture_weight_col_1;
 
-    logic signed [7:0] row0_in, row1_in;
-    logic signed [7:0] col0_in, col1_in;
-    logic signed [15:0] partial_sum_out_0, partial_sum_out_1;
+    logic signed [7:0] in_row_0, in_row_1;
+    logic signed [7:0] in_col_0, in_col_1;
+    logic signed [15:0] out_partial_sum_0, out_partial_sum_1;
 
     mmu uut (.*);
 
@@ -45,7 +45,7 @@ module mmu_tb;
                      uut.pe11.in_weight,      uut.pe11.out_weight,     uut.pe11.weight,
                      uut.pe11.in_partial_sum, uut.pe11.out_partial_sum);
                      
-            $display("  MMU OUTPUTS | Psum_Col0 = %5d | Psum_Col1 = %5d", partial_sum_out_0, partial_sum_out_1);
+            $display("  MMU OUTPUTS | Psum_Col0 = %5d | Psum_Col1 = %5d", out_partial_sum_0, out_partial_sum_1);
             $display("-------------------------------------------------------------------------------------------------------");
         end
     end
@@ -53,8 +53,8 @@ module mmu_tb;
     initial begin
         // Initialize everything
         clk = 0; reset = 1;
-        loading_phase = 0; capture_weight_col0 = 0; capture_weight_col1 = 0;
-        row0_in = 0; row1_in = 0; col0_in = 0; col1_in = 0;
+        loading_phase = 0; capture_weight_col_0 = 0; capture_weight_col_1 = 0;
+        in_row_0 = 0; in_row_1 = 0; in_col_0 = 0; in_col_1 = 0;
         
         #15 reset = 0; #10;
 
@@ -64,19 +64,19 @@ module mmu_tb;
         // Matrix W:
         // [4, 5]
         // [2, 3]
-        loading_phase = 1; capture_weight_col0 = 1; capture_weight_col1 = 1;
+        loading_phase = 1; capture_weight_col_0 = 1; capture_weight_col_1 = 1;
         
         // Cycle 0: Feed row0 weights down
-        col0_in = 8'd2; col1_in = 8'd3;
+        in_col_0 = 8'd2; in_col_1 = 8'd3;
         #10;
         
         // Cycle 1: Push row0 weights to row1 PEs, feed row1 weights into row0 PEs
-        col0_in = 8'd4; col1_in = 8'd5;
+        in_col_0 = 8'd4; in_col_1 = 8'd5;
         #10;
         
         // Disable weight loading phase
-        loading_phase = 0; capture_weight_col0 = 0; capture_weight_col1 = 0;
-        col0_in = 0; col1_in = 0;
+        loading_phase = 0; capture_weight_col_0 = 0; capture_weight_col_1 = 0;
+        in_col_0 = 0; in_col_1 = 0;
         #10;
 
         // --- PHASE 2: COMPUTE STAGGERED ACTIVATIONS ---
@@ -84,19 +84,19 @@ module mmu_tb;
         //  [1, 2]
         //  [3, 4]
         // T0: row0_in gets A00 (1)
-        row0_in = 8'd1;  row1_in = 8'd0;
+        in_row_0 = 8'd1;  in_row_1 = 8'd0;
         #10;
         
         // T1: row0_in gets A10 (3), row1_in gets A01 (2)
-        row0_in = 8'd3;  row1_in = 8'd2;
+        in_row_0 = 8'd3;  in_row_1 = 8'd2;
         #10;
         
         // T2: row0_in gets 0, row1_in gets A11 (4)
-        row0_in = 8'd0;  row1_in = 8'd4;
+        in_row_0 = 8'd0;  in_row_1 = 8'd4;
         #10;
         
         // Clear all inputs and let data stream completely out the bottom of the array
-        row0_in = 8'd0;  row1_in = 8'd0;
+        in_row_0 = 8'd0;  in_row_1 = 8'd0;
         #20;
         
         $display("\n=== SIMULATION COMPLETE ===\n");
