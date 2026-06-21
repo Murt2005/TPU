@@ -59,7 +59,7 @@ module tpu_core_tb;
         .shadow_loaded(), .active_bank(), .active_empty(), .active_full(), .any_shadow_full()
     );
 
-    activation_skew #(.ARRAY_ROWS(2), .DATA_WIDTH(8)) u_skew (
+    systolic_data_setup #(.ARRAY_ROWS(2), .DATA_WIDTH(8)) u_skew (
         .clk(clk), .reset(reset),
         .ub_read_data(ub_read_data), .ub_read_valid(ub_read_valid),
         .mmu_in_row(skewed_act_data), .mmu_in_valid(skewed_act_valid)
