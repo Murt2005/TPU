@@ -16,11 +16,52 @@ module mmu_tb;
     logic signed [15:0]  out_partial_sum_0, out_partial_sum_1;
     logic                out_partial_sum_0_valid, out_partial_sum_1_valid;
 
+    int errors = 0;
+    int exp_col0_q[$], exp_col1_q[$];
+
     // Instantiate MMU
     mmu uut (.*);
 
     // Clock generator (10ns period)
     always #5 clk = ~clk;
+
+    // --- Self-checking scoreboard (the original testbench had none --
+    // this makes the back-to-back gap test below automatically verified
+    // instead of requiring you to eyeball the telemetry) ---
+    always @(posedge clk) begin
+        if (!reset) begin
+            if (out_partial_sum_0_valid) begin
+                if (exp_col0_q.size() == 0) begin
+                    $error("[FAIL] Unexpected col0 output %0d at time %0t", out_partial_sum_0, $time);
+                    errors++;
+                end else begin
+                    int e;
+                    e = exp_col0_q.pop_front();
+                    if (out_partial_sum_0 !== e) begin
+                        $error("[FAIL] col0 at %0t: got %0d, expected %0d", $time, out_partial_sum_0, e);
+                        errors++;
+                    end else begin
+                        $display("[PASS] col0 at %0t: %0d", $time, out_partial_sum_0);
+                    end
+                end
+            end
+            if (out_partial_sum_1_valid) begin
+                if (exp_col1_q.size() == 0) begin
+                    $error("[FAIL] Unexpected col1 output %0d at time %0t", out_partial_sum_1, $time);
+                    errors++;
+                end else begin
+                    int e;
+                    e = exp_col1_q.pop_front();
+                    if (out_partial_sum_1 !== e) begin
+                        $error("[FAIL] col1 at %0t: got %0d, expected %0d", $time, out_partial_sum_1, e);
+                        errors++;
+                    end else begin
+                        $display("[PASS] col1 at %0t: %0d", $time, out_partial_sum_1);
+                    end
+                end
+            end
+        end
+    end
 
     // --- Dynamic Telemetry Logger ---
     always @(negedge clk) begin
@@ -78,14 +119,19 @@ module mmu_tb;
         @(posedge clk);
         #1 reset = 0; 
         
-        $display("\n=== STARTING MMU TESTBENCH EXECUTION ===\n");
+        $display("\n=== Starting MMU Testbench ===\n");
+
+        // Matrix 1 expected outputs: C1 = A1 @ W1 = [[8,11],[20,27]]
+        exp_col0_q.push_back(8);   exp_col1_q.push_back(11);
+        exp_col0_q.push_back(20);  exp_col1_q.push_back(27);
 
         // ------------------------------------------
-        // PHASE 1: STAGGERED STATIONARY WEIGHT LOADING
+        // Test 1: Staggered Stationary Weight Loading
         // Target Weight Matrix:
         //  [4, 5]
         //  [2, 3]
         // ------------------------------------------
+        $display("\n Test 1: Staggered Stationary Weight Loading");
         @(posedge clk);
         #1;
         loading_phase        = 1; 
@@ -115,7 +161,7 @@ module mmu_tb;
         @(posedge clk);
         
         // ------------------------------------------
-        // PHASE 2: SYSTOLIC STAGGERED DATA STREAMING
+        // Test 2: Systolic Staggered Data Input Streaming
         // Target Activation Matrix (A):
         //  [1, 2]
         //  [3, 4]
@@ -124,6 +170,7 @@ module mmu_tb;
         //               [3*4 + 4*2,  3*5 + 4*3] = [20, 27]
         // ------------------------------------------
         
+        $display("\n Test 2: Systolic Staggered Data Input Streaming");
         // Cycle 0: Feed A[0][0]=1 to Row 0. Row 1 waits.
         @(posedge clk);
         #1;
@@ -150,8 +197,68 @@ module mmu_tb;
         
         // Keep clock cycling to observe output accumulation results completely clearing out
         #40;
-        
+
+        // Test 3: back-to-back weight reload no reset in between
+        // Same drain margin the original single-pass test already proved
+        // sufficient (#40) -- but instead of stopping here, we immediately
+        // load a second weight matrix and run a second activation pass in
+        // the SAME simulation epoch, with no reset between matrices.
+        // ------------------------------------------
+        $display("\n Test 3: back to back weight reload with no reset in between");
+
+        // W2 = [[1,1],[1,1]], A2 = [[2,3],[4,5]] -> C2 = A2@W2 = [[5,5],[9,9]]
+        exp_col0_q.push_back(5);  exp_col1_q.push_back(5);
+        exp_col0_q.push_back(9);  exp_col1_q.push_back(9);
+
+        @(posedge clk);
+        #1;
+        loading_phase = 1; capture_weight_col_0 = 1; capture_weight_col_1 = 1;
+        in_col_0 = 8'sd1; in_col_0_valid = 1'b1;
+        in_col_1 = 8'sd1; in_col_1_valid = 1'b1;
+
+        @(posedge clk);
+        #1;
+        in_col_0 = 8'sd1; in_col_0_valid = 1'b1;
+        in_col_1 = 8'sd1; in_col_1_valid = 1'b1;
+
+        @(posedge clk);
+        #1;
+        loading_phase = 0; capture_weight_col_0 = 0; capture_weight_col_1 = 0;
+        in_col_0 = 0; in_col_0_valid = 1'b0;
+        in_col_1 = 0; in_col_1_valid = 1'b0;
+
+        @(posedge clk);  // idle settle tick, same as the original Phase1->Phase2 transition
+
+        @(posedge clk);
+        #1;
+        in_row_0 = 8'sd2; in_row_0_valid = 1'b1;
+        in_row_1 = 8'sd0; in_row_1_valid = 1'b0;
+
+        @(posedge clk);
+        #1;
+        in_row_0 = 8'sd4; in_row_0_valid = 1'b1;
+        in_row_1 = 8'sd3; in_row_1_valid = 1'b1;
+
+        @(posedge clk);
+        #1;
+        in_row_0 = 8'sd0; in_row_0_valid = 1'b0;
+        in_row_1 = 8'sd5; in_row_1_valid = 1'b1;
+
+        @(posedge clk);
+        #1;
+        in_row_0 = 8'sd0; in_row_0_valid = 1'b0;
+        in_row_1 = 8'sd0; in_row_1_valid = 1'b0;
+
+        #40;
+
         $display("\n=== SIMULATION COMPLETE ===\n");
+        if (errors == 0 && exp_col0_q.size() == 0 && exp_col1_q.size() == 0) begin
+            $display(">>> ALL MMU TESTS PASSED <<<");
+        end else begin
+            $display(">>> %0d FAILURE(S), %0d expected output(s) never arrived <<<",
+                      errors, exp_col0_q.size() + exp_col1_q.size());
+        end
+
         $finish;
     end
 
