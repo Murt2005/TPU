@@ -19,7 +19,7 @@ LOG_DIR="$SIM_DIR/logs"
 mkdir -p "$LOG_DIR"
 
 # Must match the TESTS list in the Makefile
-ALL_TESTS=(fifo pe mmu accumulator systolic_data_setup weight_fifo accum_mmu weight_fifo_mmu tpu_core)
+ALL_TESTS=(fifo pe mmu accumulator systolic_data_setup weight_fifo bias mmu_accum accum_bias weight_fifo_mmu tpu_core)
 TESTS=("${@:-${ALL_TESTS[@]}}")
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BOLD='\033[1m'; NC='\033[0m'

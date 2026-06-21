@@ -38,6 +38,7 @@ RTL_mmu                  := $(RTL_DIR)/mmu.sv $(RTL_pe)
 RTL_accumulator          := $(RTL_DIR)/accumulator.sv $(RTL_fifo)
 RTL_systolic_data_setup  := $(RTL_DIR)/systolic_data_setup.sv
 RTL_weight_fifo          := $(RTL_DIR)/weight_fifo.sv $(RTL_fifo)
+RTL_bias				 := $(RTL_DIR)/bias.sv
 
 # ----------------------------------------------------------------------------
 # Testbench -> RTL files required to build it
@@ -51,11 +52,13 @@ DEPS_mmu                  := $(RTL_mmu)
 DEPS_accumulator          := $(RTL_accumulator)
 DEPS_systolic_data_setup  := $(RTL_systolic_data_setup)
 DEPS_weight_fifo          := $(RTL_weight_fifo)
-DEPS_accum_mmu            := $(RTL_mmu) $(RTL_accumulator)
+DEPS_bias				  := $(RTL_bias)
+DEPS_mmu_accum            := $(RTL_mmu) $(RTL_accumulator)
+DEPS_accum_bias			  := $(RTL_accumulator) $(RTL_bias)
 DEPS_weight_fifo_mmu      := $(RTL_weight_fifo) $(RTL_mmu)
-DEPS_tpu_core             := $(RTL_weight_fifo) $(RTL_systolic_data_setup) $(RTL_mmu) $(RTL_accumulator)
+DEPS_tpu_core             := $(RTL_weight_fifo) $(RTL_systolic_data_setup) $(RTL_mmu) $(RTL_accumulator) $(RTL_bias)
 
-TESTS := fifo pe mmu accumulator systolic_data_setup weight_fifo accum_mmu weight_fifo_mmu tpu_core
+TESTS := fifo pe mmu accumulator systolic_data_setup weight_fifo bias mmu_accum accum_bias weight_fifo_mmu tpu_core
 
 # de-duplicate dep lists (modules shared via multiple paths, e.g. tpu_core -> fifo.sv)
 dedup = $(if $1,$(firstword $1) $(call dedup,$(filter-out $(firstword $1),$1)))
@@ -76,7 +79,9 @@ build-mmu: $(SIM_DIR)/mmu.vvp
 build-accumulator: $(SIM_DIR)/accumulator.vvp
 build-systolic_data_setup: $(SIM_DIR)/systolic_data_setup.vvp
 build-weight_fifo: $(SIM_DIR)/weight_fifo.vvp
-build-accum_mmu: $(SIM_DIR)/accum_mmu.vvp
+build-bias: 	   $(SIM_DIR)/bias.vvp
+build-mmu_accum: $(SIM_DIR)/mmu_accum.vvp
+build-accum_bias: $(SIM_DIR)/accum_bias.vvp
 build-weight_fifo_mmu: $(SIM_DIR)/weight_fifo_mmu.vvp
 build-tpu_core: $(SIM_DIR)/tpu_core.vvp
 
@@ -98,8 +103,14 @@ $(SIM_DIR)/systolic_data_setup.vvp: $(TEST_DIR)/systolic_data_setup_tb.sv $(call
 $(SIM_DIR)/weight_fifo.vvp: $(TEST_DIR)/weight_fifo_tb.sv $(call dedup,$(DEPS_weight_fifo)) | $(SIM_DIR)
 	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_weight_fifo)) $<
 
-$(SIM_DIR)/accum_mmu.vvp: $(TEST_DIR)/accum_mmu_tb.sv $(call dedup,$(DEPS_accum_mmu)) | $(SIM_DIR)
-	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_accum_mmu)) $<
+$(SIM_DIR)/bias.vvp: $(TEST_DIR)/bias_tb.sv $(call dedup,$(DEPS_bias)) | $(SIM_DIR)
+	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_bias)) $<
+
+$(SIM_DIR)/mmu_accum.vvp: $(TEST_DIR)/mmu_accum_tb.sv $(call dedup,$(DEPS_mmu_accum)) | $(SIM_DIR)
+	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_mmu_accum)) $<
+
+$(SIM_DIR)/accum_bias.vvp: $(TEST_DIR)/accum_bias_tb.sv $(call dedup,$(DEPS_accum_bias)) | $(SIM_DIR)
+	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_accum_bias)) $<
 
 $(SIM_DIR)/weight_fifo_mmu.vvp: $(TEST_DIR)/weight_fifo_mmu_tb.sv $(call dedup,$(DEPS_weight_fifo_mmu)) | $(SIM_DIR)
 	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_weight_fifo_mmu)) $<

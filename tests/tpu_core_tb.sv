@@ -33,6 +33,11 @@ module tpu_core_tb;
     // Accumulator Inputs/Outputs
     logic signed [15:0] accum_in_data [2];
     logic               accum_in_valid [2];
+    logic signed [15:0] acc_row_out [2];
+    logic               acc_row_valid;
+
+    // Bias Input/Output (final stage of the pipeline)
+    logic signed [15:0] in_bias [2];
     logic signed [15:0] final_row_out [2];
     logic               final_row_valid;
 
@@ -84,8 +89,15 @@ module tpu_core_tb;
     accumulator #(.NUM_COLS(2), .PSUM_WIDTH(16), .FIFO_DEPTH(FIFO_DEPTH)) u_accum (
         .clk(clk), .reset(reset),
         .in_partial_sum(accum_in_data), .in_partial_sum_valid(accum_in_valid),
-        .out_row(final_row_out), .out_row_valid(final_row_valid),
+        .out_row(acc_row_out), .out_row_valid(acc_row_valid),
         .any_fifo_full()
+    );
+
+    bias #(.NUM_COLS(2), .PSUM_WIDTH(16)) u_bias (
+        .clk(clk), .reset(reset),
+        .in_row(acc_row_out), .in_row_valid(acc_row_valid),
+        .in_bias(in_bias),
+        .out_row(final_row_out), .out_row_valid(final_row_valid)
     );
 
     // ==========================================
@@ -100,6 +112,7 @@ module tpu_core_tb;
         write_enable_col_1 = 0; write_data_col_1 = 0;
         swap_banks = 0; loading_phase = 0;
         ub_read_data[0] = 0; ub_read_data[1] = 0; ub_read_valid = 0;
+        in_bias[0] = 16'sd100; in_bias[1] = 16'sd200;
 
         #15 reset = 0;
         @(posedge clk); #1;
@@ -141,14 +154,15 @@ module tpu_core_tb;
 
         ub_read_valid = 0;
 
-        // Step 4: Wait for Accumulator to output the de-skewed rows
-        $display("[Step 4] Awaiting Accumulator output...");
-        
+        // Step 4: Wait for Accumulator + Bias to output the final rows
+        $display("[Step 4] Awaiting Accumulator + Bias output...");
+        $display("  (stationary bias = [%0d, %0d])", in_bias[0], in_bias[1]);
+
         // Wait for first row
         wait(final_row_valid);
         @(posedge clk); // Align to check
-        if (final_row_out[0] !== 16'sd8 || final_row_out[1] !== 16'sd11) begin
-            $error("[FAIL] Row 0 incorrect. Expected [8, 11], Got [%0d, %0d]", final_row_out[0], final_row_out[1]);
+        if (final_row_out[0] !== 16'sd108 || final_row_out[1] !== 16'sd211) begin
+            $error("[FAIL] Row 0 incorrect. Expected [108, 211], Got [%0d, %0d]", final_row_out[0], final_row_out[1]);
             errors++;
         end else begin
             $display("  -> [PASS] Output Row 0: [%0d, %0d]", final_row_out[0], final_row_out[1]);
@@ -158,8 +172,8 @@ module tpu_core_tb;
         // Wait for second row
         wait(final_row_valid);
         @(posedge clk);
-        if (final_row_out[0] !== 16'sd20 || final_row_out[1] !== 16'sd27) begin
-            $error("[FAIL] Row 1 incorrect. Expected [20, 27], Got [%0d, %0d]", final_row_out[0], final_row_out[1]);
+        if (final_row_out[0] !== 16'sd120 || final_row_out[1] !== 16'sd227) begin
+            $error("[FAIL] Row 1 incorrect. Expected [120, 227], Got [%0d, %0d]", final_row_out[0], final_row_out[1]);
             errors++;
         end else begin
             $display("  -> [PASS] Output Row 1: [%0d, %0d]", final_row_out[0], final_row_out[1]);
