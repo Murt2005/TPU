@@ -14,9 +14,9 @@ end-to-end on real hardware.
 |---|---|---|---|
 | Processing Element (PE) | `rtl/pe.sv` | ✅ Implemented | `tests/pe_tb.sv`|
 | Matrix Multiply Unit (MMU), 2×2 | `rtl/mmu.sv` | ✅ Implemented | `tests/mmu_tb.sv`|
-| Weight FIFO | — | ⬜ Not started | — |
-| Systolic Data Setup Unit | — | ⬜ Not started | — |
-| Accumulator Unit | — | ⬜ Not started | — |
+| Weight FIFO | `rtl/weight_fifo.sv` | ✅ Implemented | `tests/weight_fifo_tb.sv` |
+| Systolic Data Setup Unit | `rtl/systolic_data_setup.sv` | ✅ Implemented | `tests/systolic_data_setup_tb.sv` |
+| Accumulator Unit | `rtl/accumulator.sv` | ✅ Implemented | `tests/accumulator_tb.sv` |
 | Bias Unit | — | ⬜ Not started | — |
 | Activation Unit | — | ⬜ Not started | — |
 | Unified Buffer | — | ⬜ Not started | — |
@@ -28,11 +28,22 @@ end-to-end on real hardware.
 TPU/
 ├── README.md
 ├── rtl/
-│   ├── pe.sv          # single MAC processing element, weight-stationary
-│   └── mmu.sv          # 2x2 systolic array of PEs
+    ├── pe.sv                         # single MAC processing element, weight-stationary
+    └── mmu.sv                        # 2x2 systolic array of PEs
+    └── fifo.sv                       # fifo queue
+    └── accumulator.sv                # accumulates mmu outputs
+    └── systolic_data_setup.sv        # prepares and sends activations into mmu
+    └── weight_fifo.sv                # double buffered weight fifo queues to load weights into mmu
 └── tests/
-    ├── pe_tb.sv         # self-checking PE testbench
-    └── mmu_tb.sv         # MMU telemetry dump (needs self-checking upgrade)
+    ├── pe_tb.sv                      # self checking PE testbench
+    └── mmu_tb.sv                     # self checking MMU testbench
+    └── accumulator_tb.sv             # self checking accumulator testbench
+    └── fifo.sv                       # self checking fifo queue testbench
+    └── systolic_data_setup_tb.sv     # self checking systolic data setup unit testbench
+    └── weight_fifo_tb.sv             # self checking weight fifo unit testbench
+    └── accum_mmu_tb.sv               # self checking accumulator + mmu testbench
+    └── weight_fifo_mmu_tb.sv         # self checking weight fifo + mmu testbench
+    └── tpu_core_tb.sv                # self checking weight_fifo + systolic data setup + mmu + accumulators
 ```
 
 ### Simulation workflow
@@ -59,7 +70,7 @@ The major blocks, and how data moves between them:
   going in, and the new layer output coming back in from the activation pipeline.
   This is also what makes multi-layer networks possible — layer *N*'s output becomes
   layer *N+1*'s input without ever leaving the chip.
-- **Systolic Data Setup** — reads an activation matrix out of the Unified Buffer,
+- **Systolic Data Setup** — reads an activation vector out of the Unified Buffer,
   rotates and skews it, and streams it into the MMU from the left.
 - **Matrix Multiply Unit (MXU)** — the systolic array of PEs itself. Each PE holds one
   weight value, multiplies it against a streaming activation, and accumulates a
