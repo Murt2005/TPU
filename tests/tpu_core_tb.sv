@@ -49,9 +49,17 @@ module tpu_core_tb;
 
     int errors = 0;
 
-    // ==========================================
-    // 2. Instantiations
-    // ==========================================
+    // Output Monitor Queue
+    logic [31:0] result_queue[$];
+
+    always_ff @(posedge clk) begin
+        if (reset) begin
+            result_queue.delete();
+        end else if (final_row_valid) begin
+            // Concatenate col0 and col1 into a 32-bit entry
+            result_queue.push_back({final_row_out[0], final_row_out[1]});
+        end
+    end
 
     weight_fifo #(.WEIGHT_WIDTH(WEIGHT_WIDTH), .FIFO_DEPTH(FIFO_DEPTH)) u_wf (
         .clk(clk), .reset(reset),
@@ -60,8 +68,8 @@ module tpu_core_tb;
         .swap_banks(swap_banks), .loading_phase(loading_phase),
         .out_col_0(wf_col_0), .out_col_0_valid(wf_col_0_valid),
         .out_col_1(wf_col_1), .out_col_1_valid(wf_col_1_valid),
-        /* empty/full status flags unconnected for TB */
-        .shadow_loaded(), .active_bank(), .active_empty(), .active_full(), .any_shadow_full()
+        .shadow_loaded(), .active_bank(), .active_empty(), 
+        .active_full(), .any_shadow_full()
     );
 
     systolic_data_setup #(.ARRAY_ROWS(2), .DATA_WIDTH(8)) u_skew (
@@ -77,11 +85,8 @@ module tpu_core_tb;
         .capture_weight_col_1(wf_col_1_valid),
         .in_col_0(wf_col_0), .in_col_0_valid(wf_col_0_valid),
         .in_col_1(wf_col_1), .in_col_1_valid(wf_col_1_valid),
-        
-        // Connect to skewed activations
         .in_row_0(skewed_act_data[0]), .in_row_0_valid(skewed_act_valid[0]),
         .in_row_1(skewed_act_data[1]), .in_row_1_valid(skewed_act_valid[1]),
-        
         .out_partial_sum_0(mmu_out_0), .out_partial_sum_0_valid(mmu_out_0_valid),
         .out_partial_sum_1(mmu_out_1), .out_partial_sum_1_valid(mmu_out_1_valid)
     );
@@ -100,87 +105,160 @@ module tpu_core_tb;
         .out_row(final_row_out), .out_row_valid(final_row_valid)
     );
 
-    // ==========================================
-    // 3. Test Stimulus
-    // ==========================================
+    task automatic load_weights(input int w00, input int w01, input int w10, input int w11);
+        write_enable_col_0 = 1; write_data_col_0 = 8'(w10);
+        write_enable_col_1 = 1; write_data_col_1 = 8'(w11);
+        @(posedge clk); #1;
+        write_data_col_0 = 8'(w00);
+        write_data_col_1 = 8'(w01);
+        @(posedge clk); #1;
+        write_enable_col_0 = 0; write_enable_col_1 = 0;
+        @(posedge clk); #1;
+    endtask
+
+    task automatic trigger_weight_load();
+        swap_banks = 1;
+        @(posedge clk); #1;
+        swap_banks = 0; loading_phase = 1;
+        @(posedge clk); #1; 
+        @(posedge clk); #1; 
+        @(posedge clk); #1; 
+        loading_phase = 0;
+        @(posedge clk); #1;
+    endtask
+
+    task automatic stream_activations(input int a00, input int a01, input int a10, input int a11);
+        ub_read_data[0] = 8'(a00); ub_read_data[1] = 8'(a01); ub_read_valid = 1;
+        @(posedge clk); #1;
+        ub_read_data[0] = 8'(a10); ub_read_data[1] = 8'(a11); ub_read_valid = 1;
+        @(posedge clk); #1;
+        ub_read_valid = 0;
+    endtask
+
+    task automatic stream_single_row(input int a0, input int a1);
+        ub_read_data[0] = 8'(a0); ub_read_data[1] = 8'(a1); ub_read_valid = 1;
+        @(posedge clk); #1;
+        ub_read_valid = 0;
+    endtask
+
+    task automatic await_row(input int exp0, input int exp1, input string row_name);
+        logic [31:0] raw_val;
+        logic signed [15:0] got_c0, got_c1;
+        int timeout_cnt;
+        
+        timeout_cnt = 0;
+
+        while (result_queue.size() == 0) begin
+            @(posedge clk);
+            timeout_cnt++;
+            if (timeout_cnt > 100) begin
+                $error("[FATAL] %s TIMEOUT! Pipeline hung or output missed.", row_name);
+                errors++;
+                $finish;
+            end
+        end
+
+        // Pop and slice the packed 32-bit value back into two 16-bit signed ints
+        raw_val = result_queue.pop_front();
+        got_c0  = raw_val[31:16];
+        got_c1  = raw_val[15:0];
+
+        if (got_c0 !== 16'(signed'(exp0)) || got_c1 !== 16'(signed'(exp1))) begin
+            $error("[FAIL] %s incorrect. Expected [%0d, %0d], Got [%0d, %0d]", 
+                   row_name, exp0, exp1, got_c0, got_c1);
+            errors++;
+        end else begin
+            $display("  -> [PASS] %s: [%0d, %0d]", row_name, got_c0, got_c1);
+        end
+    endtask
+
     always #5 clk = ~clk;
 
     initial begin
-        // Initialization
-        clk = 0; reset = 1;
+        clk = 0;
+        reset = 1;
         write_enable_col_0 = 0; write_data_col_0 = 0;
         write_enable_col_1 = 0; write_data_col_1 = 0;
-        swap_banks = 0; loading_phase = 0;
+        swap_banks = 0;
+        loading_phase = 0;
         ub_read_data[0] = 0; ub_read_data[1] = 0; ub_read_valid = 0;
         in_bias[0] = 16'sd100; in_bias[1] = 16'sd200;
 
         #15 reset = 0;
         @(posedge clk); #1;
 
-        $display("\n=== Starting TPU Core Integration Test ===");
+        $display("\n=== Starting TPU Core Integration Test Suite ===");
 
-        // Step 1: Load Weights [[4,5], [2,3]] into shadow bank (bottom row first)
-        $display("\n[Step 1] Loading weights into FIFO...");
-        write_enable_col_0 = 1; write_data_col_0 = 8'sd2;
-        write_enable_col_1 = 1; write_data_col_1 = 8'sd3;
-        @(posedge clk); #1;
+        // ---------------------------------------------------------
+        $display("\n[Test 1] Happy Path: Basic Compute");
+        load_weights(4, 5, 2, 3);
+        trigger_weight_load();
+        stream_activations(1, 2, 3, 4);
         
-        write_data_col_0 = 8'sd4;
-        write_data_col_1 = 8'sd5;
-        @(posedge clk); #1;
+        await_row(108, 211, "Test 1 - Row 0");
+        await_row(120, 227, "Test 1 - Row 1");
+
+        // ---------------------------------------------------------
+        $display("\n[Test 2] Zero Weights & Activations (Bias check)");
+        in_bias[0] = -16'sd10; in_bias[1] = -16'sd20;
+        load_weights(0, 0, 0, 0);
+        trigger_weight_load();
+        stream_activations(0, 0, 0, 0);
+
+        await_row(-10, -20, "Test 2 - Row 0");
+        await_row(-10, -20, "Test 2 - Row 1");
+
+        // ---------------------------------------------------------
+        $display("\n[Test 3] Negative Signed Arithmetic");
+        in_bias[0] = 16'sd0; in_bias[1] = 16'sd0;
+        load_weights(-1, -2, -3, -4);
+        trigger_weight_load();
+        stream_activations(-1, 1, 2, -2);
         
-        write_enable_col_0 = 0; write_enable_col_1 = 0;
+        await_row(-2, -2, "Test 3 - Row 0");
+        await_row(4, 4,   "Test 3 - Row 1");
 
-        // Step 2: Swap Banks and push into MMU
-        $display("[Step 2] Swapping banks and asserting loading_phase...");
-        swap_banks = 1;
-        @(posedge clk); #1;
-        swap_banks = 0; loading_phase = 1;
+        // ---------------------------------------------------------
+        $display("\n[Test 4] Gapped Streaming (Stall Recovery)");
+        load_weights(1, 0, 0, 1);
+        trigger_weight_load();
+        
+        stream_single_row(10, 20);
+        
+        repeat(5) @(posedge clk); 
+        
+        stream_single_row(30, 40);
 
-        // Hold for 3 cycles (N+1 rule for 2x2)
-        @(posedge clk); #1;
-        @(posedge clk); #1;
-        @(posedge clk); #1;
-        loading_phase = 0;
-        @(posedge clk); #1; // Idle settle tick
+        await_row(10, 20, "Test 4 - Row 0");
+        await_row(30, 40, "Test 4 - Row 1");
 
-        // Step 3: Stream flat activations A = [[1,2], [3,4]] from "Unified Buffer"
-        $display("[Step 3] Streaming flat activations into Skew unit...");
-        ub_read_data[0] = 8'sd1; ub_read_data[1] = 8'sd2; ub_read_valid = 1'b1;
-        @(posedge clk); #1;
+        // ---------------------------------------------------------
+        $display("\n[Test 5] Double Buffering / Back-to-Back Matrices");
+        in_bias[0] = 16'sd0; in_bias[1] = 16'sd0;
+        
+        load_weights(1, 0, 0, 1);
+        trigger_weight_load();
+        stream_activations(5, 15, 25, 35);
 
-        ub_read_data[0] = 8'sd3; ub_read_data[1] = 8'sd4; ub_read_valid = 1'b1;
-        @(posedge clk); #1;
+        $display("  -> Loading Matrix B into shadow bank while Matrix A computes...");
+        load_weights(2, 0, 0, 2);
 
-        ub_read_valid = 0;
+        await_row(5, 15,  "Test 5 - Matrix A Row 0");
+        await_row(25, 35, "Test 5 - Matrix A Row 1");
 
-        // Step 4: Wait for Accumulator + Bias to output the final rows
-        $display("[Step 4] Awaiting Accumulator + Bias output...");
-        $display("  (stationary bias = [%0d, %0d])", in_bias[0], in_bias[1]);
+        trigger_weight_load();
+        stream_activations(10, 10, 20, 20);
 
-        // Wait for first row
-        wait(final_row_valid);
-        @(posedge clk); // Align to check
-        if (final_row_out[0] !== 16'sd108 || final_row_out[1] !== 16'sd211) begin
-            $error("[FAIL] Row 0 incorrect. Expected [108, 211], Got [%0d, %0d]", final_row_out[0], final_row_out[1]);
-            errors++;
-        end else begin
-            $display("  -> [PASS] Output Row 0: [%0d, %0d]", final_row_out[0], final_row_out[1]);
-        end
-        #1;
+        await_row(20, 20, "Test 5 - Matrix B Row 0");
+        await_row(40, 40, "Test 5 - Matrix B Row 1");
 
-        // Wait for second row
-        wait(final_row_valid);
-        @(posedge clk);
-        if (final_row_out[0] !== 16'sd120 || final_row_out[1] !== 16'sd227) begin
-            $error("[FAIL] Row 1 incorrect. Expected [120, 227], Got [%0d, %0d]", final_row_out[0], final_row_out[1]);
-            errors++;
-        end else begin
-            $display("  -> [PASS] Output Row 1: [%0d, %0d]", final_row_out[0], final_row_out[1]);
-        end
-
+        // ---------------------------------------------------------
         $display("\n=== SIMULATION COMPLETE ===");
-        if (errors == 0) $display(">>> ALL INTEGRATION TESTS PASSED <<<");
+        if (errors == 0) begin
+            $display(">>> ALL INTEGRATION TESTS PASSED <<<");
+        end else begin
+            $display(">>> SIMULATION FAILED WITH %0d ERRORS <<<", errors);
+        end
         
         $finish;
     end

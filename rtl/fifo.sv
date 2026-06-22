@@ -39,6 +39,7 @@ module fifo #(
     assign full  = (data_count == DEPTH);
     assign empty = (data_count == 0);
 
+    // check later if this should be changed to memory[read_ptr] && read_enable
     assign read_data = memory[read_ptr];
 
     always_ff @(posedge clk) begin
