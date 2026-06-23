@@ -19,7 +19,8 @@ LOG_DIR="$SIM_DIR/logs"
 mkdir -p "$LOG_DIR"
 
 # Must match the TESTS list in the Makefile
-ALL_TESTS=(fifo pe mmu accumulator systolic_data_setup weight_fifo bias mmu_accum accum_bias weight_fifo_mmu tpu_core)
+ALL_TESTS=(fifo pe mmu accumulator systolic_data_setup weight_fifo bias activation \
+           mmu_accum accum_bias bias_activation weight_fifo_mmu tpu_core)
 TESTS=("${@:-${ALL_TESTS[@]}}")
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BOLD='\033[1m'; NC='\033[0m'
@@ -63,8 +64,8 @@ for t in "${TESTS[@]}"; do
 done
 
 echo "=========================== TEST SUMMARY ==========================="
-printf "%-24s %s\n" "TESTBENCH" "RESULT"
-printf "%-24s %s\n" "---------" "------"
+printf "%-28s %s\n" "TESTBENCH" "RESULT"
+printf "%-28s %s\n" "---------" "------"
 for r in "${RESULTS[@]}"; do
     name="${r%%|*}"
     status="${r##*|}"
@@ -72,7 +73,7 @@ for r in "${RESULTS[@]}"; do
         PASS) color=$GREEN ;;
         *)    color=$RED ;;
     esac
-    printf "%-24s ${color}%s${NC}\n" "$name" "$status"
+    printf "%-28s ${color}%s${NC}\n" "$name" "$status"
 done
 echo "======================================================================"
 
