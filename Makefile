@@ -41,6 +41,7 @@ RTL_systolic_data_setup  := $(RTL_DIR)/systolic_data_setup.sv
 RTL_weight_fifo          := $(RTL_DIR)/weight_fifo.sv $(RTL_fifo)
 RTL_bias                 := $(RTL_DIR)/bias.sv
 RTL_activation           := $(RTL_DIR)/activation.sv
+RTL_unified_buffer       := $(RTL_DIR)/unified_buffer.sv
 
 # ----------------------------------------------------------------------------
 # Testbench -> RTL files required to build it
@@ -60,11 +61,13 @@ DEPS_mmu_accum            := $(RTL_mmu) $(RTL_accumulator)
 DEPS_accum_bias           := $(RTL_accumulator) $(RTL_bias)
 DEPS_bias_activation      := $(RTL_accumulator) $(RTL_bias) $(RTL_activation)
 DEPS_weight_fifo_mmu      := $(RTL_weight_fifo) $(RTL_mmu)
-DEPS_tpu_core             := $(RTL_weight_fifo) $(RTL_systolic_data_setup) \
-                             $(RTL_mmu) $(RTL_accumulator) \
-                             $(RTL_bias) $(RTL_activation)
+DEPS_unified_buffer       := $(RTL_unified_buffer)
+DEPS_tpu_core             := $(RTL_unified_buffer) $(RTL_weight_fifo) \
+                             $(RTL_systolic_data_setup) $(RTL_mmu) \
+                             $(RTL_accumulator) $(RTL_bias) $(RTL_activation)
 
 TESTS := fifo pe mmu accumulator systolic_data_setup weight_fifo bias activation \
+         unified_buffer \
          mmu_accum accum_bias bias_activation weight_fifo_mmu tpu_core
 
 # de-duplicate dep lists (modules shared via multiple paths, e.g. tpu_core -> fifo.sv)
@@ -80,6 +83,7 @@ $(SIM_DIR) $(LOG_DIR):
 # ----------------------------------------------------------------------------
 # Per-test build + run rules (explicit, one per testbench)
 # ----------------------------------------------------------------------------
+build-unified_buffer:       $(SIM_DIR)/unified_buffer.vvp
 build-fifo:                 $(SIM_DIR)/fifo.vvp
 build-pe:                   $(SIM_DIR)/pe.vvp
 build-mmu:                  $(SIM_DIR)/mmu.vvp
@@ -93,6 +97,9 @@ build-accum_bias:           $(SIM_DIR)/accum_bias.vvp
 build-bias_activation:      $(SIM_DIR)/bias_activation.vvp
 build-weight_fifo_mmu:      $(SIM_DIR)/weight_fifo_mmu.vvp
 build-tpu_core:             $(SIM_DIR)/tpu_core.vvp
+
+$(SIM_DIR)/unified_buffer.vvp: $(TEST_DIR)/unified_buffer_tb.sv $(call dedup,$(DEPS_unified_buffer)) | $(SIM_DIR)
+	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_unified_buffer)) $<
 
 $(SIM_DIR)/fifo.vvp: $(TEST_DIR)/fifo_tb.sv $(call dedup,$(DEPS_fifo)) | $(SIM_DIR)
 	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_fifo)) $<
