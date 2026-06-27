@@ -10,18 +10,33 @@ end-to-end on real hardware.
 
 ## 1. Status Snapshot
 
-| Module | File | Status | Verification |
+### RTL Modules
+
+| Module | File | Status | Unit Test |
 |---|---|---|---|
-| Processing Element (PE) | `rtl/pe.sv` | ✅ Implemented | `tests/pe_tb.sv`|
-| Matrix Multiply Unit (MMU), 2×2 | `rtl/mmu.sv` | ✅ Implemented | `tests/mmu_tb.sv`|
+| Processing Element (PE) | `rtl/pe.sv` | ✅ Implemented | `tests/pe_tb.sv` |
+| Matrix Multiply Unit (MMU), 2×2 | `rtl/mmu.sv` | ✅ Implemented | `tests/mmu_tb.sv` |
+| Generic FIFO | `rtl/fifo.sv` | ✅ Implemented | `tests/fifo_tb.sv` |
 | Weight FIFO | `rtl/weight_fifo.sv` | ✅ Implemented | `tests/weight_fifo_tb.sv` |
 | Systolic Data Setup Unit | `rtl/systolic_data_setup.sv` | ✅ Implemented | `tests/systolic_data_setup_tb.sv` |
 | Accumulator Unit | `rtl/accumulator.sv` | ✅ Implemented | `tests/accumulator_tb.sv` |
-| Bias Unit | `rtl/bias.sv` |  ✅ Implemented | `tests/bias_tb.sv` |
-| Activation Unit | `rtl/activation.sv` | ✅ Implemented | `tests/activation_tb.sv` |
+| Bias Unit | `rtl/bias.sv` | ✅ Implemented | `tests/bias_tb.sv` |
+| Activation Unit (ReLU) | `rtl/activation.sv` | ✅ Implemented | `tests/activation_tb.sv` |
 | Unified Buffer | — | ⬜ Not started | — |
-| Control / Sequencer FSM | — | ⬜ Not started | — |
-| HPS↔FPGA / host interface | — | ⬜ Not started | — |
+| Weight Loader | — | ⬜ Not started | — |
+| Host Interface (LWH2F CSR) | — | ⬜ Not started | — |
+| Top-Level FSM (`tpu_top`) | — | ⬜ Not started | — |
+| 7-Segment Decoder | — | ⬜ Not started | — |
+
+### Integration Tests
+
+| Test | File | Modules covered | Status |
+|---|---|---|---|
+| MMU + Accumulator | `tests/mmu_accum_tb.sv` | `mmu`, `accumulator` | ✅ Passing |
+| Accumulator + Bias | `tests/accum_bias_tb.sv` | `accumulator`, `bias` | ✅ Passing |
+| Bias + Activation | `tests/bias_activation_tb.sv` | `accumulator`, `bias`, `activation` | ✅ Passing |
+| Weight FIFO + MMU | `tests/weight_fifo_mmu_tb.sv` | `weight_fifo`, `mmu` | ✅ Passing |
+| Full datapath core | `tests/tpu_core_tb.sv` | `weight_fifo`, `systolic_data_setup`, `mmu`, `accumulator`, `bias`, `activation` | ✅ Passing |
 
 ### Repo layout
 ```
@@ -29,29 +44,35 @@ TPU/
 ├── README.md
 ├── Makefile                          # test automation — one target per testbench, see §1.1
 ├── run_tests.sh                      # builds + runs every testbench, prints a pass/fail summary
+├── docs/
+│   ├── de1_soc_hardware.md           # DE1-SoC board reference (chip, bridges, peripherals, toolchain)
+│   ├── unified_buffer.md             # implementation plan: on-chip activation store
+│   ├── weight_loader.md              # implementation plan: ROM → weight_fifo bridge
+│   ├── host_interface.md             # implementation plan: LWH2F AXI CSR slave
+│   └── tpu_top_fsm.md                # implementation plan: top-level FSM + DE1-SoC wiring
 ├── rtl/
 │   ├── pe.sv                         # single MAC processing element, weight-stationary
-│   ├── mmu.sv                        # 2x2 systolic array of PEs
-│   ├── fifo.sv                       # fifo queue
-│   ├── accumulator.sv                # accumulates mmu outputs
-│   ├── systolic_data_setup.sv        # prepares and sends activations into mmu
-│   └── weight_fifo.sv                # double buffered weight fifo queues to load weights into mmu
-│   └── bias.sv                       # bias unit, adds bias to accumulator output
-│   └── activation.sv                 # activation unit, applies activation to bias and sends to UB
+│   ├── mmu.sv                        # 2×2 systolic array of PEs
+│   ├── fifo.sv                       # generic circular-queue FIFO
+│   ├── weight_fifo.sv                # double-buffered weight FIFO; feeds MMU during loading_phase
+│   ├── systolic_data_setup.sv        # skews activation rows into MMU from the left
+│   ├── accumulator.sv                # de-skews MMU partial-sum outputs into full rows
+│   ├── bias.sv                       # adds per-column bias to accumulator output
+│   └── activation.sv                 # ReLU activation unit
 ├── tests/
-│   ├── pe_tb.sv                      # self checking PE testbench
-│   ├── mmu_tb.sv                     # self checking MMU testbench
-│   ├── accumulator_tb.sv             # self checking accumulator testbench
-│   ├── fifo_tb.sv                    # self checking fifo queue testbench
-│   ├── systolic_data_setup_tb.sv     # self checking systolic data setup unit testbench
-│   ├── weight_fifo_tb.sv             # self checking weight fifo unit testbench
-│   └── bias_tb.sv                    # self checking bias unit testbench
-│   └── activation_tb.sv              # self checking activation unit testbench
-│   ├── mmu_accum_tb.sv               # self checking mmu + accumulator testbench
-│   └── accum_bias_tb.sv              # self checking accumulator + bias testbench
-│   └── bias_activation_tb.sv         # self checking bias + activation testbench
-│   ├── weight_fifo_mmu_tb.sv         # self checking weight fifo + mmu testbench
-│   └── tpu_core_tb.sv                # self checking weight_fifo + systolic data setup + mmu + accumulators + bias + activation
+│   ├── pe_tb.sv                      # self-checking PE testbench
+│   ├── mmu_tb.sv                     # self-checking MMU testbench
+│   ├── fifo_tb.sv                    # self-checking FIFO testbench
+│   ├── weight_fifo_tb.sv             # self-checking weight FIFO testbench
+│   ├── systolic_data_setup_tb.sv     # self-checking systolic data setup testbench
+│   ├── accumulator_tb.sv             # self-checking accumulator testbench
+│   ├── bias_tb.sv                    # self-checking bias unit testbench
+│   ├── activation_tb.sv              # self-checking activation unit testbench
+│   ├── mmu_accum_tb.sv               # integration: MMU + accumulator
+│   ├── accum_bias_tb.sv              # integration: accumulator + bias
+│   ├── bias_activation_tb.sv         # integration: bias + activation (with accumulator driver)
+│   ├── weight_fifo_mmu_tb.sv         # integration: weight FIFO + MMU
+│   └── tpu_core_tb.sv                # integration: full datapath (weight_fifo → activation)
 └── sim/                              # generated by `make` — gitignored build output
     ├── *.vvp                         # compiled simulation binaries, one per testbench
     ├── *.vcd                         # waveform dumps (testbenches that call $dumpvars)
@@ -69,14 +90,14 @@ sudo apt install iverilog gtkwave       # Debian/Ubuntu
 
 **Run everything:**
 ```bash
-make test            # build + run all 9 testbenches, print a pass/fail summary table
+make test            # build + run all 13 testbenches, print a pass/fail summary table
 # or, equivalently and usable outside make:
 ./run_tests.sh
 ./run_tests.sh fifo mmu     # ...or just a subset
 ```
 
 **Per-testbench commands** — every testbench gets a matching `build-`,
-`test-`, and `wave-` target. RTL dependencies are resolved automatically:
+`test-`, and `wave-` target. RTL dependencies are resolved automatically.
 
 **Other targets:**
 ```bash
@@ -119,213 +140,177 @@ The major blocks, and how data moves between them:
 
 ```mermaid
 flowchart TB
-    DRAM[(DRAM / On-chip ROM<br/>weights)] --> WFIFO[Weight FIFO]
+    DRAM[(DRAM / On-chip ROM<br/>weights)] --> WLOADER[Weight Loader]
+    WLOADER --> WFIFO[Weight FIFO]
     WFIFO -- skewed weights, top --> MMU[Matrix Multiply Unit<br/>NxN systolic array of PEs]
     UB[Unified Buffer<br/>activation storage] --> SDS[Systolic Data Setup<br/>rotate + skew]
     SDS -- skewed activations, left --> MMU
     MMU -- staggered partial sums, bottom --> ACC[Accumulator Unit<br/>de-skew + tile-sum]
     ACC --> BIAS[Bias Unit]
-    BIAS --> ACT[Activation Unit<br/>ReLU / etc.]
+    BIAS --> ACT[Activation Unit<br/>ReLU]
     ACT -- next layer's input --> UB
-    CTRL[Control / Sequencer FSM] -.-> WFIFO
+    HOST[Host Interface<br/>LWH2F AXI CSR] -- weights + activations --> UB
+    HOST -- weights --> WFIFO
+    UB -- result --> HOST
+    CTRL[Control / Sequencer FSM] -.-> WLOADER
+    CTRL -.-> WFIFO
     CTRL -.-> SDS
     CTRL -.-> MMU
     CTRL -.-> ACC
+    CTRL -.-> UB
 ```
+
+---
 
 ## 3. Module Task List
 
-### 3.1 Weight FIFO
+### 3.1 Weight FIFO ✅
 - **Input:** a weight matrix (one tile, up to N×N where N is the array dimension),
   either from on-chip BRAM (MNIST-sized weights are small enough to live entirely
   on-chip) or, later, from off-chip DRAM via the HPS.
 - **Work done:** buffers the upcoming weight tile and streams it into the MMU from
   the top, skewed by row, asserting `loading_phase`/`capture_weight_*` for exactly N
-  cycles. In the real TPU this is double-buffered — the *next* tile can be queued
-  while the *current* tile is still in use — which is the basis for the pipelining
-  work in §5.
+  cycles. Double-buffered — the *next* tile can be queued while the *current* tile is
+  still in use.
 - **Output:** `loading_phase`, `capture_weight_col[0..N-1]`, `weight_col[0..N-1]` into
   the MMU's top row.
-- **Example (N=2):**
-  ```
-  Weight matrix:
-    [w1, w2]
-    [w3, w4]
-  
-  ```
-  ```
-  MMU After Loading:
-    [w1, w2]
-    [w3, w4]
-  ```
 
-### 3.2 Systolic Data Setup Unit
+### 3.2 Systolic Data Setup Unit ✅
 - **Input:** an activation matrix read from the Unified Buffer.
 - **Work done:** rotates the matrix 90° and skews it so row *i* of the array starts
   receiving data *i* cycles after row 0, then streams it into the MMU from the left
   during the compute phase.
 - **Output:** `row_in[0..N-1]` into the MMU's left column.
-- **Example (N=2):**
-  ```
-  Activation matrix:      Step 1 — rotate:      Step 2 — stagger by row:
-    [x1, x2]                 [x3, x1]              row0:     x3, x1
-    [x3, x4]                 [x4, x2]              row1: x4, x2
-  ```
 
-### 3.3 Accumulator Unit
+### 3.3 Accumulator Unit ✅
 - **Input:** staggered partial-sum outputs from the bottom of each MMU column.
-- **Work done:** un-staggers the outputs back into a proper matrix (collect, then
-  flip), **and**, when the true weight/activation matrices are bigger than the array
-  (see §4), sums results across multiple tile passes into a wider running total
-  before handing off to the Bias Unit.
+- **Work done:** un-staggers the outputs back into a proper matrix, and sums results
+  across multiple tile passes into a wider running total before handing off to the
+  Bias Unit.
 - **Output:** the full product matrix, one row per accumulated tile-sum.
-- **Example (N=2):**
-  ```
-  MMU output (staggered):     Step 1 — collect as matrix:    Step 2 — flip:
-         [p4]                      [p3, p4]                    [p1, p2]
-     [p3, p2]                      [p1, p2]                    [p3, p4]
-     [p1]
-  ```
 
-### 3.4 Bias Unit
+### 3.4 Bias Unit ✅
 - **Input:** the de-skewed, fully-accumulated output matrix from the Accumulator Unit;
-  a per-output-channel bias vector (one bias value per output column / neuron).
-- **Work done:** adds the bias term to each accumulated value, per column. Needs to
-  track which output column (and, once tiling is in play, which column-tile) each
-  value belongs to so the right bias is added.
-- **Output:** biased pre-activation values, same shape as the accumulator output.
+  a per-output-channel bias vector.
+- **Work done:** adds the bias term to each accumulated value, per column.
+- **Output:** biased pre-activation values.
 
-### 3.5 Activation Unit
+### 3.5 Activation Unit ✅
 - **Input:** biased pre-activation values from the Bias Unit.
-- **Work done:** applies the nonlinearity — ReLU is the obvious choice for hidden
-  layers on an MNIST MLP (cheap: just a sign check + mux, no LUT/divider needed).
-  The output layer can likely skip activation entirely and let an external `argmax`
-  pick the predicted digit, avoiding a softmax implementation altogether.
-- **Output:** the finished layer output, written into the Unified Buffer as the next
-  layer's input (or, for the final layer, as the result to read out).
+- **Work done:** applies ReLU element-wise: `out[c] = max(0, in[c])`.
+- **Output:** the finished layer output.
 
-### 3.6 Unified Buffer
-- **Input:** activation matrices, either the network's external input (e.g. a
-  flattened 28×28 MNIST image) or a previous layer's output from the Activation Unit.
-- **Work done:** on-chip storage (M10K-backed) for activations between layers.
-  Should be double-buffered — one bank being read out to the Systolic Data Setup
-  Unit while the other is being written by the Activation Unit — both so a layer's
-  output doesn't have to fully land before the next layer can start reading
-  (needed for §5 pipelining), and to avoid read/write port conflicts.
-- **Output:** activation matrix tiles, addressed by layer / tile index, to the
-  Systolic Data Setup Unit.
+### 3.6 Unified Buffer ⬜
+- **Input:** activation matrices from the host (input image) or from the Activation
+  Unit (layer output).
+- **Work done:** double-banked on-chip M10K storage. One bank is read by
+  Systolic Data Setup while the other is written by the Activation Unit. Banks swap
+  at each layer boundary.
+- **Output:** activation row tiles to Systolic Data Setup; result matrix to host.
+- See `docs/unified_buffer.md` for the full implementation plan.
 
-### 3.7 Control / Sequencer FSM
-Everything above is currently driven by hand in a testbench. On real hardware
-nothing is poking `loading_phase` from the outside — something on-chip has to: walk
-through weight tiles, assert load/compute phases for the right number of cycles,
-advance through column-tiles of a wide layer, and signal the Accumulator/Bias/
-Activation chain when a tile-sum is final vs. partial. Worth treating as its own
-module (a small FSM + tile counters) rather than baking it into the Weight FIFO or
-MMU.
+### 3.7 Weight Loader ⬜
+- **Input:** tile address from the FSM; weight data from an on-chip M10K ROM
+  (initialized via `$readmemh` from PyTorch-exported int8 weights).
+- **Work done:** reads one weight tile from ROM (handling M10K's 2-cycle read
+  latency) and pushes it into the `weight_fifo` shadow bank bottom-row-first,
+  matching the staggered-load contract.
+- **Output:** `wf_write_enable_col_*` / `wf_write_data_col_*` to `weight_fifo`; `done` to FSM.
+- See `docs/weight_loader.md` for the full implementation plan.
+
+### 3.8 Host Interface ⬜
+- **Input:** AXI4-Lite transactions from the ARM Cortex-A9 via the LWH2F bridge
+  (base address `0xFF20_0000`).
+- **Work done:** decodes 8 control/status registers (CTRL, STATUS, DATA_IN, DATA_OUT,
+  ADDR, WEIGHT_DATA, WEIGHT_ADDR, LAYER_CFG). Routes writes to the Unified Buffer
+  and Weight FIFO; routes reads from the Unified Buffer; propagates START/RESET to
+  the FSM.
+- **Output:** register-driven control signals to all internal modules.
+- See `docs/host_interface.md` for the full implementation plan.
+
+### 3.9 Top-Level FSM (`tpu_top`) ⬜
+- **Work done:** instantiates all modules; sequences IDLE → LOAD_WEIGHTS →
+  WEIGHT_DRAIN → STREAM_ACT → WAIT_DRAIN → CHECK_TILE → CHECK_LAYER → DONE;
+  drives 7-segment displays (predicted digit), LEDs (status), and connects to
+  DE1-SoC physical pins.
+- See `docs/tpu_top_fsm.md` for the full implementation plan.
 
 ---
 
 ## 4. Matrices Bigger Than the Array (Tiling)
 
-This is worth calling out explicitly because it changes how the Accumulator Unit has
-to work. A 2×2 (or even 8×8/16×16) array can only natively multiply matrices up to
+A 2×2 (or even 8×8/16×16) array can only natively multiply matrices up to
 its own dimension. MNIST layer sizes blow past that immediately — a 784→128 fully
-connected layer is a 784×128 weight matrix, nowhere close to fitting in a small
-array.
+connected layer is a 784×128 weight matrix.
 
-The fix (same one the real TPU uses) is **tiling**: split the big weight matrix into
-N×N blocks, run each block through the array as a separate weight-load + compute
-pass, and have the Accumulator Unit sum the partial results from each pass into a
-wider running total (e.g. 32-bit, vs. the 16-bit partial sum your PE currently
-carries internally — that 16-bit width only needs to cover one array's worth of
-accumulation, not the full 784-deep dot product). Concretely, for a 784×128 layer
-with an 8×8 array, the contraction dimension alone takes `ceil(784/8) = 98` tile
-passes per output tile.
+The fix is **tiling**: split the big weight matrix into N×N blocks, run each block
+through the array as a separate weight-load + compute pass, and have the Accumulator
+Unit sum the partial results from each pass into a wider running total. For a 784×128
+layer with an 8×8 array, the contraction dimension alone takes `ceil(784/8) = 98`
+tile passes per output tile.
 
-This also means **bit-width should be a parameter, not a hardcoded width** once you
-move past the 2×2 prototype — both array dimension (`ROWS`, `COLS`) and accumulator
-width (`PSUM_WIDTH`) should scale with how deep the tiled contraction goes.
+**Bit-width** should be a parameter — the accumulator width (`PSUM_WIDTH`) must be
+wide enough to hold the sum of `K/N` partial products without overflow.
 
 ---
 
 ## 5. Two-Phase → Pipelined
 
-Right now the design is strictly **load-then-compute**: `loading_phase` blocks
-compute (PE forces `out_activation`/`out_partial_sum` to 0 while loading), and
-compute blocks the next weight load. That's the right way to get the datapath
-correct first, but it idles the array during every weight swap, and idles weight
-loading during every compute pass.
-
-Two follow-on pipelining steps are worth scoping out for later, both straight from
-how the real TPU does it:
+The current design is strictly **load-then-compute**: `loading_phase` blocks compute,
+and compute blocks the next weight load. Two follow-on pipelining steps are worth
+scoping for later (after the full unpipelined path is verified on hardware):
 
 1. **Double-buffered weights in each PE.** Add a shadow weight register that the
-   Weight FIFO can fill with the *next* tile's weights while the *current* tile is
-   still computing, then swap the active register in one cycle on a `weight_swap`
-   pulse. This removes the load-blocks-compute stall entirely.
-2. **Pipelined Bias + Activation.** Currently implied as a blocking step between
-   tiles. Once the Accumulator Unit is emitting one finished row per cycle, the
-   Bias and Activation units should be simple combinational-or-1-cycle-pipelined
-   stages so they don't stall the Unified Buffer write-back.
-
-Worth treating as a stretch milestone after the full feed-forward path is correct
-and verified — get a correct unpipelined version of every module working end-to-end
-first, then go back and pipeline.
+   Weight FIFO can fill while the *current* tile is still computing.
+2. **Pipelined Bias + Activation.** Already implemented as registered stages; the
+   Unified Buffer write-back adds no stall as long as `act_write_valid` is wired
+   directly to `unified_buffer.act_write_*`.
 
 ---
 
 ## 6. FPGA Target: DE1-SoC Resource Budget
 
-| Resource | DE1-SoC (Cyclone V 5CSEMA5F31C6) | Relevance here |
-|---|---|---|
-| Logic elements | ~85K LEs | Array size + control logic |
-| Embedded memory | ~4,450 Kbit (~390 M10K blocks, ~556 KB) | Unified Buffer + Weight FIFO storage |
-| On-board SDRAM (FPGA side) | 64 MB | Headroom if weights don't fit on-chip |
-| HPS-side DDR3 | 1 GB | Training data / larger weight sets via HPS |
-| Hard ARM Cortex-A9 (HPS) | dual-core | Could host the control sequencer / image loading in software instead of pure RTL, at least for v1 |
+Target device: **Cyclone V 5CSEMA5F31C6** on the Terasic DE1-SoC board.
+See `docs/de1_soc_hardware.md` for the full board reference.
 
-A small MNIST MLP (e.g. 784→128→10, int8 weights) is roughly **101 KB of weights**
-total — comfortably inside the ~556 KB of on-chip memory, meaning the Weight FIFO
-and Unified Buffer can both be pure on-chip BRAM for the first working version with
-no DDR3 plumbing required at all. That's worth treating as the first deployment
-target before bothering with off-chip weight fetch.
+| Resource | DE1-SoC (Cyclone V) | 2×2 array estimate | 8×8 array estimate |
+|---|---|---|---|
+| Adaptive Logic Modules (ALMs) | 32,070 (~85K LE equiv.) | ~500 | ~2,000 |
+| M10K block RAM | 553 blocks (707 KB total) | ~2 blocks | ~12 blocks |
+| DSP 18×18 MAC blocks | 87 | 4 (one per PE) | 64 (one per PE) |
+| Fractional PLLs | 6 | 1 (50→100 MHz) | 1–2 |
+| HPS-side DDR3 | 1 GB | not needed for v1 | not needed for v1 |
+| FPGA-side SDRAM | 64 MB | not needed for v1 | not needed for v1 |
+
+**MNIST weight memory:** 784×128 + 128×10 ≈ **99 KB** — fits in ~10 M10K blocks,
+leaving 543 of the 553 blocks free for the Unified Buffer and other structures.
+The entire network runs from on-chip BRAM; no DDR3 plumbing required for v1.
 
 ---
 
 ## 7. Roadmap
 
 - [x] **Phase 0** — PE + 2×2 MMU implemented and simulated
-- [ ] **Phase 1** — Self-checking `mmu_tb.sv` (port the `check_compute`-style task
-      from `pe_tb.sv`); parameterize `mmu.sv`/`pe.sv` for arbitrary `ROWS`×`COLS`
-- [ ] **Phase 2** — Accumulator Unit (de-skew/flip + tile-sum) with its own testbench
-- [ ] **Phase 3** — Bias Unit + Activation Unit (ReLU) with testbenches
-- [ ] **Phase 4** — Unified Buffer + Systolic Data Setup Unit (handles rotation,
-      skew, and tiling automatically) with testbenches
-- [ ] **Phase 5** — Weight FIFO + Control/Sequencer FSM, replacing manual testbench
-      stimulus with self-driven control
-- [ ] **Phase 6** — Train MNIST MLP in PyTorch, quantize to int8, export weights/bias
-      as `$readmemh`-compatible files; simulate the full pipeline against real MNIST
-      test images and check accuracy vs. the floating-point reference model
-- [ ] **Phase 7** — Port to a Quartus project targeting the DE1-SoC; map memories to
-      M10K; decide on HPS-FPGA bridge vs. switch/button control for v1; display
-      predicted digit (7-seg / LEDs / HDMI); validate on physical hardware
-- [ ] **Phase 8 (stretch)** — Double-buffered weight pipelining (§5), pipelined
-      bias/activation, array size and clock optimization, possibly a small CNN
-      front end instead of pure MLP
+- [x] **Phase 1** — Self-checking testbenches for all 8 RTL modules; full datapath integration test (`tpu_core_tb.sv`) covering weight_fifo → systolic_data_setup → MMU → accumulator → bias → activation
+- [ ] **Phase 2** — Unified Buffer: double-banked M10K activation store; host read/write ports; bank-swap interface; testbench
+- [ ] **Phase 3** — Weight Loader: M10K ROM → weight_fifo bridge with bottom-row-first ordering and 2-cycle latency handling; testbench
+- [ ] **Phase 4** — Host Interface: AXI4-Lite CSR slave on the LWH2F bridge; 8 registers; routes ARM writes/reads to UB and weight_fifo; testbench
+- [ ] **Phase 5** — Top-Level FSM (`tpu_top`): sequences LOAD_WEIGHTS → WEIGHT_DRAIN → STREAM_ACT → WAIT_DRAIN → DONE; tile and layer counters; 7-seg digit display; LED status; DE1-SoC pin assignments; Quartus project
+- [ ] **Phase 6** — Train MNIST MLP in PyTorch, quantize to int8, export weights/bias as `$readmemh`-compatible `.mem` files; simulate the full pipeline against real MNIST test images; verify accuracy vs. floating-point reference
+- [ ] **Phase 7** — Synthesize in Quartus Prime Lite targeting 5CSEMA5F31C6; meet timing at 50 MHz; program via USB Blaster II; ARM Linux/bare-metal program drives inference via `/dev/mem` mmap of LWH2F bridge; verify predicted digit on 7-segment display
+- [ ] **Phase 8 (stretch)** — Double-buffered weight pipelining (§5), pipelined bias/activation; scale array to 8×8; explore H2F bridge DMA for bulk weight/activation transfer
 
 ---
 
 ## 8. Open Design Decisions
 
-- Array dimensions (`N`) — bigger reduces tile-pass count but costs LEs/DSPs faster;
-  worth prototyping at 4×4 or 8×8 once parameterized, before committing.
-- Fixed-point widths beyond the prototype's int8/int16 (esp. accumulator width once
-  tiling is in play — see §4).
+- Array dimension (`N`) — bigger reduces tile-pass count but costs LEs/DSPs faster;
+  prototype at 4×4 or 8×8 once parameterized.
+- Fixed-point widths beyond int8/int16 (accumulator width with deep tiling — see §4).
 - MLP-only vs. adding a small conv front end for MNIST.
-- Where the sequencer lives: pure RTL FSM vs. leaning on the HPS (ARM Cortex-A9) for
-  the top-level control loop and image feed, with RTL only handling the array
-  datapath.
-- Instruction/tile-descriptor format once the Control FSM exists — even a minimal
-  one (tile address, row/col counts, weight-tile pointer) will make Phase 5 much
-  cleaner than ad hoc signal sequencing.
+- HPS software: bare-metal vs. Linux; bare-metal is simpler to boot but Linux gives
+  SSH access and a Python environment on-board for validation.
+- Quartus Platform Designer (Qsys) for the LWH2F interconnect vs. a hand-written
+  AXI4-Lite slave — Qsys generates correct clock-domain-crossing logic automatically.
+- Whether the 7-segment argmax is computed in RTL (zero-latency, ~10 LEs) or
+  reported back to the ARM via STATUS/DATA_OUT and computed in software.
