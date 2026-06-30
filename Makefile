@@ -43,6 +43,8 @@ RTL_bias                 := $(RTL_DIR)/bias.sv
 RTL_activation           := $(RTL_DIR)/activation.sv
 RTL_unified_buffer       := $(RTL_DIR)/unified_buffer.sv
 RTL_weight_loader        := $(RTL_DIR)/weight_loader.sv
+RTL_uart_rx              := $(RTL_DIR)/uart_rx.sv
+RTL_uart_tx              := $(RTL_DIR)/uart_tx.sv
 
 # ----------------------------------------------------------------------------
 # Testbench -> RTL files required to build it
@@ -65,12 +67,14 @@ DEPS_accum_bias           := $(RTL_accumulator) $(RTL_bias)
 DEPS_bias_activation      := $(RTL_accumulator) $(RTL_bias) $(RTL_activation)
 DEPS_weight_fifo_mmu      := $(RTL_weight_fifo) $(RTL_mmu)
 DEPS_unified_buffer       := $(RTL_unified_buffer)
+DEPS_uart_rx              := $(RTL_uart_rx)
+DEPS_uart_tx              := $(RTL_uart_tx)
 DEPS_tpu_core             := $(RTL_unified_buffer) $(RTL_weight_fifo) \
                              $(RTL_systolic_data_setup) $(RTL_mmu) \
                              $(RTL_accumulator) $(RTL_bias) $(RTL_activation)
 
 TESTS := fifo pe mmu accumulator systolic_data_setup weight_fifo bias activation \
-         unified_buffer weight_loader \
+         unified_buffer weight_loader uart_rx uart_tx \
          mmu_accum accum_bias bias_activation weight_fifo_mmu \
          weight_loader_fifo tpu_core
 
@@ -102,6 +106,8 @@ build-mmu_accum:            $(SIM_DIR)/mmu_accum.vvp
 build-accum_bias:           $(SIM_DIR)/accum_bias.vvp
 build-bias_activation:      $(SIM_DIR)/bias_activation.vvp
 build-weight_fifo_mmu:      $(SIM_DIR)/weight_fifo_mmu.vvp
+build-uart_rx:              $(SIM_DIR)/uart_rx.vvp
+build-uart_tx:              $(SIM_DIR)/uart_tx.vvp
 build-tpu_core:             $(SIM_DIR)/tpu_core.vvp
 
 $(SIM_DIR)/unified_buffer.vvp: $(TEST_DIR)/unified_buffer_tb.sv $(call dedup,$(DEPS_unified_buffer)) | $(SIM_DIR)
@@ -148,6 +154,12 @@ $(SIM_DIR)/bias_activation.vvp: $(TEST_DIR)/bias_activation_tb.sv $(call dedup,$
 
 $(SIM_DIR)/weight_fifo_mmu.vvp: $(TEST_DIR)/weight_fifo_mmu_tb.sv $(call dedup,$(DEPS_weight_fifo_mmu)) | $(SIM_DIR)
 	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_weight_fifo_mmu)) $<
+
+$(SIM_DIR)/uart_rx.vvp: $(TEST_DIR)/uart_rx_tb.sv $(call dedup,$(DEPS_uart_rx)) | $(SIM_DIR)
+	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_uart_rx)) $<
+
+$(SIM_DIR)/uart_tx.vvp: $(TEST_DIR)/uart_tx_tb.sv $(call dedup,$(DEPS_uart_tx)) | $(SIM_DIR)
+	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_uart_tx)) $<
 
 $(SIM_DIR)/tpu_core.vvp: $(TEST_DIR)/tpu_core_tb.sv $(call dedup,$(DEPS_tpu_core)) | $(SIM_DIR)
 	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_tpu_core)) $<

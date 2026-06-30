@@ -20,7 +20,7 @@ mkdir -p "$LOG_DIR"
 
 # Must match the TESTS list in the Makefile
 ALL_TESTS=(fifo pe mmu accumulator systolic_data_setup weight_fifo bias activation \
-           unified_buffer weight_loader \
+           unified_buffer weight_loader uart_rx uart_tx \
            mmu_accum accum_bias bias_activation weight_fifo_mmu \
            weight_loader_fifo tpu_core)
 TESTS=("${@:-${ALL_TESTS[@]}}")
