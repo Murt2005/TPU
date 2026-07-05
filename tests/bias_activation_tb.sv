@@ -41,23 +41,23 @@ module bias_activation_tb;
     logic reset;
 
     // Accumulator inputs (driven directly, no accumulator instantiated)
-    logic signed [PSUM_WIDTH-1:0] in_partial_sum       [NUM_COLS];
-    logic                         in_partial_sum_valid  [NUM_COLS];
+    logic signed [NUM_COLS-1:0][PSUM_WIDTH-1:0] in_partial_sum;
+    logic                       [NUM_COLS-1:0] in_partial_sum_valid;
 
     // Accumulator outputs / bias inputs
-    logic signed [PSUM_WIDTH-1:0] acc_out_row   [NUM_COLS];
+    logic signed [NUM_COLS-1:0][PSUM_WIDTH-1:0] acc_out_row;
     logic                         acc_out_valid;
     logic                         any_fifo_full;
 
     // Stationary bias
-    logic signed [PSUM_WIDTH-1:0] in_bias [NUM_COLS];
+    logic signed [NUM_COLS-1:0][PSUM_WIDTH-1:0] in_bias;
 
     // Bias outputs / activation inputs
-    logic signed [PSUM_WIDTH-1:0] biased_row  [NUM_COLS];
+    logic signed [NUM_COLS-1:0][PSUM_WIDTH-1:0] biased_row;
     logic                         biased_valid;
 
     // Final activation outputs
-    logic signed [PSUM_WIDTH-1:0] out_row [NUM_COLS];
+    logic signed [NUM_COLS-1:0][PSUM_WIDTH-1:0] out_row;
     logic                         out_row_valid;
 
     int errors       = 0;

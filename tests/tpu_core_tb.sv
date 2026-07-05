@@ -22,41 +22,41 @@ module tpu_core_tb;
 
     // Unified Buffer control signals (host write / UB read)
     logic        host_write_addr;              // 1-bit: ROWS=2 → ADDR_WIDTH=1
-    logic signed [7:0] host_write_data [2];
+    logic signed [1:0][7:0] host_write_data;
     logic        host_write_valid;
     logic        ub_read_addr;
     logic        ub_read_en;
 
     // UB → SDS (driven by UB outputs, consumed by SDS)
-    logic signed [7:0] ub_read_data [2];
+    logic signed [1:0][7:0] ub_read_data;
     logic              ub_read_valid;
 
     // act_write tied off — tpu_core_tb tests single-layer inference only
-    logic signed [7:0] ub_act_write_dummy [2];
+    logic signed [1:0][7:0] ub_act_write_dummy;
     assign ub_act_write_dummy[0] = 8'sd0;
     assign ub_act_write_dummy[1] = 8'sd0;
 
     // Skewed activation data from SDS → MMU
-    logic signed [7:0] skewed_act_data [2];
-    logic              skewed_act_valid [2];
+    logic signed [1:0][7:0] skewed_act_data;
+    logic              [1:0] skewed_act_valid;
 
     // MMU Outputs
     logic signed [15:0] mmu_out_0, mmu_out_1;
     logic               mmu_out_0_valid, mmu_out_1_valid;
 
     // Accumulator inputs/outputs
-    logic signed [15:0] accum_in_data  [2];
-    logic               accum_in_valid [2];
-    logic signed [15:0] acc_row_out  [2];
+    logic signed [1:0][15:0] accum_in_data;
+    logic              [1:0] accum_in_valid;
+    logic signed [1:0][15:0] acc_row_out;
     logic               acc_row_valid;
 
     // Bias
-    logic signed [15:0] in_bias    [2];
-    logic signed [15:0] biased_row [2];
+    logic signed [1:0][15:0] in_bias;
+    logic signed [1:0][15:0] biased_row;
     logic               biased_valid;
 
     // Activation (final stage)
-    logic signed [15:0] final_row_out [2];
+    logic signed [1:0][15:0] final_row_out;
     logic               final_row_valid;
 
     // Glue: pack MMU scalar outputs into accumulator arrays

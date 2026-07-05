@@ -8,12 +8,12 @@ module systolic_data_setup_tb;
     logic reset;
 
     // Inputs from a simulated Unified Buffer
-    logic signed [DATA_WIDTH-1:0] ub_read_data [ARRAY_ROWS];
+    logic signed [ARRAY_ROWS-1:0][DATA_WIDTH-1:0] ub_read_data;
     logic                         ub_read_valid;
 
     // Skewed outputs to the MMU
-    logic signed [DATA_WIDTH-1:0] mmu_in_row   [ARRAY_ROWS];
-    logic                         mmu_in_valid [ARRAY_ROWS];
+    logic signed [ARRAY_ROWS-1:0][DATA_WIDTH-1:0] mmu_in_row;
+    logic                         [ARRAY_ROWS-1:0] mmu_in_valid;
 
     int errors = 0;
 
@@ -48,7 +48,8 @@ module systolic_data_setup_tb;
         ub_read_data[0] = 8'sd1;
         ub_read_data[1] = 8'sd2;
         ub_read_valid   = 1'b1;
-        
+        #0; // let the combinational assign's driver update settle before reading it back
+
         // Check combinational pass-through for row 0 immediately
         if (mmu_in_row[0] !== 8'sd1 || mmu_in_valid[0] !== 1'b1) begin
             $error("[FAIL] Row 0 should pass through with 0 delay.");

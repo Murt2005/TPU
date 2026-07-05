@@ -1,0 +1,33 @@
+# Pin constraints for tpu_top on the pico2-ice board (iCE40UP5K, package sg48).
+#
+# Pin numbers are iCE40 package pins, taken from the board vendor's own
+# reference catalogue: pico-ice-sdk/rtl/pico2_ice.pcf (tinyVision.ai). That
+# file lists every named signal on the board; the four below are the ones
+# tpu_top.sv actually uses. This is a different pin namespace from the
+# ICE_xxx_PIN macros in pico-ice-sdk/include/boards/pico2_ice.h -- those are
+# RP2350-side GPIO numbers (for the microcontroller firmware), not iCE40
+# package pins, and must not be mixed in here.
+#
+# clk: NOT a fixed crystal into the FPGA. Pin 35 (G0 global) is driven by the
+# RP2350's GPOUT0 clock-output feature over a board trace -- see
+# pico-ice-sdk/include/ice_fpga.h. The actual frequency delivered here is
+# whatever the RP2350 firmware requests via ice_fpga_init(fpga, freq_hz); the
+# SDK's own default is 48 MHz, but this design tops out around 32 MHz (see
+# CLK_FREQ note in the Makefile), so whatever RP2350 firmware you flash must
+# call ice_fpga_init(FPGA_DATA, AS_MHZ(12)) (or match the CLK_FREQ this
+# Makefile is built with) -- otherwise the UART baud-rate divider computed
+# from CLK_FREQ at synthesis time will be wrong even though the logic itself
+# is correct.
+set_io -nowarn clk      35
+
+# reset_n: ICE_PB / ICE_SW2, the board's push-button, active-low -- matches
+# tpu_top's active-low reset_n convention directly (originally KEY[0] on the
+# DE1-SoC).
+set_io -nowarn reset_n  10
+
+# rx_pin / tx_pin: DEFAULT_UART_RX / DEFAULT_UART_TX, the pins the board's
+# default firmware forwards over the USB-UART bridge (see
+# pico-ice-sdk/examples/ice_apio_uart_echo). Sharing these means the same USB
+# cable used to flash the RP2350 can also carry the TPU's host<->UART link.
+set_io -nowarn rx_pin   9
+set_io -nowarn tx_pin   11

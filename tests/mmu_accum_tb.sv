@@ -23,8 +23,8 @@ module mmu_acc_integration_tb;
     logic               mmu_out_psum_0_valid, mmu_out_psum_1_valid;
 
     // Array mapped signals for the Accumulator
-    logic signed [PSUM_WIDTH-1:0] acc_in_psum [NUM_COLS];
-    logic                         acc_in_psum_valid [NUM_COLS];
+    logic signed [NUM_COLS-1:0][PSUM_WIDTH-1:0] acc_in_psum;
+    logic                       [NUM_COLS-1:0] acc_in_psum_valid;
 
     assign acc_in_psum[0] = mmu_out_psum_0;
     assign acc_in_psum[1] = mmu_out_psum_1;
@@ -32,7 +32,7 @@ module mmu_acc_integration_tb;
     assign acc_in_psum_valid[1] = mmu_out_psum_1_valid;
 
     // Accumulator Output Signals
-    logic signed [PSUM_WIDTH-1:0] out_row [NUM_COLS];
+    logic signed [NUM_COLS-1:0][PSUM_WIDTH-1:0] out_row;
     logic                         out_row_valid;
     logic                         any_fifo_full;
 

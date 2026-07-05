@@ -8,12 +8,12 @@ module systolic_data_setup #(
     input  logic                                  reset,
 
     // Flat vector from Unified Buffer
-    input  logic signed [DATA_WIDTH-1:0]          ub_read_data [ARRAY_ROWS],
+    input  logic signed [ARRAY_ROWS-1:0][DATA_WIDTH-1:0] ub_read_data,
     input  logic                                  ub_read_valid,
 
     // Skewed outputs to MMU
-    output logic signed [DATA_WIDTH-1:0]          mmu_in_row   [ARRAY_ROWS],
-    output logic                                  mmu_in_valid [ARRAY_ROWS]
+    output logic signed [ARRAY_ROWS-1:0][DATA_WIDTH-1:0] mmu_in_row,
+    output logic        [ARRAY_ROWS-1:0]                 mmu_in_valid
 );
 
     // Generate a delay line for each row i, with length i

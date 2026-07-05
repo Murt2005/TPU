@@ -9,20 +9,20 @@ module unified_buffer_tb;
     logic clk, reset;
 
     logic [ADDR_WIDTH-1:0]        host_write_addr;
-    logic signed [DATA_WIDTH-1:0] host_write_data [COLS];
+    logic signed [COLS-1:0][DATA_WIDTH-1:0] host_write_data;
     logic                         host_write_valid;
 
     logic [ADDR_WIDTH-1:0]        host_read_addr;
-    logic signed [DATA_WIDTH-1:0] host_read_data [COLS];
+    logic signed [COLS-1:0][DATA_WIDTH-1:0] host_read_data;
     logic                         host_read_en;
     logic                         host_read_valid;
 
     logic [ADDR_WIDTH-1:0]        ub_read_addr;
     logic                         ub_read_en;
-    logic signed [DATA_WIDTH-1:0] ub_read_data [ROWS];
+    logic signed [ROWS-1:0][DATA_WIDTH-1:0] ub_read_data;
     logic                         ub_read_valid;
 
-    logic signed [DATA_WIDTH-1:0] act_write_data [COLS];
+    logic signed [COLS-1:0][DATA_WIDTH-1:0] act_write_data;
     logic                         act_write_valid;
     logic                         act_write_addr_reset;
     logic                         bank_swap;

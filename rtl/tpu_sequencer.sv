@@ -83,15 +83,15 @@ module tpu_sequencer #(
     output logic              loading_phase,
 
     output logic              host_write_addr,
-    output logic signed [7:0] host_write_data [2],
+    output logic signed [1:0][7:0] host_write_data,
     output logic              host_write_valid,
 
     output logic              ub_read_addr,
     output logic              ub_read_en,
 
-    output logic signed [15:0] out_bias [2],
+    output logic signed [1:0][15:0] out_bias,
 
-    input  logic signed [15:0] final_row_out [2],
+    input  logic signed [1:0][15:0] final_row_out,
     input  logic               final_row_valid,
 
     output logic               tpu_reset,

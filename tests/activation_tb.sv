@@ -21,10 +21,10 @@ module activation_tb;
     logic clk;
     logic reset;
 
-    logic signed [PSUM_WIDTH-1:0] in_row  [NUM_COLS];
+    logic signed [NUM_COLS-1:0][PSUM_WIDTH-1:0] in_row;
     logic                         in_row_valid;
 
-    logic signed [PSUM_WIDTH-1:0] out_row [NUM_COLS];
+    logic signed [NUM_COLS-1:0][PSUM_WIDTH-1:0] out_row;
     logic                         out_row_valid;
 
     int errors       = 0;

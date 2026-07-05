@@ -23,11 +23,13 @@ module fifo #(
 
     localparam int PTR_WIDTH = $clog2(DEPTH);
 
-    // compile/simulation time assert that DEPTH is a power of 2
+    // compile/simulation time check that DEPTH is a power of 2
+    // (plain if/$fatal instead of an SVA immediate assertion: yosys's built-in
+    // Verilog frontend doesn't parse the `assert (...) else ...;` form)
     initial begin
-        assert ((1 << PTR_WIDTH) == DEPTH)
-            else $fatal(1, "fifo: DEPTH=%0d is not a power of 2 ( wraps at %0d)",
-                        DEPTH, (1 << PTR_WIDTH));
+        if ((1 << PTR_WIDTH) != DEPTH)
+            $fatal(1, "fifo: DEPTH=%0d is not a power of 2 ( wraps at %0d)",
+                   DEPTH, (1 << PTR_WIDTH));
     end
 
     logic signed [WIDTH-1:0] memory [DEPTH];

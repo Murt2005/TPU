@@ -81,7 +81,7 @@ module tpu_top #(
 
     // unified_buffer host-write
     logic              seq_hw_addr;
-    logic signed [7:0] seq_hw_data [2];
+    logic signed [1:0][7:0] seq_hw_data;
     logic              seq_hw_valid;
 
     // unified_buffer UB-read
@@ -89,10 +89,10 @@ module tpu_top #(
     logic              seq_ub_en;
 
     // bias
-    logic signed [15:0] seq_bias [2];
+    logic signed [1:0][15:0] seq_bias;
 
     // pipeline final output
-    logic signed [15:0] final_row_out [2];
+    logic signed [1:0][15:0] final_row_out;
     logic               final_row_valid;
 
     // soft-reset from sequencer (CMD_RESET)
@@ -141,12 +141,12 @@ module tpu_top #(
     // =========================================================================
 
     // unified_buffer → systolic_data_setup
-    logic signed [7:0] ub_read_data [2];
+    logic signed [1:0][7:0] ub_read_data;
     logic              ub_read_valid;
 
     // systolic_data_setup → MMU
-    logic signed [7:0] skewed_act [2];
-    logic              skewed_valid [2];
+    logic signed [1:0][7:0] skewed_act;
+    logic              [1:0] skewed_valid;
 
     // weight_fifo → MMU
     logic signed [7:0] wf_col_0, wf_col_1;
@@ -156,23 +156,23 @@ module tpu_top #(
     logic signed [15:0] mmu_out_0, mmu_out_1;
     logic               mmu_out_0_valid, mmu_out_1_valid;
 
-    logic signed [15:0] accum_in_data  [2];
-    logic               accum_in_valid [2];
+    logic signed [1:0][15:0] accum_in_data;
+    logic              [1:0] accum_in_valid;
     assign accum_in_data[0]  = mmu_out_0;
     assign accum_in_data[1]  = mmu_out_1;
     assign accum_in_valid[0] = mmu_out_0_valid;
     assign accum_in_valid[1] = mmu_out_1_valid;
 
     // accumulator → bias
-    logic signed [15:0] acc_row_out [2];
+    logic signed [1:0][15:0] acc_row_out;
     logic               acc_row_valid;
 
     // bias → activation
-    logic signed [15:0] biased_row [2];
+    logic signed [1:0][15:0] biased_row;
     logic               biased_valid;
 
     // Activation write port tied off (single-layer mode)
-    logic signed [7:0] ub_act_dummy [2];
+    logic signed [1:0][7:0] ub_act_dummy;
     assign ub_act_dummy[0] = 8'sd0;
     assign ub_act_dummy[1] = 8'sd0;
 

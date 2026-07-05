@@ -4,3 +4,19 @@ sim/
 # Stray waveform / log artifacts
 *.vcd
 *.vvp
+
+# FPGA synthesis build artifacts (yosys/nextpnr-ice40/icepack outputs)
+fpga/**/*.json
+fpga/**/*.asc
+fpga/**/*.bin
+
+# Python venv created directly in the project root (`python3 -m venv .`)
+bin/
+include/
+lib/
+pyvenv.cfg
+__pycache__/
+
+# Vendored pico-ice-sdk clone -- has its own git history, not part of
+# this repo's tracked tree. Re-clone via its own README if missing.
+pico-ice-sdk/

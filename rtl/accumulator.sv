@@ -26,12 +26,12 @@ module accumulator #(
     input  logic reset,
 
     // One partial-sum input + valid strobe per MMU output column.
-    input  logic signed [PSUM_WIDTH-1:0] in_partial_sum [NUM_COLS],
-    input  logic                         in_partial_sum_valid [NUM_COLS],
+    input  logic signed [NUM_COLS-1:0][PSUM_WIDTH-1:0] in_partial_sum,
+    input  logic        [NUM_COLS-1:0]                 in_partial_sum_valid,
 
     // Output: one full row, valid for exactly one cycle when all
     // columns' FIFOs have produced a matching entry.
-    output logic signed [PSUM_WIDTH-1:0] out_row [NUM_COLS],
+    output logic signed [NUM_COLS-1:0][PSUM_WIDTH-1:0] out_row,
     output logic                         out_row_valid,
 
     // Backpressure-free for now (consumer must accept the row when

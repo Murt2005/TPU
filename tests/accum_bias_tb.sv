@@ -19,19 +19,19 @@ module accum_bias_tb;
     logic reset;
 
     // Accumulator inputs
-    logic signed [PSUM_WIDTH-1:0] in_partial_sum [NUM_COLS];
-    logic                         in_partial_sum_valid [NUM_COLS];
+    logic signed [NUM_COLS-1:0][PSUM_WIDTH-1:0] in_partial_sum;
+    logic                       [NUM_COLS-1:0] in_partial_sum_valid;
 
     // Accumulator -> bias interconnect
-    logic signed [PSUM_WIDTH-1:0] acc_out_row [NUM_COLS];
+    logic signed [NUM_COLS-1:0][PSUM_WIDTH-1:0] acc_out_row;
     logic                         acc_out_row_valid;
     logic                         any_fifo_full;
 
     // Stationary per-column bias
-    logic signed [PSUM_WIDTH-1:0] in_bias [NUM_COLS];
+    logic signed [NUM_COLS-1:0][PSUM_WIDTH-1:0] in_bias;
 
     // Final bias-added output
-    logic signed [PSUM_WIDTH-1:0] out_row [NUM_COLS];
+    logic signed [NUM_COLS-1:0][PSUM_WIDTH-1:0] out_row;
     logic                         out_row_valid;
 
     int errors = 0;

@@ -7,10 +7,10 @@ module accumulator_tb;
     logic clk;
     logic reset;
 
-    logic signed [PSUM_WIDTH-1:0] in_partial_sum [NUM_COLS];
-    logic                         in_partial_sum_valid [NUM_COLS];
+    logic signed [NUM_COLS-1:0][PSUM_WIDTH-1:0] in_partial_sum;
+    logic                       [NUM_COLS-1:0] in_partial_sum_valid;
 
-    logic signed [PSUM_WIDTH-1:0] out_row [NUM_COLS];
+    logic signed [NUM_COLS-1:0][PSUM_WIDTH-1:0] out_row;
     logic                         out_row_valid;
     logic                         any_fifo_full;
 

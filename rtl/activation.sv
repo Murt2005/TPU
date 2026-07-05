@@ -33,11 +33,11 @@ module activation #(
     input  logic reset,
 
     // Row from the bias unit.
-    input  logic signed [PSUM_WIDTH-1:0] in_row  [NUM_COLS],
+    input  logic signed [NUM_COLS-1:0][PSUM_WIDTH-1:0] in_row,
     input  logic                         in_row_valid,
 
     // ReLU-clamped row out.  Valid exactly one cycle after in_row_valid.
-    output logic signed [PSUM_WIDTH-1:0] out_row [NUM_COLS],
+    output logic signed [NUM_COLS-1:0][PSUM_WIDTH-1:0] out_row,
     output logic                         out_row_valid
 );
 
@@ -51,9 +51,12 @@ module activation #(
             out_row_valid <= in_row_valid;
             if (in_row_valid) begin
                 for (int c = 0; c < NUM_COLS; c++) begin
-                    // ReLU: Check the MSB (sign bit). 
-                    // If 1 (negative), clamp to 0. If 0 (positive), pass through.
-                    out_row[c] <= in_row[c][PSUM_WIDTH-1] ? '0 : in_row[c];
+                    // ReLU: negative (sign bit set) clamps to 0, else pass through.
+                    // Written as a signed comparison with an explicit $signed()
+                    // cast -- Icarus Verilog 13.0 drops the signed attribute on a
+                    // word select out of a packed 2D array, so a bare
+                    // `in_row[c] < 0` always reads as unsigned (never negative).
+                    out_row[c] <= ($signed(in_row[c]) < 0) ? '0 : in_row[c];
                 end
             end
         end
