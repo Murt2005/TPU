@@ -4,7 +4,7 @@
 //
 // Sits between the uart_rx/uart_tx pair and the existing tpu_core datapath.
 //
-// ── Protocol (8-N-1, host-initiates everything) ─────────────────────────────
+//  Protocol (8-N-1, host-initiates everything)
 //
 //  Host → FPGA packet:
 //    [0]  CMD   byte
@@ -16,7 +16,7 @@
 //    [1]  LEN     number of response payload bytes
 //    [2…] payload[LEN]
 //
-// ── Command table ────────────────────────────────────────────────────────────
+//  Command table
 //
 //  0x01  LOAD_WEIGHTS  LEN=4  payload: [w10, w11, w00, w01]  (int8, signed)
 //                             w10/w11 = bottom row first (sequencer writes them
@@ -34,7 +34,7 @@
 //
 //  0x05  RESET         LEN=0  pulses internal reset for 4 cycles; responds OK
 //
-// ── Pipeline orchestration for RUN ──────────────────────────────────────────
+//  Pipeline orchestration for RUN
 //
 //  Steps driven cycle-accurately (matches tpu_core_tb.sv task sequencing):
 //
@@ -49,14 +49,14 @@
 //   9. Wait for final_row_valid × 2 (collect both output rows, 50-cycle timeout)
 //  10. Pack and transmit 8-byte result via UART TX
 //
-// ── Timing notes ─────────────────────────────────────────────────────────────
+//  Timing notes
 //
 //  All internal control signals follow the one-cycle registered latency
 //  convention used throughout the rest of the RTL (pe.sv, accumulator.sv …).
 //  Steps 3–8 replicate the exact task ordering in tpu_core_tb.sv:
 //    load_weights  → trigger_weight_load → stream_activations_from_ub
 //
-// ── Parameters ───────────────────────────────────────────────────────────────
+//  Parameters
 //
 //  WAIT_TIMEOUT — max cycles to wait for two final_row_valid pulses in EXEC_WAIT
 //                 before flagging an error.  Default 200 is very conservative;
@@ -68,16 +68,13 @@ module tpu_sequencer #(
     input  logic clk,
     input  logic reset,
 
-    // ── UART RX side ─────────────────────────────────────────────────────────
     input  logic [7:0] rx_data,
     input  logic       rx_valid,
 
-    // ── UART TX side ─────────────────────────────────────────────────────────
     output logic [7:0] tx_data,
     output logic       tx_valid,
     input  logic       tx_busy,
 
-    // ── weight_fifo control ───────────────────────────────────────────────────
     output logic              write_enable_col_0,
     output logic signed [7:0] write_data_col_0,
     output logic              write_enable_col_1,
@@ -85,32 +82,23 @@ module tpu_sequencer #(
     output logic              swap_banks,
     output logic              loading_phase,
 
-    // ── unified_buffer host-write port ───────────────────────────────────────
     output logic              host_write_addr,
     output logic signed [7:0] host_write_data [2],
     output logic              host_write_valid,
 
-    // ── unified_buffer UB-read port (→ SDS) ──────────────────────────────────
     output logic              ub_read_addr,
     output logic              ub_read_en,
 
-    // ── bias stationary values ────────────────────────────────────────────────
     output logic signed [15:0] out_bias [2],
 
-    // ── final output from activation unit ────────────────────────────────────
     input  logic signed [15:0] final_row_out [2],
     input  logic               final_row_valid,
 
-    // ── soft-reset pulse to the rest of the datapath ─────────────────────────
     output logic               tpu_reset,
 
-    // ── status ───────────────────────────────────────────────────────────────
     output logic               busy          // high while processing a command
 );
 
-    // =========================================================================
-    // Local constants
-    // =========================================================================
     localparam logic [7:0] CMD_LOAD_WEIGHTS = 8'h01;
     localparam logic [7:0] CMD_LOAD_BIAS    = 8'h02;
     localparam logic [7:0] CMD_LOAD_ACT     = 8'h03;
@@ -122,10 +110,8 @@ module tpu_sequencer #(
 
     localparam int TIMEOUT_W = $clog2(WAIT_TIMEOUT + 1);
 
-    // =========================================================================
     // Persistent register file (survives across commands)
-    // =========================================================================
-    // Weights stored as received: [0]=w10,[1]=w11,[2]=w00,[3]=w01
+    // Weights are stored as received: [0]=w10,[1]=w11,[2]=w00,[3]=w01
     logic signed [7:0]  reg_weights [4];
     logic signed [7:0]  reg_act     [4];   // [a00,a01,a10,a11]
     logic signed [15:0] reg_bias    [2];
@@ -135,9 +121,7 @@ module tpu_sequencer #(
     logic signed [15:0] result_row1 [2];
     logic                result_ok;
 
-    // =========================================================================
     // FSM states
-    // =========================================================================
     typedef enum logic [4:0] {
         S_IDLE          = 5'd0,
         S_RECV_LEN      = 5'd1,
@@ -149,7 +133,7 @@ module tpu_sequencer #(
         S_WR_UB_1       = 5'd5,
         S_LD_WF_0       = 5'd6,
         S_LD_WF_1       = 5'd7,
-        S_LD_WF_GAP     = 5'd8,   // 1-cycle gap after WF writes (matches tb: @posedge; #1)
+        S_LD_WF_GAP     = 5'd8,   // 1-cycle gap after WF writes
         S_SWAP          = 5'd9,
         S_LOADING_0     = 5'd10,
         S_LOADING_1     = 5'd11,
@@ -169,37 +153,30 @@ module tpu_sequencer #(
 
     state_t state;
 
-    // =========================================================================
     // Latched CMD / payload
-    // =========================================================================
     logic [7:0] cmd_reg;
     logic [7:0] len_reg;
-    logic [7:0] byte_cnt;           // how many payload bytes received so far
-    logic [7:0] payload [8];        // max 8 payload bytes
+    logic [7:0] byte_cnt;
+    logic [7:0] payload [8];
 
     // TX bookkeeping
-    logic [7:0] tx_len_reg;         // total bytes in tx_payload
+    logic [7:0] tx_len_reg;
     logic [7:0] tx_byte_idx;
-    logic [7:0] tx_payload [10];    // status + len + up to 8 data bytes
+    logic [7:0] tx_payload [10];
 
     // WAIT timeout
     logic [TIMEOUT_W-1:0] wait_cnt;
-    logic [1:0]            rows_got;  // count of final_row_valid pulses received
+    logic [1:0]            rows_got;
 
     // RESET pulse counter
     logic [2:0] reset_cnt;
 
-    // =========================================================================
     // Drive out_bias to the datapath at all times
-    // =========================================================================
     always_comb begin
         out_bias[0] = reg_bias[0];
         out_bias[1] = reg_bias[1];
     end
 
-    // =========================================================================
-    // FSM
-    // =========================================================================
     always_ff @(posedge clk) begin
         if (reset) begin
             state             <= S_IDLE;
@@ -215,7 +192,6 @@ module tpu_sequencer #(
             result_row1[0]    <= '0; result_row1[1] <= '0;
             result_ok         <= 1'b0;
 
-            // outputs
             write_enable_col_0 <= 1'b0;
             write_data_col_0   <= '0;
             write_enable_col_1 <= 1'b0;
@@ -238,7 +214,6 @@ module tpu_sequencer #(
             tpu_reset          <= 1'b0;
             busy               <= 1'b0;
         end else begin
-            // Default: de-assert one-cycle strobes
             write_enable_col_0 <= 1'b0;
             write_enable_col_1 <= 1'b0;
             swap_banks         <= 1'b0;
@@ -263,9 +238,7 @@ module tpu_sequencer #(
 
             case (state)
 
-                // =============================================================
                 // IDLE: wait for the first rx byte (the CMD byte)
-                // =============================================================
                 S_IDLE: begin
                     busy <= 1'b0;
                     if (rx_valid) begin
@@ -275,9 +248,7 @@ module tpu_sequencer #(
                     end
                 end
 
-                // =============================================================
                 // RECV_LEN: latch LEN, decide whether to collect payload
-                // =============================================================
                 S_RECV_LEN: begin
                     if (rx_valid) begin
                         len_reg  <= rx_data;
@@ -290,9 +261,7 @@ module tpu_sequencer #(
                     end
                 end
 
-                // =============================================================
                 // RECV_PAYLOAD: collect len_reg bytes
-                // =============================================================
                 S_RECV_PAYLOAD: begin
                     if (rx_valid) begin
                         payload[byte_cnt] <= rx_data;
@@ -305,15 +274,11 @@ module tpu_sequencer #(
                     end
                 end
 
-                // =============================================================
                 // EXEC_DISPATCH: decode CMD, update register file or start RUN
-                // =============================================================
                 S_EXEC_DISPATCH: begin
                     case (cmd_reg)
 
-                        // ---------------------------------------------------------
                         // LOAD_WEIGHTS: store into reg_weights, ACK immediately
-                        // ---------------------------------------------------------
                         CMD_LOAD_WEIGHTS: begin
                             for (int i = 0; i < 4; i++)
                                 reg_weights[i] <= signed'(payload[i]);
@@ -325,9 +290,7 @@ module tpu_sequencer #(
                             state         <= S_TX_STATUS;
                         end
 
-                        // ---------------------------------------------------------
                         // LOAD_BIAS: unpack two signed 16-bit LE values
-                        // ---------------------------------------------------------
                         CMD_LOAD_BIAS: begin
                             reg_bias[0] <= signed'({payload[1], payload[0]});
                             reg_bias[1] <= signed'({payload[3], payload[2]});
@@ -338,9 +301,7 @@ module tpu_sequencer #(
                             state         <= S_TX_STATUS;
                         end
 
-                        // ---------------------------------------------------------
                         // LOAD_ACT: store into reg_act
-                        // ---------------------------------------------------------
                         CMD_LOAD_ACT: begin
                             for (int i = 0; i < 4; i++)
                                 reg_act[i] <= signed'(payload[i]);
@@ -351,9 +312,7 @@ module tpu_sequencer #(
                             state         <= S_TX_STATUS;
                         end
 
-                        // ---------------------------------------------------------
                         // RUN: start the pipeline orchestration sequence
-                        // ---------------------------------------------------------
                         CMD_RUN: begin
                             rows_got  <= 2'd0;
                             result_ok <= 1'b0;
@@ -361,17 +320,13 @@ module tpu_sequencer #(
                             state     <= S_WR_UB_0;
                         end
 
-                        // ---------------------------------------------------------
                         // RESET: pulse tpu_reset
-                        // ---------------------------------------------------------
                         CMD_RESET: begin
                             reset_cnt <= 3'd0;
                             state     <= S_RESET_PULSE;
                         end
 
-                        // ---------------------------------------------------------
                         // Unknown CMD
-                        // ---------------------------------------------------------
                         default: begin
                             tx_payload[0] <= STATUS_ERR;
                             tx_payload[1] <= 8'h00;
@@ -382,10 +337,7 @@ module tpu_sequencer #(
                     endcase
                 end
 
-                // =============================================================
-                // RUN substates: replicate tpu_core_tb.sv task ordering exactly
-                // =============================================================
-
+                // RUN substates
                 // Step 1: write_activations_to_ub — row 0
                 S_WR_UB_0: begin
                     host_write_addr    <= 1'b0;
@@ -491,9 +443,7 @@ module tpu_sequencer #(
                     end
                 end
 
-                // =============================================================
                 // RESET_PULSE: hold tpu_reset high for 4 cycles
-                // =============================================================
                 S_RESET_PULSE: begin
                     tpu_reset <= 1'b1;
                     if (reset_cnt == 3'd3) begin
@@ -508,12 +458,10 @@ module tpu_sequencer #(
                     end
                 end
 
-                // =============================================================
                 // TX substates: serialize tx_payload via uart_tx
                 // All bytes go through S_TX_DATA; S_TX_STATUS / S_TX_LEN are
                 // aliases pointing at index 0 and 1 for readability, but the
                 // real logic is the generic byte-loop in S_TX_DATA.
-                // =============================================================
 
                 // Kick off by loading byte 0 (STATUS)
                 S_TX_STATUS: begin

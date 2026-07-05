@@ -14,7 +14,7 @@ module tpu_sequencer_tb;
     logic dp_reset;
     int   errors = 0;
 
-    // ── sequencer ports ──────────────────────────────────────────────────────
+    // sequencer ports
     logic [7:0] rx_data;
     logic       rx_valid;
     logic [7:0] tx_data;
@@ -40,7 +40,7 @@ module tpu_sequencer_tb;
     assign tx_busy = 1'b0;
     assign dp_reset = reset | seq_tpu_reset;
 
-    // ── datapath wires ────────────────────────────────────────────────────────
+    // datapath wires
     logic signed [7:0]  ub_read_data [2];
     logic               ub_read_valid;
     logic signed [7:0]  skewed_act [2];
@@ -64,7 +64,7 @@ module tpu_sequencer_tb;
     assign ub_act_dummy[0]   = 8'sd0;
     assign ub_act_dummy[1]   = 8'sd0;
 
-    // ── DUT + datapath ────────────────────────────────────────────────────────
+    // DUT + datapath
     tpu_sequencer #(.WAIT_TIMEOUT(200)) dut (
         .clk(clk), .reset(reset),
         .rx_data(rx_data), .rx_valid(rx_valid),
@@ -138,9 +138,7 @@ module tpu_sequencer_tb;
 
     always #5 clk = ~clk;
 
-    // =========================================================================
     // RX byte inject
-    // =========================================================================
     task automatic host_send_byte(input logic [7:0] b);
         @(posedge clk); #1;
         rx_data  = b;
@@ -149,9 +147,7 @@ module tpu_sequencer_tb;
         rx_valid = 1'b0;
     endtask
 
-    // =========================================================================
     // TX byte collect — stores into module-level rx_buf, advances rx_idx
-    // =========================================================================
     logic [7:0] rx_buf [10];   // big enough for longest RUN response
     integer     rx_idx;
 
@@ -177,9 +173,6 @@ module tpu_sequencer_tb;
             collect_byte(i);
     endtask
 
-    // =========================================================================
-    // Full compute helper
-    // =========================================================================
     // Sends LOAD_WEIGHTS, LOAD_BIAS, LOAD_ACT, RUN, then checks 10-byte response
     task automatic do_compute(
         input logic signed [7:0] w00, w01, w10, w11,
@@ -256,9 +249,6 @@ module tpu_sequencer_tb;
         repeat (20) @(posedge clk);
     endtask
 
-    // =========================================================================
-    // Main
-    // =========================================================================
     initial begin
         clk      = 0;
         reset    = 1;
@@ -271,23 +261,17 @@ module tpu_sequencer_tb;
 
         $display("\n=== Starting tpu_sequencer Testbench ===\n");
 
-        // ------------------------------------------------------------------
         // Test 1: happy path
         // W=[[4,5],[2,3]], A=[[1,2],[3,4]], bias=[100,200]
         // A@W = [[8,11],[20,27]] + bias = [[108,211],[120,227]], ReLU same
-        // ------------------------------------------------------------------
         $display("[Test 1] Happy path: A@W + bias + ReLU");
         do_compute(4,5,2,3, 16'sd100,16'sd200, 1,2,3,4, 16'sd108,16'sd211,16'sd120,16'sd227, "T1");
 
-        // ------------------------------------------------------------------
         // Test 2: zero weights, negative bias → all ReLU clamped to 0
-        // ------------------------------------------------------------------
         $display("[Test 2] Zero weights + neg bias → all zeros");
         do_compute(0,0,0,0, -16'sd10,-16'sd20, 0,0,0,0, 16'sd0,16'sd0,16'sd0,16'sd0, "T2");
 
-        // ------------------------------------------------------------------
         // Test 3: RESET command
-        // ------------------------------------------------------------------
         $display("[Test 3] RESET command");
         host_send_byte(8'h05);
         host_send_byte(8'h00);
@@ -304,9 +288,7 @@ module tpu_sequencer_tb;
         $display("[Test 3b] Post-reset compute");
         do_compute(4,5,2,3, 16'sd100,16'sd200, 1,2,3,4, 16'sd108,16'sd211,16'sd120,16'sd227, "T3b");
 
-        // ------------------------------------------------------------------
         // Test 4: unknown CMD → STATUS_ERR
-        // ------------------------------------------------------------------
         $display("[Test 4] Unknown CMD 0xFF → STATUS_ERR");
         host_send_byte(8'hFF);
         host_send_byte(8'h00);
@@ -319,7 +301,6 @@ module tpu_sequencer_tb;
         end
         repeat (10) @(posedge clk);
 
-        // ------------------------------------------------------------------
         // Test 5: negative arithmetic + ReLU
         // W=[[-1,-2],[-3,-4]], A=[[-1,1],[2,-2]], bias=[0,0]
         // row0: (-1)(-1)+(1)(-3)=-2+( -3)? Wait:
@@ -330,19 +311,15 @@ module tpu_sequencer_tb;
         // row1=[a10,a11]=[2,-2]
         // result[1][0] = 2*-1 + (-2)*-3 = -2+6 = 4 → ReLU → 4
         // result[1][1] = 2*-2 + (-2)*-4 = -4+8 = 4 → ReLU → 4
-        // ------------------------------------------------------------------
         $display("[Test 5] Negative arithmetic + ReLU clamp");
         do_compute(-1,-2,-3,-4, 16'sd0,16'sd0, -1,1,2,-2, 16'sd0,16'sd0,16'sd4,16'sd4, "T5");
 
-        // ------------------------------------------------------------------
         // Test 6: identity matrix
         // W=[[1,0],[0,1]], A=[[10,20],[30,40]], bias=[0,0]
         // → [[10,20],[30,40]]
-        // ------------------------------------------------------------------
         $display("[Test 6] Identity weight matrix");
         do_compute(1,0,0,1, 16'sd0,16'sd0, 10,20,30,40, 16'sd10,16'sd20,16'sd30,16'sd40, "T6");
 
-        // ------------------------------------------------------------------
         $display("\n=== SIMULATION COMPLETE ===");
         if (errors == 0)
             $display(">>> ALL tpu_sequencer TESTS PASSED <<<");
