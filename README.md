@@ -72,8 +72,8 @@ TPU/
 │   ├── *.vvp
 │   ├── *.vcd
 │   └── logs/
-├── fpga/pico2_ice/               # iCE40 build target (yosys/nextpnr-ice40/icepack)
-├── firmware/pico2_ice_bridge/     # RP2350 firmware: USB-CDC <-> FPGA UART bridge
+├── fpga/                          # iCE40 build target (yosys/nextpnr-ice40/icepack)
+├── firmware/                      # RP2350 firmware: USB-CDC <-> FPGA UART bridge
 ├── docs/
 │   ├── FPGA.md                   # pico2-ice architecture + end-to-end build/flash/validate runbook
 │   ├── sequencer_uart_design.md  # tpu_sequencer/uart_rx/uart_tx FSM + timing writeup
@@ -118,7 +118,7 @@ and the wire protocol are all in `docs/FPGA.md`; the sequencer/UART FSM design a
 cycle-by-cycle timing are in `docs/sequencer_uart_design.md`.
 
 ```bash
-cd fpga/pico2_ice && make && make prog   # build + flash the gateware
+cd fpga && make && make prog   # build + flash the gateware
 python3 tpu_host.py --port /dev/cu.usbmodemXXXX --selftest
 make hw-test PORT=/dev/cu.usbmodemXXXX   # broader regression suite (see tests/hw_regression.py)
 ```

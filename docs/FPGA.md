@@ -3,7 +3,7 @@
 Everything about running the TPU RTL on a
 [pico2-ice](https://pico2-ice.tinyvision.ai/) board (RP2350 + iCE40UP5K) in one
 place: how the design actually runs on the FPGA and talks to the host, what
-every file under `fpga/pico2_ice/` and `firmware/pico2_ice_bridge/` is for, the
+every file under `fpga/` and `firmware/` is for, the
 full build/flash/validate runbook, and every gotcha found the hard way during
 bring-up. Covers the open-source toolchain path (yosys/nextpnr-ice40/icepack),
 not Quartus/DE1-SoC (see `README.md` §3.2 for that planned target).
@@ -18,8 +18,8 @@ its own image on it before anything works:
 
 | Chip | Role | Image | Built from |
 |---|---|---|---|
-| Lattice iCE40UP5K (FPGA) | Runs the TPU datapath itself | `fpga/pico2_ice/tpu_top.bin` (bitstream) | `rtl/*.sv` |
-| Raspberry Pi RP2350 (MCU) | USB↔UART bridge + FPGA clock/config source | `firmware/pico2_ice_bridge/build/pico2_ice_bridge.uf2` | `firmware/pico2_ice_bridge/*` |
+| Lattice iCE40UP5K (FPGA) | Runs the TPU datapath itself | `fpga/tpu_top.bin` (bitstream) | `rtl/*.sv` |
+| Raspberry Pi RP2350 (MCU) | USB↔UART bridge + FPGA clock/config source | `firmware/build/pico2_ice_bridge.uf2` | `firmware/*` |
 
 The RP2350 isn't just a USB-to-serial chip here — it also **drives the
 FPGA's clock and loads its bitstream**. So the RP2350 firmware has to be
@@ -74,7 +74,7 @@ UART RX → sequencer → weight FIFO ─┐
 `rtl/weight_loader.sv` is **not** part of this pipeline yet — it's a
 ROM-driven ($readmemh) weight-tile loader intended for the planned DE1-SoC
 target (`README.md` §3.2), not something `tpu_top.sv` instantiates today.
-`fpga/pico2_ice/Makefile`'s RTL file list is the authoritative statement of
+`fpga/Makefile`'s RTL file list is the authoritative statement of
 what's actually synthesized for this board.
 
 ### 2.2 Two board-specific quirks baked into the RTL/build
@@ -82,7 +82,7 @@ what's actually synthesized for this board.
 - **The clock is not a crystal.** `clk` (iCE40 package pin 35) is driven by
   the RP2350's `GPOUT0` clock-output feature over a board trace, at
   whatever frequency `ice_fpga_init()` requests in firmware — see §4 and
-  §8.1. The synthesis-time `CLK_FREQ` parameter (`fpga/pico2_ice/Makefile`,
+  §8.1. The synthesis-time `CLK_FREQ` parameter (`fpga/Makefile`,
   default 12 MHz) sets the UART baud divider computed inside
   `uart_rx.sv`/`uart_tx.sv`, so it must always match what the firmware
   actually requests, or you get garbled UART bytes with no other symptom.
@@ -135,7 +135,7 @@ protocol for a broader real-hardware regression (replays every
 `tpu_sequencer_tb.sv` case plus int8/int16 boundary and randomized-stress
 cases).
 
-## 4. `firmware/pico2_ice_bridge/` explained
+## 4. `firmware/` explained
 
 A small fork of `pico-ice-sdk/examples/rp2_usb_uart`, kept minimal on
 purpose — its only job is USB↔UART bridging, FPGA clock/config, and reporting
@@ -151,7 +151,7 @@ FPGA config status on the LED.
     `usb_descriptors.c` (two CDC ports + a DFU interface).
   - `ice_fpga_init(FPGA_DATA, AS_MHZ(12))` — exports a 12 MHz clock to the
     FPGA over `GPOUT0`, instead of the SDK's 48 MHz default. This **must**
-    stay numerically in sync with `fpga/pico2_ice/Makefile`'s `CLK_FREQ`;
+    stay numerically in sync with `fpga/Makefile`'s `CLK_FREQ`;
     it's the single most common source of "board looks alive but nothing
     responds correctly" bugs if the two drift apart (§8.1).
   - `ice_fpga_configured(FPGA_DATA)` → drives the onboard LED
@@ -171,7 +171,7 @@ FPGA config status on the LED.
   1×DFU (with 2 alt settings), sets buffer sizes, and sets
   `ICE_USB_UART0_CDC=1` (the flag that makes `ice_usb_init()` bridge
   `uart0` to the second CDC port automatically).
-- **`CMakeLists.txt`** — points `PICO_ICE_SDK_PATH` two directories up at the
+- **`CMakeLists.txt`** — points `PICO_ICE_SDK_PATH` one directory up at the
   vendored (gitignored) `pico-ice-sdk/` clone at the repo root, imports
   `pico-sdk` from inside that SDK checkout, and links `pico_ice_sdk` +
   `pico_ice_usb` into the `pico2_ice_bridge` executable built from `main.c`
@@ -181,7 +181,7 @@ FPGA config status on the LED.
 - **`.gitignore`** — ignores `build/`, the out-of-tree cmake/ninja build
   directory that produces the `.uf2`.
 
-## 5. `fpga/pico2_ice/` explained
+## 5. `fpga/` explained
 
 - **`Makefile`** — the yosys → nextpnr-ice40 → icepack build for this board:
   - `make` → synthesizes `$(RTL)` (the explicit file list at the top,
@@ -201,7 +201,7 @@ FPGA config status on the LED.
     over the DFU "Flash" alt-interface the firmware exposes.
   - `make clean` → removes `.json`/`.asc`/`.bin`.
   - `CLK_FREQ` (env/make override, default 12 000 000) is the single knob
-    that must match `firmware/pico2_ice_bridge/main.c`'s
+    that must match `firmware/main.c`'s
     `ice_fpga_init(FPGA_DATA, AS_MHZ(12))` call.
 - **`tpu_top.pcf`** — pin constraints, iCE40 package-pin namespace (**not**
   the RP2350 GPIO namespace used in firmware):
@@ -286,11 +286,11 @@ out each step in full.
 
 ```bash
 make test                                    # repo root: simulate first
-cd fpga/pico2_ice && make && make prog       # build + flash gateware
-python3 ../../tpu_host.py --port /dev/cu.usbmodemN --selftest
+cd fpga && make && make prog       # build + flash gateware
+python3 ../tpu_host.py --port /dev/cu.usbmodemN --selftest
 ```
 
-You only need to touch `firmware/pico2_ice_bridge/` (§7.2, §7.3) if you
+You only need to touch `firmware/` (§7.2, §7.3) if you
 change `CLK_FREQ`, the UART pins, or anything else about the RP2350 side —
 pure datapath/RTL changes never require a firmware rebuild, just a gateware
 rebuild + reflash.
@@ -309,7 +309,7 @@ much faster to iterate on than a synthesis+PnR+flash cycle.
 ### 7.2 Build the FPGA gateware
 
 ```bash
-cd fpga/pico2_ice
+cd fpga
 make            # -> tpu_top.bin
 make time       # optional: static timing report (fMax)
 make clean
@@ -321,11 +321,11 @@ firmware actually exports.
 
 ### 7.3 Build the RP2350 firmware
 
-Only needed the first time, or after a change to `firmware/pico2_ice_bridge/`
+Only needed the first time, or after a change to `firmware/`
 itself (e.g. `CLK_FREQ`/pin changes):
 
 ```bash
-cd firmware/pico2_ice_bridge
+cd firmware
 mkdir -p build && cd build
 cmake -DPICO_BOARD=pico2_ice -DPICO_PLATFORM=rp2350-riscv \
       -DPICO_GCC_TRIPLE=riscv64-unknown-elf -G Ninja ..
@@ -346,7 +346,7 @@ firmware's DFU USB interface already running before it can push a bitstream.
 
 1. **Firmware**: hold **BOOTSEL**, plug in USB (or hold BOOTSEL + press reset
    if already plugged in). The board mounts as a USB drive. Drag
-   `firmware/pico2_ice_bridge/build/pico2_ice_bridge.uf2` onto it. It
+   `firmware/build/pico2_ice_bridge.uf2` onto it. It
    unmounts and reboots automatically.
 
 2. **Check the LED**: green = FPGA configured successfully (a real `CDONE`
@@ -354,7 +354,7 @@ firmware's DFU USB interface already running before it can push a bitstream.
 
 3. **Gateware**:
    ```bash
-   cd fpga/pico2_ice
+   cd fpga
    make prog
    ```
    This runs `dfu-util -d 1209:b1c0 -a 0 -D tpu_top.bin -R`. Ignore the
@@ -422,8 +422,8 @@ works.
 
 If a change ever needs a different `CLK_FREQ` (e.g. a bigger array that
 lowers fMax), update it in **two** places together:
-`fpga/pico2_ice/Makefile`'s `CLK_FREQ` and
-`firmware/pico2_ice_bridge/main.c`'s `AS_MHZ(...)` argument — then rebuild
+`fpga/Makefile`'s `CLK_FREQ` and
+`firmware/main.c`'s `AS_MHZ(...)` argument — then rebuild
 and reflash *both* images, since a mismatch only shows up as garbled UART
 bytes, not an obvious failure (§8.1).
 
@@ -435,9 +435,9 @@ bytes, not an obvious failure (§8.1).
 over a board trace (`pico-ice-sdk/include/ice_fpga.h`), not a dedicated
 oscillator. The actual frequency is whatever `ice_fpga_init(FPGA_DATA,
 freq_hz)` requests in firmware. `tpu_top`'s measured fMax on the UP5K is ~32
-MHz, so `firmware/pico2_ice_bridge/main.c` requests 12 MHz (`AS_MHZ(12)`)
+MHz, so `firmware/main.c` requests 12 MHz (`AS_MHZ(12)`)
 rather than the SDK's 48 MHz default — that must stay in sync with
-`fpga/pico2_ice/Makefile`'s `CLK_FREQ`, since it sets the UART baud-rate
+`fpga/Makefile`'s `CLK_FREQ`, since it sets the UART baud-rate
 divider computed at synthesis time. Mismatch symptom: garbled bytes, not
 silence.
 
@@ -451,7 +451,7 @@ against the board schematic (`tinyvision-ai-inc/pico2-ice` repo,
 The real wires to the iCE40's UART pins (package pins 9/11,
 `DEFAULT_UART_RX`/`DEFAULT_UART_TX`) are **GPIO28/GPIO29** — confirmed both
 in the schematic's RP2350 pin table and against the RP2350 datasheet
-(GPIO28 = UART0 TX, GPIO29 = UART0 RX). `firmware/pico2_ice_bridge/main.c`
+(GPIO28 = UART0 TX, GPIO29 = UART0 RX). `firmware/main.c`
 uses the corrected pins; if you fork it again, don't copy the upstream
 example's pin numbers verbatim. Symptom of the wrong pins: total silence on
 both USB-CDC ports, no matter what you send.
@@ -464,7 +464,7 @@ failure. Traced to `pico-ice-sdk/src/ice_usb.c`'s DFU manifest callback: it
 does `ok = ice_fpga_start(FPGA_DATA)` and reports that error whenever `ok` is
 falsy — but `ice_fpga_start()` unconditionally `return 0;` (never actually
 polls `CDONE`), and `0` is falsy in C. Don't trust this message either way.
-`firmware/pico2_ice_bridge/main.c` adds a real check instead, via
+`firmware/main.c` adds a real check instead, via
 `ice_fpga_configured()` — a function that exists in
 `pico-ice-sdk/src/ice_fpga.c` but isn't declared in the public header or
 called by any upstream example — shown on the onboard LED (green =
@@ -505,7 +505,7 @@ clock delivery → reset generation) rather than guessing at the full design.
 macOS/pyserial's `list_ports.comports()` shows the USB product string
 (`pico-ice`) for both CDC interfaces, not the per-interface description
 (`RP2040 logs` vs `iCE40 UART` from
-`firmware/pico2_ice_bridge/usb_descriptors.c`). No reliable way found to
+`firmware/usb_descriptors.c`). No reliable way found to
 disambiguate from the port list alone; §7.5 covers the trial-and-error
 approach.
 

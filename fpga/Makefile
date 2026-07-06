@@ -26,7 +26,7 @@ ICEPACK  := icepack
 ICETIME  := icetime
 DFU_UTIL := dfu-util
 
-RTL_DIR := ../../rtl
+RTL_DIR := ../rtl
 TOP     := tpu_top
 PCF     := tpu_top.pcf
 

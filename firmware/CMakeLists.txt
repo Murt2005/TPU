@@ -1,9 +1,9 @@
 cmake_minimum_required(VERSION 3.13)
 
 # Unlike the SDK's own examples (which symlink pico-ice-sdk/ and pico-sdk/
-# into each example directory), this project lives at TPU/firmware/pico2_ice_bridge/
-# and points straight at the vendored TPU/pico-ice-sdk/ clone two levels up.
-set(PICO_ICE_SDK_PATH ${CMAKE_CURRENT_SOURCE_DIR}/../../pico-ice-sdk)
+# into each example directory), this project lives at TPU/firmware/
+# and points straight at the vendored TPU/pico-ice-sdk/ clone one level up.
+set(PICO_ICE_SDK_PATH ${CMAKE_CURRENT_SOURCE_DIR}/../pico-ice-sdk)
 
 include(${PICO_ICE_SDK_PATH}/cmake/preinit_pico_ice_sdk.cmake)
 
