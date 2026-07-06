@@ -22,8 +22,15 @@ set_io -nowarn clk      35
 
 # reset_n: ICE_PB / ICE_SW2, the board's push-button, active-low -- matches
 # tpu_top's active-low reset_n convention directly (originally KEY[0] on the
-# DE1-SoC).
-set_io -nowarn reset_n  10
+# DE1-SoC). The board schematic (FPGA Button section) shows a real 10K
+# external pull-up (R21) already on this net, so -pullup yes here is just
+# belt-and-suspenders, not load-bearing. The real hardware bring-up bug
+# turned out to be unrelated to this pin's level: tpu_top.sv now has its
+# own internal power-on-reset generator (see rtl/tpu_top.sv) because
+# reset_n reads idle-high from the moment the FPGA configures on this
+# board, so the synchronous `if (reset)` branch in every module never
+# fired even once -- see that file's comment for the full story.
+set_io -nowarn -pullup yes reset_n 10
 
 # rx_pin / tx_pin: DEFAULT_UART_RX / DEFAULT_UART_TX, the pins the board's
 # default firmware forwards over the USB-UART bridge (see

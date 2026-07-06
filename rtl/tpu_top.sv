@@ -38,8 +38,29 @@ module tpu_top #(
     // =========================================================================
     // Synchronous active-high reset
     // =========================================================================
+    // Power-on-reset generator: holds an internal reset for the first 256
+    // cycles after configuration, regardless of reset_n's level. Needed
+    // because every module's registers (e.g. uart_tx's tx_busy/state) only
+    // get their known-good value inside their `if (reset)` branch -- if
+    // reset_n is already idle-high the instant the FPGA configures (true on
+    // boards where the reset button is a plain pull-up with no reset IC),
+    // that branch would otherwise never fire even once, leaving those
+    // registers to whatever value the toolchain's power-on initial-value
+    // inference happens to pick. Confirmed on iCE40/pico2-ice: without this,
+    // uart_tx never transmits (tx_busy powers up stuck) even though the
+    // exact same design works fine in simulation, where testbenches always
+    // pulse reset explicitly at the start.
+    logic [7:0] por_ctr = '0;
+    logic       por_done = 1'b0;
+    always_ff @(posedge clk) begin
+        if (!por_done) begin
+            por_ctr <= por_ctr + 1'b1;
+            if (por_ctr == 8'hFF) por_done <= 1'b1;
+        end
+    end
+
     logic rst;
-    assign rst = ~reset_n;
+    assign rst = ~reset_n | ~por_done;
 
     // =========================================================================
     // UART byte streams
