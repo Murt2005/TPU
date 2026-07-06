@@ -9,6 +9,7 @@
 ##    make wave-fifo    Run a testbench and open its VCD in gtkwave (if dumped)
 ##    make list         Show all available test targets
 ##    make clean        Remove all simulation build artifacts
+##    make hw-test PORT=/dev/cu.usbmodemXXXX   Run tests/hw_regression.py against real hardware
 ## ============================================================================
 
 IVERILOG := iverilog
@@ -86,7 +87,7 @@ TESTS := fifo pe mmu accumulator systolic_data_setup weight_fifo bias activation
 # de-duplicate dep lists (modules shared via multiple paths, e.g. tpu_core -> fifo.sv)
 dedup = $(if $1,$(firstword $1) $(call dedup,$(filter-out $(firstword $1),$1)))
 
-.PHONY: all test list clean $(foreach t,$(TESTS),test-$(t) build-$(t) wave-$(t))
+.PHONY: all test list clean hw-test $(foreach t,$(TESTS),test-$(t) build-$(t) wave-$(t))
 
 all: test
 
@@ -190,3 +191,12 @@ list:
 
 clean:
 	rm -rf $(SIM_DIR)
+
+# ----------------------------------------------------------------------------
+# Real-hardware regression suite (pico2-ice) -- see tests/hw_regression.py
+# ----------------------------------------------------------------------------
+hw-test:
+	@if [ -z "$(PORT)" ]; then \
+		echo "Usage: make hw-test PORT=/dev/cu.usbmodemXXXX"; exit 1; \
+	fi
+	python3 tests/hw_regression.py --port $(PORT)

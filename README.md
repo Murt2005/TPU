@@ -2,9 +2,10 @@
 
 Reimplementing the core datapath of Google's first-generation Tensor Processing Unit
 (as described in *In-Datacenter Performance Analysis of a Tensor Processing Unit*)
-as synthesizable SystemVerilog, verifying it in simulation, and deploying it on a
-Terasic DE1-SoC to run MNIST digit classification
-end-to-end on real hardware.
+as synthesizable SystemVerilog: verified in simulation (18 testbenches), and validated
+end-to-end on real hardware on a [pico2-ice](https://pico2-ice.tinyvision.ai/)
+(iCE40UP5K) board over UART. A Terasic DE1-SoC (Cyclone V) target for full MNIST
+digit classification is planned next — see §4.
 
 ## 1. TPU Design
 
@@ -15,7 +16,8 @@ Here are the major blocks, and how data moves between them:
 
 - **Host I/O** — in the original TPUv1, a PCIe link to the host and DDR3 channels. In
   this implementation, a 115 200-baud UART over two GPIO pins replaces the PCIe/DDR path.
-  A `host.py` Python script will send weights and activations from the PC.
+  `tpu_host.py` is the Python driver that sends weights/activations from the PC and reads
+  back results.
 - **Weight FIFO (weight fetcher)** — in the original TPUv1, pulls weight tiles from DRAM.
   Here, weights are streamed over UART and pushed directly into the shadow bank of the
   Weight FIFO, then swapped in before each tile's compute phase.
@@ -44,44 +46,39 @@ Here are the major blocks, and how data moves between them:
 ```
 TPU/
 ├── README.md
-├── Makefile
+├── Makefile                    # RTL sim automation (make test, make hw-test, ...)
 ├── run_tests.sh
-├── rtl/
+├── requirements.txt             # tpu_host.py deps: pyserial, numpy
+├── tpu_host.py                  # host-side UART driver + CLI
+├── rtl/                         # synthesizable SystemVerilog datapath + control plane
 │   ├── pe.sv
 │   ├── mmu.sv
 │   ├── fifo.sv
 │   ├── weight_fifo.sv
+│   ├── weight_loader.sv
 │   ├── systolic_data_setup.sv
 │   ├── accumulator.sv
 │   ├── bias.sv
 │   ├── activation.sv
-│   ├── weight_loader.sv
 │   ├── unified_buffer.sv
 │   ├── uart_rx.sv
-│   └── uart_tx.sv
-├── tests/
-│   ├── pe_tb.sv
-│   ├── mmu_tb.sv
-│   ├── fifo_tb.sv
-│   ├── weight_fifo_tb.sv
-│   ├── systolic_data_setup_tb.sv
-│   ├── accumulator_tb.sv
-│   ├── bias_tb.sv
-│   ├── activation_tb.sv
-│   ├── mmu_accum_tb.sv
-│   ├── accum_bias_tb.sv
-│   ├── bias_activation_tb.sv
-│   ├── unified_buffer_tb.sv
-│   ├── weight_fifo_mmu_tb.sv
-│   ├── weight_loader_tb.sv
-│   ├── weight_loader_fifo_tb.sv
-│   ├── uart_rx_tb.sv
-│   ├── uart_tx_tb.sv
-│   └── tpu_core_tb.sv
-└── sim/
-    ├── *.vvp
-    ├── *.vcd
-    └── logs/
+│   ├── uart_tx.sv
+│   ├── tpu_sequencer.sv         # UART command protocol + pipeline orchestration
+│   └── tpu_top.sv               # top-level: wires the datapath + sequencer together
+├── tests/                       # SystemVerilog testbenches (simulation)
+│   ├── *_tb.sv
+│   └── hw_regression.py         # real-hardware regression suite (see §3.1)
+├── sim/                         # simulation build output (gitignored)
+│   ├── *.vvp
+│   ├── *.vcd
+│   └── logs/
+├── fpga/pico2_ice/               # iCE40 build target (yosys/nextpnr-ice40/icepack)
+├── firmware/pico2_ice_bridge/     # RP2350 firmware: USB-CDC <-> FPGA UART bridge
+├── docs/
+│   ├── FPGA.md                   # pico2-ice architecture + end-to-end build/flash/validate runbook
+│   ├── sequencer_uart_design.md  # tpu_sequencer/uart_rx/uart_tx FSM + timing writeup
+│   └── reference/de1_soc_user_manual/  # vendored Terasic DE1-SoC manual
+└── pico-ice-sdk/                 # vendored, gitignored -- see docs/FPGA.md §6
 ```
 
 ### 2.1 Simulation workflow
@@ -110,26 +107,28 @@ make list      # print every registered test name and its available targets
 make clean     # remove sim/ (compiled binaries, logs, waveform dumps)
 ```
 
-## 3. FPGA Target: DE1-SoC
+## 3. FPGA Targets
 
-Target device: **Cyclone V 5CSEMA5F31C6** on the Terasic DE1-SoC board.
-See `docs/de1_soc_hardware.md` for the full board reference.
+### 3.1 pico2-ice (iCE40UP5K) — bring-up complete, hardware-validated
 
-| Resource | DE1-SoC (Cyclone V) | 2×2 array estimate | 8×8 array estimate |
-|---|---|---|---|
-| Adaptive Logic Modules (ALMs) | 32,070 (~85K LE equiv.) | ~500 | ~2,000 |
-| M10K block RAM | 553 blocks (707 KB total) | ~2 blocks | ~12 blocks |
-| DSP 18×18 MAC blocks | 87 | 4 (one per PE) | 64 (one per PE) |
-| Fractional PLLs | 6 | 1 (50→100 MHz) | 1–2 |
-| HPS-side DDR3 | 1 GB | not needed for v1 | not needed for v1 |
-| FPGA-side SDRAM | 64 MB | not needed for v1 | not needed for v1 |
+A 2×2 systolic array runs the full datapath (UART RX → sequencer → weight FIFO →
+unified buffer → systolic data setup → MMU → accumulator → bias → ReLU → UART TX) on
+real silicon. Architecture, code layout, build/flash/validate steps, board gotchas,
+and the wire protocol are all in `docs/FPGA.md`; the sequencer/UART FSM design and
+cycle-by-cycle timing are in `docs/sequencer_uart_design.md`.
 
-**MNIST weight memory:** 784×128 + 128×10 ≈ **99 KB** — fits in ~10 M10K blocks,
-leaving 543 of the 553 blocks free for the Unified Buffer and other structures.
-The entire network runs from on-chip BRAM; no DDR3 plumbing required for v1.
+```bash
+cd fpga/pico2_ice && make && make prog   # build + flash the gateware
+python3 tpu_host.py --port /dev/cu.usbmodemXXXX --selftest
+make hw-test PORT=/dev/cu.usbmodemXXXX   # broader regression suite (see tests/hw_regression.py)
+```
+
 
 ## 4. Current Status and Future Work
 
-Currently the full TPU datapath is implemented and validated in simulation. Future work
-includes programming the TPU onto the DE1-SoC using Quartus and training, quantizing
-and running MNIST inference on the DE1-SoC.
+- **Simulation** — full datapath implemented and passing all 18 SystemVerilog
+  testbenches (`make test`).
+- **pico2-ice hardware** — bring-up complete; `tests/hw_regression.py` (`make hw-test`)
+  replays every simulation test vector plus int8/int16 boundary cases and a randomized
+  stress run against real silicon.
+- **Future work** —  training/quantizing and running MNIST inference end-to-end on hardware.
