@@ -137,7 +137,11 @@ make hw-test PORT=/dev/cu.usbmodemXXXX   # broader regression suite (see tests/h
   passes summed in hardware before bias/ReLU ever runs — see its header comment and
   `docs/sequencer_uart_design.md` §3.2 for the wire-protocol side (`RUN`'s optional
   `LEN=1` flags byte). Verified in sim (`accumulator_tb`, `tpu_core_tb` Test 8,
-  `tpu_sequencer_tb` Test 7); not yet exercised on hardware or from `tpu_host.py`.
-- **Future work** — training/quantizing an MNIST model, extending `tpu_host.py` with a
-  tiled multi-layer inference driver on top of the above, and running it end-to-end on
-  hardware.
+  `tpu_sequencer_tb` Test 7) and on real pico2-ice hardware (`tpu_host.py`'s
+  `TPU.matmul_tiled()`, `tests/hw_regression.py`'s randomized multi-tile stress case).
+- **MNIST** — `mnist/train_mnist.py` trains and quantizes a small 64→32→10 MLP (int8
+  weights/activations, int16 bias) sized and empirically verified against the
+  accumulator's non-saturating int16 width; 94.95% quantized test accuracy.
+- **Future work** — extending `tpu_host.py` with a tiled multi-layer inference driver
+  that feeds the trained MNIST model's weights through `matmul_tiled()` layer by layer,
+  and an interactive drawing demo on top of that.

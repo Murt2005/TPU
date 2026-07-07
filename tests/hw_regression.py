@@ -88,6 +88,34 @@ def run_unknown_cmd(tpu):
     return False
 
 
+def run_tiled_stress(tpu, n, seed):
+    """Exercises matmul_tiled()'s K/M/N-dim tiling (rtl/accumulator.sv's
+    persistent PSUM, driven via RUN's first/last flags) against randomized
+    shapes beyond the raw 2x2 hardware tile -- proving the accumulator's
+    hardware-side K-reduction matches an un-tiled golden model on real
+    silicon, not just in sim (tests/tpu_sequencer_tb.sv Test 7,
+    tests/tpu_core_tb.sv Test 8)."""
+    rng = np.random.default_rng(seed)
+    fails = 0
+    for i in range(n):
+        m = int(rng.choice([2, 4]))
+        k = int(rng.choice([2, 4, 6, 8]))
+        ncols = int(rng.choice([2, 4, 6]))
+        a = rng.integers(-20, 20, size=(m, k)).astype(np.int8)
+        w = rng.integers(-20, 20, size=(k, ncols)).astype(np.int8)
+        bias = rng.integers(-50, 50, size=ncols).astype(np.int16)
+        expected = golden(a, w, bias)
+        got = tpu.matmul_tiled(a, w, bias)
+        if not np.array_equal(got, expected):
+            fails += 1
+            print(f"       [tiled {i}] M={m} K={k} N={ncols} a={a.tolist()} w={w.tolist()} "
+                  f"bias={bias.tolist()} got={got.tolist()} expected={expected.tolist()}")
+    passed = fails == 0
+    status = "PASS" if passed else "FAIL"
+    print(f"[{status}] tiled stress: {n - fails}/{n} randomized multi-tile matmuls matched the golden model")
+    return passed
+
+
 def run_stress(tpu, n, seed):
     rng = np.random.default_rng(seed)
     fails = 0
@@ -124,6 +152,7 @@ def main():
         results.append(run_reset_roundtrip(tpu))
         results.append(run_unknown_cmd(tpu))
         results.append(run_stress(tpu, args.stress_n, args.seed))
+        results.append(run_tiled_stress(tpu, min(args.stress_n, 50), args.seed))
 
     print("=" * 60)
     if all(results):

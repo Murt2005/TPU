@@ -13,6 +13,7 @@ Protocol (8-N-1, host-initiates everything -- see rtl/tpu_sequencer.sv):
     0x02 LOAD_BIAS     LEN=4  [b0_lo,b0_hi,b1_lo,b1_hi]  int16 LE
     0x03 LOAD_ACT      LEN=4  [a00,a01,a10,a11]  int8, row-major
     0x04 RUN           LEN=0  -> [r0c0,r0c1,r1c0,r1c1] int16 LE (8 bytes)
+               or       LEN=1  [flags] -- K-tiling variant, see TPU.run()
     0x05 RESET         LEN=0
 """
 import argparse
@@ -104,12 +105,31 @@ class TPU:
             raise ValueError("activations must be a 2x2 matrix")
         self._send_cmd(CMD_LOAD_ACT, a.tobytes())
 
-    def run(self):
-        """Executes ReLU(A @ W + bias) on-chip; returns a 2x2 int16 matrix."""
-        payload = self._send_cmd(CMD_RUN)
-        if len(payload) != 8:
-            raise TPUError(f"RUN response had {len(payload)} data bytes, expected 8")
-        r0c0, r0c1, r1c0, r1c1 = struct.unpack("<hhhh", payload)
+    def run(self, first=True, last=True):
+        """Executes one RUN pass; returns a 2x2 int16 matrix, or None.
+
+        first/last drive the accumulator's K-dim tiling (rtl/accumulator.sv):
+        first=True overwrites its persistent running sum with this pass's
+        result (start of a new K-reduction); first=False adds to it
+        (continuing one). last=True forwards the now-final sum through
+        bias/ReLU and returns the usual 8-byte result; last=False leaves it
+        in the accumulator for a later pass to add to -- bias/activation
+        never fire for that pass, so this returns None rather than a
+        result (there isn't one yet). first=last=True (the defaults) is
+        the original single-shot 2x2 matmul, sent as LEN=0 for wire
+        compatibility with hosts that never send the flags byte.
+        """
+        if first and last:
+            payload = b""
+        else:
+            flags = (0x01 if first else 0) | (0x02 if last else 0)
+            payload = bytes([flags])
+        resp = self._send_cmd(CMD_RUN, payload)
+        if not last:
+            return None
+        if len(resp) != 8:
+            raise TPUError(f"RUN response had {len(resp)} data bytes, expected 8")
+        r0c0, r0c1, r1c0, r1c1 = struct.unpack("<hhhh", resp)
         return np.array([[r0c0, r0c1], [r1c0, r1c1]], dtype=np.int16)
 
     def reset(self):
@@ -121,6 +141,44 @@ class TPU:
         self.load_weights(w)
         self.load_bias(bias)
         return self.run()
+
+    def matmul_tiled(self, a, w, bias=None):
+        """Y = ReLU(A @ W + bias) for shapes beyond the raw 2x2 hardware
+        tile. a: (M,K) int8 array-like, w: (K,N) int8 array-like, bias:
+        (N,) int16 array-like (defaults to zero); M, K, N must all be even.
+
+        Tiles the K dimension into 2-wide weight-reload passes accumulated
+        in hardware (rtl/accumulator.sv's persistent PSUM, via run()'s
+        first/last), and the M/N dimensions into 2x2 blocks run one at a
+        time. Bias/ReLU are applied once per (M,N) block, on that block's
+        final K-tile pass, exactly matching a single un-tiled matmul.
+        """
+        a = np.asarray(a, dtype=np.int8)
+        w = np.asarray(w, dtype=np.int8)
+        if a.ndim != 2 or w.ndim != 2:
+            raise ValueError("a and w must be 2D")
+        m, k = a.shape
+        k2, n = w.shape
+        if k != k2:
+            raise ValueError(f"inner dimensions must match: a is {a.shape}, w is {w.shape}")
+        if m % 2 or k % 2 or n % 2:
+            raise ValueError(f"matmul_tiled requires even M, K, N; got M={m}, K={k}, N={n}")
+        bias = np.zeros(n, dtype=np.int16) if bias is None else np.asarray(bias, dtype=np.int16)
+        if bias.shape != (n,):
+            raise ValueError(f"bias must have shape ({n},), got {bias.shape}")
+
+        out = np.zeros((m, n), dtype=np.int16)
+        num_k_tiles = k // 2
+        for m0 in range(0, m, 2):
+            for n0 in range(0, n, 2):
+                self.load_bias(bias[n0:n0 + 2])
+                result = None
+                for ki, k0 in enumerate(range(0, k, 2)):
+                    self.load_weights(w[k0:k0 + 2, n0:n0 + 2])
+                    self.load_activations(a[m0:m0 + 2, k0:k0 + 2])
+                    result = self.run(first=(ki == 0), last=(ki == num_k_tiles - 1))
+                out[m0:m0 + 2, n0:n0 + 2] = result
+        return out
 
 
 # -- golden self-test -----------------------------------------------------
