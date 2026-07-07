@@ -171,8 +171,8 @@ FPGA config status on the LED.
   1×DFU (with 2 alt settings), sets buffer sizes, and sets
   `ICE_USB_UART0_CDC=1` (the flag that makes `ice_usb_init()` bridge
   `uart0` to the second CDC port automatically).
-- **`CMakeLists.txt`** — points `PICO_ICE_SDK_PATH` one directory up at the
-  vendored (gitignored) `pico-ice-sdk/` clone at the repo root, imports
+- **`CMakeLists.txt`** — points `PICO_ICE_SDK_PATH` at the vendored
+  (gitignored) `pico-ice-sdk/` clone in this same directory, imports
   `pico-sdk` from inside that SDK checkout, and links `pico_ice_sdk` +
   `pico_ice_usb` into the `pico2_ice_bridge` executable built from `main.c`
   + `usb_descriptors.c`.
@@ -271,12 +271,19 @@ instead (`python3 -m venv .venv && source .venv/bin/activate`, adjusting
 entirely, since venv's auto-generated `.gitignore` would then land inside
 `.venv/` instead of at the repo root.
 
-`pico-ice-sdk/` must be cloned into the repo root (it's gitignored — vendored,
-not tracked) with its submodules initialized:
+`firmware/pico-ice-sdk/` is a git submodule (pinned to a specific upstream
+commit, tracked in `.gitmodules`), not a plain vendored/gitignored clone —
+so it's fetched with the rest of this repo's submodules:
 
 ```bash
-cd pico-ice-sdk
-git submodule update --init --recursive
+git submodule update --init --recursive -- firmware/pico-ice-sdk
+```
+
+or, if cloning this repo fresh, pull everything (this repo's submodule plus
+its own nested `lib/pico-sdk`/`lib/tinyuf2` submodules) in one shot with:
+
+```bash
+git clone --recurse-submodules <this-repo-url>
 ```
 
 ## 7. Build, flash, and validate

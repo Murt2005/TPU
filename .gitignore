@@ -16,7 +16,3 @@ include/
 lib/
 pyvenv.cfg
 __pycache__/
-
-# Vendored pico-ice-sdk clone -- has its own git history, not part of
-# this repo's tracked tree. Re-clone via its own README if missing.
-pico-ice-sdk/
