@@ -71,8 +71,25 @@ int main(void) {
         ice_led_red(true);
     }
 
+    // Demo LED feedback: the "RP2040 logs" CDC port (interface 0) is
+    // otherwise unused by this firmware -- ICE_USB_UART0_CDC (tusb_config.h)
+    // bridges hardware uart0 (the TPU link) to CDC interface 1 ("iCE40
+    // UART") only, so draining single-byte commands from interface 0 here
+    // can't interfere with the TPU wire protocol. 'g'/'G' -> green (idle),
+    // 'b'/'B' -> blue (inference complete). Lets a host script (e.g. the
+    // MNIST drawing demo) flip the board's LED without touching the FPGA
+    // datapath at all.
     while (true) {
         tud_task();
+
+        int32_t ch = tud_cdc_n_read_char(0);
+        if (ch == 'b' || ch == 'B') {
+            ice_led_green(false);
+            ice_led_blue(true);
+        } else if (ch == 'g' || ch == 'G') {
+            ice_led_blue(false);
+            ice_led_green(true);
+        }
     }
     return 0;
 }
