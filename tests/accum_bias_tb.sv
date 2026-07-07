@@ -55,8 +55,11 @@ module accum_bias_tb;
         .reset(reset),
         .in_partial_sum(in_partial_sum),
         .in_partial_sum_valid(in_partial_sum_valid),
+        .tile_first(1'b1),   // single-shot 2x2 matmul: no K-tiling in this tb
+        .tile_last(1'b1),
         .out_row(acc_out_row),
         .out_row_valid(acc_out_row_valid),
+        .pass_done(),
         .any_fifo_full(any_fifo_full)
     );
 

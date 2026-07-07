@@ -65,6 +65,19 @@ Command frame: `[CMD][LEN][payload...]`. Response frame: `[STATUS][LEN][payload.
 register file (`reg_weights`, `reg_bias`, `reg_act`) and ACK immediately — no datapath
 activity happens until `RUN`.
 
+`RUN` optionally takes a 1-byte payload (`LEN=1`, `[flags]`) for K-dim tiling: `flags[0]`
+(`TILE_FIRST`) and `flags[1]` (`TILE_LAST`) are threaded straight into `accumulator.sv`'s
+`tile_first`/`tile_last` inputs (`reg_tile_first`/`reg_tile_last`, latched at dispatch same as
+the other registers). `LEN=0` latches `first=last=1'b1` — the original single-shot behavior,
+still what every existing host (`tpu_host.py`, `hw_regression.py`) sends. When `tile_last=0`,
+`bias`/`activation` never fire for that pass (`accumulator.sv` gates `out_row_valid` on
+`tile_last`), so `S_WAIT` can't use the usual two-`final_row_valid` wait; it instead waits on a
+new `accum_pass_done` input (wired straight from `accumulator.sv`'s `pass_done` output, which
+pulses once per pass regardless of `tile_first`/`tile_last`) and replies with a bare
+`STATUS_OK, LEN=0` ACK. See `rtl/accumulator.sv`'s header comment for the accumulation
+semantics this enables (summing partial sums across weight-reload passes before bias/ReLU, for
+a matmul whose K dimension exceeds `ARRAY_ROWS`).
+
 One asymmetry worth calling out: weights are stored **bottom-row-first**
 (`[w10, w11, w00, w01]`) over the wire, matching `weight_fifo`'s documented staggered-loading
 contract (`weight_fifo.sv:20-32`) — the top-row weight must be captured by each PE one cycle

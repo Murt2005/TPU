@@ -119,11 +119,23 @@ FPGA -> Host:  [STATUS][LEN][payload[LEN]]     (STATUS: 0xAA=OK, 0xFF=ERR)
 0x02 LOAD_BIAS     LEN=4  [b0_lo,b0_hi,b1_lo,b1_hi]  int16 LE
 0x03 LOAD_ACT      LEN=4  [a00,a01,a10,a11]  int8, row-major
 0x04 RUN           LEN=0  -> [r0c0,r0c1,r1c0,r1c1] int16 LE (8 bytes)
+            or     LEN=1  [flags] -- K-tiling variant, see below
 0x05 RESET         LEN=0
 ```
 
 `RUN` executes `Y = ReLU(A @ W + bias)` on-chip and returns the 2x2 result.
-`tpu_sequencer.sv`'s header comment is the authoritative protocol definition
+As of the accumulator's persistent-PSUM extension, `RUN` also accepts an
+optional 1-byte payload (`LEN=1`) for tiling a matmul whose K dimension is
+larger than the array: `flags[0]=TILE_FIRST` (1 = overwrite the
+accumulator's running sum with this pass, starting a new K-reduction; 0 =
+add to it), `flags[1]=TILE_LAST` (1 = forward the now-final sum through
+bias/ReLU and return the usual 8-byte result; 0 = update the running sum
+only and return a bare `STATUS_OK, LEN=0` ACK, since bias/activation never
+fire for a non-final pass). `LEN=0` is equivalent to
+`flags=TILE_FIRST|TILE_LAST` -- today's original single-shot behavior,
+unchanged for any host that never sends the byte. See `rtl/accumulator.sv`
+for the accumulation semantics and `rtl/tpu_sequencer.sv` for the protocol
+parsing. `tpu_sequencer.sv`'s header comment is the authoritative protocol definition
 (useful if you ever drive the board directly — a terminal program, a
 different language — instead of through the Python driver); see
 `docs/sequencer_uart_design.md` for the full FSM/timing writeup.

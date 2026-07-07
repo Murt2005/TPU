@@ -10,6 +10,9 @@ fpga/**/*.json
 fpga/**/*.asc
 fpga/**/*.bin
 
+# Downloaded MNIST idx files (mnist/train_mnist.py fetches these; ~11MB, not tracked)
+mnist/data/
+
 # Python venv created directly in the project root (`python3 -m venv .`)
 bin/
 include/

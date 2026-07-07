@@ -31,6 +31,8 @@ module tpu_sequencer_tb;
     logic              seq_ub_addr;
     logic              seq_ub_en;
     logic signed [1:0][15:0] seq_bias;
+    logic               seq_tile_first, seq_tile_last;
+    logic               accum_pass_done;
     logic signed [1:0][15:0] final_row_out;
     logic               final_row_valid;
     logic               seq_tpu_reset;
@@ -76,6 +78,8 @@ module tpu_sequencer_tb;
         .host_write_valid(seq_hw_valid),
         .ub_read_addr(seq_ub_addr), .ub_read_en(seq_ub_en),
         .out_bias(seq_bias),
+        .tile_first(seq_tile_first), .tile_last(seq_tile_last),
+        .accum_pass_done(accum_pass_done),
         .final_row_out(final_row_out), .final_row_valid(final_row_valid),
         .tpu_reset(seq_tpu_reset), .busy(busy)
     );
@@ -121,7 +125,9 @@ module tpu_sequencer_tb;
     accumulator #(.NUM_COLS(2),.PSUM_WIDTH(16),.FIFO_DEPTH(FIFO_DEPTH)) u_accum (
         .clk(clk),.reset(dp_reset),
         .in_partial_sum(accum_in_data),.in_partial_sum_valid(accum_in_valid),
-        .out_row(acc_row_out),.out_row_valid(acc_row_valid),.any_fifo_full()
+        .tile_first(seq_tile_first),.tile_last(seq_tile_last),
+        .out_row(acc_row_out),.out_row_valid(acc_row_valid),
+        .pass_done(accum_pass_done),.any_fifo_full()
     );
 
     bias #(.NUM_COLS(2),.PSUM_WIDTH(16)) u_bias (
@@ -249,6 +255,85 @@ module tpu_sequencer_tb;
         repeat (20) @(posedge clk);
     endtask
 
+    // Sends LOAD_WEIGHTS + LOAD_ACT, then RUN with a 1-byte tile-flags
+    // payload (LEN=1): flags[0]=TILE_FIRST, flags[1]=TILE_LAST. When
+    // last=0, expects a bare ACK (STATUS_OK, LEN=0) -- bias/activation never
+    // fire, so there is no result to check yet. When last=1, expects the
+    // usual 8-byte result, checked against the given expected rows.
+    task automatic do_tiled_run(
+        input logic signed [7:0] w00, w01, w10, w11,
+        input logic signed [7:0] a00, a01, a10, a11,
+        input logic first, input logic last,
+        input logic signed [15:0] er0c0, er0c1, er1c0, er1c1,
+        input string label
+    );
+        logic [7:0] flags;
+        logic signed [15:0] gr0c0, gr0c1, gr1c0, gr1c1;
+
+        // LOAD_WEIGHTS: CMD=01, LEN=4, [w10,w11,w00,w01]
+        host_send_byte(8'h01);
+        host_send_byte(8'h04);
+        host_send_byte(8'(w10));
+        host_send_byte(8'(w11));
+        host_send_byte(8'(w00));
+        host_send_byte(8'(w01));
+        collect_n(2);
+        if (rx_buf[0] !== 8'hAA || rx_buf[1] !== 8'h00) begin
+            $error("[FAIL] %s WEIGHTS ACK: got [%02X,%02X]", label, rx_buf[0], rx_buf[1]);
+            errors++;
+        end
+
+        // LOAD_ACT: CMD=03, LEN=4, [a00,a01,a10,a11]
+        host_send_byte(8'h03);
+        host_send_byte(8'h04);
+        host_send_byte(8'(a00));
+        host_send_byte(8'(a01));
+        host_send_byte(8'(a10));
+        host_send_byte(8'(a11));
+        collect_n(2);
+        if (rx_buf[0] !== 8'hAA || rx_buf[1] !== 8'h00) begin
+            $error("[FAIL] %s ACT ACK: got [%02X,%02X]", label, rx_buf[0], rx_buf[1]);
+            errors++;
+        end
+
+        // RUN: CMD=04, LEN=1, [flags]
+        flags = {6'b0, last, first};
+        host_send_byte(8'h04);
+        host_send_byte(8'h01);
+        host_send_byte(flags);
+
+        if (last) begin
+            collect_n(10);
+            gr0c0 = signed'({rx_buf[3], rx_buf[2]});
+            gr0c1 = signed'({rx_buf[5], rx_buf[4]});
+            gr1c0 = signed'({rx_buf[7], rx_buf[6]});
+            gr1c1 = signed'({rx_buf[9], rx_buf[8]});
+            if (rx_buf[0] !== 8'hAA || rx_buf[1] !== 8'h08) begin
+                $error("[FAIL] %s RUN header: [%02X,%02X]", label, rx_buf[0], rx_buf[1]);
+                errors++;
+            end else if (gr0c0 !== er0c0 || gr0c1 !== er0c1 ||
+                         gr1c0 !== er1c0 || gr1c1 !== er1c1) begin
+                $error("[FAIL] %s RUN: exp [%0d,%0d / %0d,%0d] got [%0d,%0d / %0d,%0d]",
+                       label, er0c0, er0c1, er1c0, er1c1,
+                       gr0c0, gr0c1, gr1c0, gr1c1);
+                errors++;
+            end else begin
+                $display("[PASS] %s: row0=[%0d,%0d] row1=[%0d,%0d]",
+                         label, gr0c0, gr0c1, gr1c0, gr1c1);
+            end
+        end else begin
+            collect_n(2);
+            if (rx_buf[0] !== 8'hAA || rx_buf[1] !== 8'h00) begin
+                $error("[FAIL] %s tile ACK: got [%02X,%02X]", label, rx_buf[0], rx_buf[1]);
+                errors++;
+            end else begin
+                $display("[PASS] %s: tile ACK received (no data yet)", label);
+            end
+        end
+
+        repeat (20) @(posedge clk);
+    endtask
+
     initial begin
         clk      = 0;
         reset    = 1;
@@ -319,6 +404,31 @@ module tpu_sequencer_tb;
         // → [[10,20],[30,40]]
         $display("[Test 6] Identity weight matrix");
         do_compute(1,0,0,1, 16'sd0,16'sd0, 10,20,30,40, 16'sd10,16'sd20,16'sd30,16'sd40, "T6");
+
+        // Test 7: K-dim tiling over the wire protocol.
+        // Y = A_full @ W_full, A_full 2x4, W_full 4x2, split into two K-tiles:
+        //   K-tile0: A0=[[1,2],[5,6]]  W0=[[1,0],[0,1]]  -> A0@W0=[[1,2],[5,6]]
+        //   K-tile1: A1=[[3,4],[7,8]]  W1=[[2,0],[0,2]]  -> A1@W1=[[6,8],[14,16]]
+        //   Y = [[7,10],[19,22]], bias=[0,0], all positive -> ReLU no-op.
+        // Pass 1 (first=1,last=0) must return a bare ACK; pass 2
+        // (first=0,last=1) adds to the pass-1 running sum and returns the
+        // real result -- proving hardware-side K-tiling works end-to-end
+        // over the UART command protocol, not just at the datapath level.
+        $display("[Test 7] K-dim tiling over the wire (LEN=1 RUN flags)");
+        host_send_byte(8'h02);   // LOAD_BIAS = [0,0]
+        host_send_byte(8'h04);
+        host_send_byte(8'h00); host_send_byte(8'h00);
+        host_send_byte(8'h00); host_send_byte(8'h00);
+        collect_n(2);
+        if (rx_buf[0] !== 8'hAA || rx_buf[1] !== 8'h00) begin
+            $error("[FAIL] T7 BIAS ACK: got [%02X,%02X]", rx_buf[0], rx_buf[1]);
+            errors++;
+        end
+
+        do_tiled_run(1,0,0,1, 1,2,5,6, 1'b1, 1'b0,
+                     16'sd0,16'sd0,16'sd0,16'sd0, "T7 K-tile0");
+        do_tiled_run(2,0,0,2, 3,4,7,8, 1'b0, 1'b1,
+                     16'sd7,16'sd10,16'sd19,16'sd22, "T7 K-tile1");
 
         $display("\n=== SIMULATION COMPLETE ===");
         if (errors == 0)

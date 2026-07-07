@@ -49,6 +49,10 @@ module tpu_core_tb;
     logic              [1:0] accum_in_valid;
     logic signed [1:0][15:0] acc_row_out;
     logic               acc_row_valid;
+    logic               acc_pass_done;
+    // K-tiling control -- tied first=last=1 (single-shot) except Test 8.
+    logic               tile_first = 1'b1;
+    logic               tile_last  = 1'b1;
 
     // Bias
     logic signed [1:0][15:0] in_bias;
@@ -132,7 +136,9 @@ module tpu_core_tb;
     accumulator #(.NUM_COLS(2), .PSUM_WIDTH(16), .FIFO_DEPTH(FIFO_DEPTH)) u_accum (
         .clk(clk), .reset(reset),
         .in_partial_sum(accum_in_data), .in_partial_sum_valid(accum_in_valid),
+        .tile_first(tile_first), .tile_last(tile_last),
         .out_row(acc_row_out), .out_row_valid(acc_row_valid),
+        .pass_done(acc_pass_done),
         .any_fifo_full()
     );
 
@@ -228,6 +234,24 @@ module tpu_core_tb;
         end else begin
             $display("  -> [PASS] %s: [%0d, %0d]", row_name, got_c0, got_c1);
         end
+    endtask
+
+    // Block until acc_pass_done pulses (used for non-final K-tile passes,
+    // where tile_last=0 means final_row_valid/result_queue never fire).
+    task automatic await_pass_done(input string label);
+        int timeout_cnt;
+        timeout_cnt = 0;
+        while (!acc_pass_done) begin
+            @(posedge clk);
+            timeout_cnt++;
+            if (timeout_cnt > 100) begin
+                $error("[FATAL] %s TIMEOUT waiting for pass_done.", label);
+                errors++;
+                $finish;
+            end
+        end
+        $display("  -> [PASS] %s: pass_done seen", label);
+        @(posedge clk);
     endtask
 
     always #5 clk = ~clk;
@@ -373,6 +397,47 @@ module tpu_core_tb;
 
         await_row(0, 53, "Test 7 - Row 0");
         await_row(0, 53, "Test 7 - Row 1");
+
+        // ------------------------------------------------------------------
+        // Test 8 – K-dim tiling through the full datapath (weight reload +
+        // activation stream), not just synthetic partial sums.
+        //
+        // Y = A_full @ W_full, A_full 2x4, W_full 4x2, split into two 2x2
+        // K-tiles:
+        //   K-tile0: A0=[[1,2],[5,6]]  W0=[[1,0],[0,1]]  -> A0@W0=[[1,2],[5,6]]
+        //   K-tile1: A1=[[3,4],[7,8]]  W1=[[2,0],[0,2]]  -> A1@W1=[[6,8],[14,16]]
+        //   Y = [[7,10],[19,22]], bias=[0,0], all positive -> ReLU no-op.
+        //
+        // Pass 1 (tile_first=1, tile_last=0): must NOT produce a final_row_valid
+        // (bias/activation never fire) -- only pass_done, then the running sum
+        // is left inside the accumulator for pass 2 to add to.
+        // ------------------------------------------------------------------
+        $display("\n[Test 8] K-dim tiling: two weight-reload passes, hardware-side accumulation");
+        in_bias[0] = 16'sd0; in_bias[1] = 16'sd0;
+
+        tile_first = 1'b1; tile_last = 1'b0;
+        write_activations_to_ub(1, 2, 5, 6);
+        load_weights(1, 0, 0, 1);
+        trigger_weight_load();
+        stream_activations_from_ub();
+        await_pass_done("Test 8 - K-tile 0 pass_done");
+
+        if (result_queue.size() != 0) begin
+            $error("[FAIL] Test 8: tile_last=0 pass must not push to result_queue (got %0d)",
+                   result_queue.size());
+            errors++;
+        end
+
+        tile_first = 1'b0; tile_last = 1'b1;
+        write_activations_to_ub(3, 4, 7, 8);
+        load_weights(2, 0, 0, 2);
+        trigger_weight_load();
+        stream_activations_from_ub();
+
+        await_row(7,  10, "Test 8 - Row 0");
+        await_row(19, 22, "Test 8 - Row 1");
+
+        tile_first = 1'b1; tile_last = 1'b1;   // restore single-shot default
 
         // ------------------------------------------------------------------
         $display("\n=== SIMULATION COMPLETE ===");

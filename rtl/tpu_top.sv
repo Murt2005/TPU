@@ -112,6 +112,10 @@ module tpu_top #(
     // bias
     logic signed [1:0][15:0] seq_bias;
 
+    // K-tiling control (accumulator persistent-sum passes)
+    logic seq_tile_first, seq_tile_last;
+    logic accum_pass_done;
+
     // pipeline final output
     logic signed [1:0][15:0] final_row_out;
     logic               final_row_valid;
@@ -149,6 +153,10 @@ module tpu_top #(
         .ub_read_en         (seq_ub_en),
         // bias
         .out_bias           (seq_bias),
+        // K-tiling control
+        .tile_first         (seq_tile_first),
+        .tile_last          (seq_tile_last),
+        .accum_pass_done    (accum_pass_done),
         // pipeline result
         .final_row_out      (final_row_out),
         .final_row_valid    (final_row_valid),
@@ -275,8 +283,11 @@ module tpu_top #(
         .reset                (dp_reset),
         .in_partial_sum       (accum_in_data),
         .in_partial_sum_valid (accum_in_valid),
+        .tile_first           (seq_tile_first),
+        .tile_last            (seq_tile_last),
         .out_row              (acc_row_out),
         .out_row_valid        (acc_row_valid),
+        .pass_done            (accum_pass_done),
         .any_fifo_full        ()
     );
 

@@ -131,4 +131,13 @@ make hw-test PORT=/dev/cu.usbmodemXXXX   # broader regression suite (see tests/h
 - **pico2-ice hardware** — bring-up complete; `tests/hw_regression.py` (`make hw-test`)
   replays every simulation test vector plus int8/int16 boundary cases and a randomized
   stress run against real silicon.
-- **Future work** —  training/quantizing and running MNIST inference end-to-end on hardware.
+- **K-dim tiling** — `accumulator.sv` now holds a persistent per-row PSUM register that
+  survives across separate `RUN`s (`tile_first`/`tile_last` control, `pass_done` status),
+  so a matmul with K larger than the 2x2 array can be tiled into multiple weight-reload
+  passes summed in hardware before bias/ReLU ever runs — see its header comment and
+  `docs/sequencer_uart_design.md` §3.2 for the wire-protocol side (`RUN`'s optional
+  `LEN=1` flags byte). Verified in sim (`accumulator_tb`, `tpu_core_tb` Test 8,
+  `tpu_sequencer_tb` Test 7); not yet exercised on hardware or from `tpu_host.py`.
+- **Future work** — training/quantizing an MNIST model, extending `tpu_host.py` with a
+  tiled multi-layer inference driver on top of the above, and running it end-to-end on
+  hardware.

@@ -31,6 +31,21 @@
 //                             STATUS=0xAA, LEN=8,
 //                             [r0c0_lo, r0c0_hi, r0c1_lo, r0c1_hi,
 //                              r1c0_lo, r1c0_hi, r1c1_lo, r1c1_hi]
+//                      LEN=1  payload: [flags]  -- K-tiling variant:
+//                             flags[0] = TILE_FIRST (1 = overwrite the
+//                               accumulator's running sum with this pass;
+//                               0 = add to it, continuing a K-reduction
+//                               started by an earlier RUN)
+//                             flags[1] = TILE_LAST (1 = forward the
+//                               now-final running sum through bias/ReLU and
+//                               return the usual 8-byte result; 0 = update
+//                               the running sum only -- bias/activation
+//                               never fire, response is STATUS=0xAA, LEN=0)
+//                             LEN=0 is equivalent to flags=TILE_FIRST|TILE_LAST
+//                             (today's single-shot behavior, unchanged for
+//                             existing hosts that never send the byte).
+//                             See rtl/accumulator.sv for the accumulation
+//                             semantics this threads into.
 //
 //  0x05  RESET         LEN=0  pulses internal reset for 4 cycles; responds OK
 //
@@ -91,6 +106,12 @@ module tpu_sequencer #(
 
     output logic signed [1:0][15:0] out_bias,
 
+    // K-tiling control -- see CMD_RUN above and rtl/accumulator.sv. Held
+    // stable for the full RUN orchestration sequence.
+    output logic               tile_first,
+    output logic               tile_last,
+    input  logic               accum_pass_done,
+
     input  logic signed [1:0][15:0] final_row_out,
     input  logic               final_row_valid,
 
@@ -115,6 +136,8 @@ module tpu_sequencer #(
     logic signed [7:0]  reg_weights [4];
     logic signed [7:0]  reg_act     [4];   // [a00,a01,a10,a11]
     logic signed [15:0] reg_bias    [2];
+    logic               reg_tile_first;
+    logic               reg_tile_last;
 
     // Results captured from pipeline
     logic signed [15:0] result_row0 [2];
@@ -171,10 +194,12 @@ module tpu_sequencer #(
     // RESET pulse counter
     logic [2:0] reset_cnt;
 
-    // Drive out_bias to the datapath at all times
+    // Drive out_bias / tile_first / tile_last to the datapath at all times
     always_comb begin
         out_bias[0] = reg_bias[0];
         out_bias[1] = reg_bias[1];
+        tile_first  = reg_tile_first;
+        tile_last   = reg_tile_last;
     end
 
     always_ff @(posedge clk) begin
@@ -188,6 +213,8 @@ module tpu_sequencer #(
             for (int i = 0; i < 4; i++) reg_act[i]     <= '0;
             reg_bias[0]       <= '0;
             reg_bias[1]       <= '0;
+            reg_tile_first    <= 1'b1;
+            reg_tile_last     <= 1'b1;
             result_row0[0]    <= '0; result_row0[1] <= '0;
             result_row1[0]    <= '0; result_row1[1] <= '0;
             result_ok         <= 1'b0;
@@ -312,11 +339,20 @@ module tpu_sequencer #(
                             state         <= S_TX_STATUS;
                         end
 
-                        // RUN: start the pipeline orchestration sequence
+                        // RUN: start the pipeline orchestration sequence.
+                        // LEN=0 -> first=last=1 (single-shot, back-compat).
+                        // LEN=1 -> payload[0][0]=TILE_FIRST, [1]=TILE_LAST.
                         CMD_RUN: begin
                             rows_got  <= 2'd0;
                             result_ok <= 1'b0;
                             wait_cnt  <= '0;
+                            if (len_reg == 8'd1) begin
+                                reg_tile_first <= payload[0][0];
+                                reg_tile_last  <= payload[0][1];
+                            end else begin
+                                reg_tile_first <= 1'b1;
+                                reg_tile_last  <= 1'b1;
+                            end
                             state     <= S_WR_UB_0;
                         end
 
@@ -414,32 +450,54 @@ module tpu_sequencer #(
                     state        <= S_WAIT;
                 end
 
-                // Step 9: wait for two final_row_valid pulses (or timeout)
+                // Step 9: wait for completion, then respond.
+                //   tile_last=1: wait for both final_row_valid pulses (as
+                //     before) and return the full 8-byte result.
+                //   tile_last=0: wait for accum_pass_done instead (bias/
+                //     activation never fire this pass) and return a bare
+                //     ACK -- no result exists yet for a mid-K-reduction pass.
                 S_WAIT: begin
                     wait_cnt <= wait_cnt + 1'b1;
-                    if (rows_got == 2'd2) begin
-                        result_ok <= 1'b1;
-                        // Pack response: STATUS_OK, LEN=8, 8 payload bytes
-                        tx_payload[0] <= STATUS_OK;
-                        tx_payload[1] <= 8'd8;
-                        tx_payload[2] <= result_row0[0][7:0];
-                        tx_payload[3] <= result_row0[0][15:8];
-                        tx_payload[4] <= result_row0[1][7:0];
-                        tx_payload[5] <= result_row0[1][15:8];
-                        tx_payload[6] <= result_row1[0][7:0];
-                        tx_payload[7] <= result_row1[0][15:8];
-                        tx_payload[8] <= result_row1[1][7:0];
-                        tx_payload[9] <= result_row1[1][15:8];
-                        tx_len_reg    <= 8'd10;   // 2 header + 8 data
-                        tx_byte_idx   <= 8'd0;
-                        state         <= S_TX_STATUS;
-                    end else if (wait_cnt == WAIT_TIMEOUT[TIMEOUT_W-1:0]) begin
-                        // Timeout — something wrong with pipeline
-                        tx_payload[0] <= STATUS_ERR;
-                        tx_payload[1] <= 8'h00;
-                        tx_len_reg    <= 8'd2;
-                        tx_byte_idx   <= 8'd0;
-                        state         <= S_TX_STATUS;
+                    if (reg_tile_last) begin
+                        if (rows_got == 2'd2) begin
+                            result_ok <= 1'b1;
+                            // Pack response: STATUS_OK, LEN=8, 8 payload bytes
+                            tx_payload[0] <= STATUS_OK;
+                            tx_payload[1] <= 8'd8;
+                            tx_payload[2] <= result_row0[0][7:0];
+                            tx_payload[3] <= result_row0[0][15:8];
+                            tx_payload[4] <= result_row0[1][7:0];
+                            tx_payload[5] <= result_row0[1][15:8];
+                            tx_payload[6] <= result_row1[0][7:0];
+                            tx_payload[7] <= result_row1[0][15:8];
+                            tx_payload[8] <= result_row1[1][7:0];
+                            tx_payload[9] <= result_row1[1][15:8];
+                            tx_len_reg    <= 8'd10;   // 2 header + 8 data
+                            tx_byte_idx   <= 8'd0;
+                            state         <= S_TX_STATUS;
+                        end else if (wait_cnt == WAIT_TIMEOUT[TIMEOUT_W-1:0]) begin
+                            // Timeout — something wrong with pipeline
+                            tx_payload[0] <= STATUS_ERR;
+                            tx_payload[1] <= 8'h00;
+                            tx_len_reg    <= 8'd2;
+                            tx_byte_idx   <= 8'd0;
+                            state         <= S_TX_STATUS;
+                        end
+                    end else begin
+                        if (accum_pass_done) begin
+                            result_ok     <= 1'b1;
+                            tx_payload[0] <= STATUS_OK;
+                            tx_payload[1] <= 8'h00;   // no result yet -- mid-tile ACK
+                            tx_len_reg    <= 8'd2;
+                            tx_byte_idx   <= 8'd0;
+                            state         <= S_TX_STATUS;
+                        end else if (wait_cnt == WAIT_TIMEOUT[TIMEOUT_W-1:0]) begin
+                            tx_payload[0] <= STATUS_ERR;
+                            tx_payload[1] <= 8'h00;
+                            tx_len_reg    <= 8'd2;
+                            tx_byte_idx   <= 8'd0;
+                            state         <= S_TX_STATUS;
+                        end
                     end
                 end
 
