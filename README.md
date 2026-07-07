@@ -74,6 +74,12 @@ TPU/
 │   └── logs/
 ├── fpga/                          # iCE40 build target (yosys/nextpnr-ice40/icepack)
 ├── firmware/                      # RP2350 firmware: USB-CDC <-> FPGA UART bridge
+├── mnist/
+│   ├── train_mnist.py            # trains + quantizes the 64->32->10 MLP
+│   ├── infer.py                  # multi-layer tiled inference driver (hardware + offline backends)
+│   ├── draw_demo.py              # interactive drawing demo, LED feedback
+│   ├── model/mnist_2x2_int8.npz  # quantized weights (committed, ~5KB)
+│   └── data/                     # downloaded MNIST idx files, gitignored
 ├── docs/
 │   ├── FPGA.md                   # pico2-ice architecture + end-to-end build/flash/validate runbook
 │   ├── sequencer_uart_design.md  # tpu_sequencer/uart_rx/uart_tx FSM + timing writeup
@@ -141,7 +147,14 @@ make hw-test PORT=/dev/cu.usbmodemXXXX   # broader regression suite (see tests/h
   `TPU.matmul_tiled()`, `tests/hw_regression.py`'s randomized multi-tile stress case).
 - **MNIST** — `mnist/train_mnist.py` trains and quantizes a small 64→32→10 MLP (int8
   weights/activations, int16 bias) sized and empirically verified against the
-  accumulator's non-saturating int16 width; 94.95% quantized test accuracy.
-- **Future work** — extending `tpu_host.py` with a tiled multi-layer inference driver
-  that feeds the trained MNIST model's weights through `matmul_tiled()` layer by layer,
-  and an interactive drawing demo on top of that.
+  accumulator's non-saturating int16 width; 94.95% quantized test accuracy in sim,
+  93.33% on a real-hardware sample (`mnist/infer.py`, ~1.9s/image end-to-end over UART).
+- **Interactive demo** — `mnist/draw_demo.py`: draw a digit, classify it end-to-end on
+  real pico2-ice silicon via `mnist/infer.py`'s multi-layer `matmul_tiled()` driver, with
+  the board's LED flipping green→blue on completion (`firmware/main.c`'s LED command
+  listener on the second, otherwise-idle USB-CDC port). `--offline` runs the same
+  pipeline in pure numpy with no board attached.
+- **Future work** — a bigger/better MNIST model (current one is deliberately tiny to
+  stay provably inside the accumulator's int16 width — see `mnist/train_mnist.py`'s
+  header comment) and cutting inference latency (`docs/sequencer_uart_design.md` §4/§5
+  already identifies UART framing as the dominant cost, not the datapath).
