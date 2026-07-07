@@ -4,8 +4,8 @@ Reimplementing the core datapath of Google's first-generation Tensor Processing 
 (as described in *In-Datacenter Performance Analysis of a Tensor Processing Unit*)
 as synthesizable SystemVerilog: verified in simulation (18 testbenches), and validated
 end-to-end on real hardware on a [pico2-ice](https://pico2-ice.tinyvision.ai/)
-(iCE40UP5K) board over UART. A Terasic DE1-SoC (Cyclone V) target for full MNIST
-digit classification is planned next — see §4.
+(iCE40UP5K) board over UART, including hardware-side K-dim matmul tiling and a
+real-time MNIST digit classification demo — see §3.2.
 
 ## 1. TPU Design
 
@@ -128,6 +128,55 @@ cd fpga && make && make prog   # build + flash the gateware
 python3 tpu_host.py --port /dev/cu.usbmodemXXXX --selftest
 make hw-test PORT=/dev/cu.usbmodemXXXX   # broader regression suite (see tests/hw_regression.py)
 ```
+
+### 3.2 MNIST digit classification demo
+
+Runs a trained+quantized 64→32→10 MLP through the real 2×2 array, tile by
+tile, via `mnist/infer.py`'s `matmul_tiled()` driver (built on the K-dim
+tiling from §3.1/§4) — either against real hardware or, with `--offline`, in
+pure numpy with no board at all. `mnist/model/mnist_2x2_int8.npz` is already
+trained and committed, so steps 1–2 below are only needed if you want to
+retrain it.
+
+1. **(Optional) Retrain/requantize the model** — downloads MNIST (~11 MB,
+   cached in `mnist/data/`, gitignored) and overwrites
+   `mnist/model/mnist_2x2_int8.npz`:
+   ```bash
+   python3 mnist/train_mnist.py
+   ```
+
+2. **Board must already be flashed** — firmware + gateware, per §3.1 above
+   (`docs/FPGA.md` §7 for the full runbook). Pure RTL/software changes here
+   don't need a firmware reflash, just the gateware.
+
+3. **Find the board's two USB-CDC ports**:
+   ```bash
+   python3 -c "import serial.tools.list_ports as p; [print(x) for x in p.comports()]"
+   ```
+   Both may show identically as `pico-ice` on macOS (see `docs/FPGA.md`
+   §8.5) — try the higher-numbered `/dev/cu.usbmodemN` for `--port` (the
+   TPU/"iCE40 UART" link) first; the other is `--led-port` ("RP2040 logs",
+   used only for the demo's LED feedback in step 5).
+
+4. **Sanity-check accuracy on real hardware** — classifies N random real
+   MNIST test images end-to-end over UART (~1.9 s/image; each image is
+   hundreds of tiled `RUN`s, see §4's latency note):
+   ```bash
+   python3 mnist/infer.py --port /dev/cu.usbmodemXXXX --test-n 20
+   # no board handy? pure-numpy backend, same fixed-point math, no LED:
+   python3 mnist/infer.py --offline --test-n 200
+   ```
+
+5. **Launch the interactive drawing demo** — draw a digit, click Predict,
+   watch the board's LED flip green→blue when the on-chip inference
+   completes:
+   ```bash
+   python3 mnist/draw_demo.py --port /dev/cu.usbmodemXXXX --led-port /dev/cu.usbmodemYYYY
+   # --led-port is optional (skips LED feedback); --offline works here too:
+   python3 mnist/draw_demo.py --offline
+   ```
+   Needs `tkinter` (bundled with most Python installs; on macOS via
+   Homebrew Python, `brew install python-tk` if `import tkinter` fails).
 
 
 ## 4. Current Status and Future Work
