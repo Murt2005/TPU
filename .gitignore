@@ -19,3 +19,7 @@ include/
 lib/
 pyvenv.cfg
 __pycache__/
+
+# Kept locally only, untracked from the repo
+docs/FPGA.md
+docs/sequencer_uart_design.md
