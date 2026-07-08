@@ -27,8 +27,8 @@ whose exact fixed-point forward pass (mnist/model.py) mirrors the RTL:
     calibrates that per-layer rescale (hidden_scale below) empirically and
     bakes it into the saved model.
 
-Network: 64 (8x8 downsampled digit) -> 32 (hidden) -> 10 (class scores).
-Both K values (64, 32) and both N values (32, 10) are even, so every layer
+Network: 144 (12x12 downsampled digit) -> 64 (hidden) -> 10 (class scores).
+Both K values (144, 64) and both N values (64, 10) are even, so every layer
 tiles cleanly into the array's 2x2 blocks with no padding.
 
 Usage:
@@ -54,9 +54,9 @@ MNIST_FILES = {
     "test_labels": "t10k-labels-idx1-ubyte.gz",
 }
 
-IN_SIDE = 8          # downsampled digit is IN_SIDE x IN_SIDE
-NUM_IN = IN_SIDE * IN_SIDE   # 64
-NUM_HIDDEN = 32
+IN_SIDE = 12         # downsampled digit is IN_SIDE x IN_SIDE
+NUM_IN = IN_SIDE * IN_SIDE   # 144
+NUM_HIDDEN = 64
 NUM_OUT = 10
 PSUM_WIDTH = 16
 PSUM_MIN = -(2 ** (PSUM_WIDTH - 1))
@@ -177,7 +177,10 @@ class MLP:
         return (pred == y).mean()
 
 
-def train(x_train, y_train, x_test, y_test, epochs=15, batch_size=128, lr=0.5, seed=0):
+def train(x_train, y_train, x_test, y_test, epochs=40, batch_size=128, lr=0.5, seed=0):
+    # At this size/lr, test_acc plateaus around ~87% until a sharp breakthrough
+    # near epoch 25, then settles around 97% -- fewer epochs looks converged
+    # but isn't; don't shrink epochs without re-checking the accuracy curve.
     rng = np.random.default_rng(seed)
     model = MLP(rng)
     n = x_train.shape[0]
@@ -213,13 +216,15 @@ def hw_layer(x_int, w_int, b_int):
     return raw, truncated, relu
 
 
-def find_safe_input_scale(x_float, w_int, w_scale, bias_float, init_scale, margin=1.02, max_iters=20):
+def find_safe_input_scale(x_float, w_int, w_scale, bias_float, init_scale, margin=1.05, max_iters=20):
     """Search for the smallest input scale (largest quantized-input range)
     that keeps every calibration sample's raw accumulator strictly inside
     int16 -- not just on average, but for every sample seen. Grows the scale
     (shrinking quantized magnitude) whenever the observed worst case
-    overflows, with a 2% safety margin so rounding at the boundary can't tip
-    a borderline sample back over on unseen data.
+    overflows, with a 5% safety margin so rounding at the boundary can't tip
+    a borderline sample back over on unseen data. (2% wasn't enough headroom
+    once NUM_IN/NUM_HIDDEN grew past the original 64->32->10 size: it left a
+    1-in-10000 test-set overflow that never showed up during calibration.)
     """
     scale = init_scale
     for _ in range(max_iters):

@@ -5,8 +5,8 @@ green to blue when the on-chip inference completes.
 
 Draws directly into a numpy array in parallel with the visible Tkinter
 canvas strokes (no PIL/screen-capture dependency -- matches this repo's
-pyserial+numpy-only footprint), downsamples 280x280 -> 28x28 -> 8x8 (the
-same train_mnist.downsample() used for real MNIST images during training),
+pyserial+numpy-only footprint), downsamples 280x280 -> 28x28 -> IN_SIDExIN_SIDE
+(the same train_mnist.downsample() used for real MNIST images during training),
 and feeds that through mnist.infer.MNISTInference.
 
 LED control rides the board's *second* USB-CDC port ("RP2040 logs",

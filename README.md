@@ -75,7 +75,7 @@ TPU/
 ├── fpga/                          # iCE40 build target (yosys/nextpnr-ice40/icepack)
 ├── firmware/                      # RP2350 firmware: USB-CDC <-> FPGA UART bridge
 ├── mnist/
-│   ├── train_mnist.py            # trains + quantizes the 64->32->10 MLP
+│   ├── train_mnist.py            # trains + quantizes the 144->64->10 MLP
 │   ├── infer.py                  # multi-layer tiled inference driver (hardware + offline backends)
 │   ├── draw_demo.py              # interactive drawing demo, LED feedback
 │   ├── model/mnist_2x2_int8.npz  # quantized weights (committed, ~5KB)
@@ -83,6 +83,8 @@ TPU/
 ├── docs/
 │   ├── FPGA.md                   # pico2-ice architecture + end-to-end build/flash/validate runbook
 │   ├── sequencer_uart_design.md  # tpu_sequencer/uart_rx/uart_tx FSM + timing writeup
+│   ├── HARDWARE_COMPARISON.md    # pico2-ice vs. local Mac: speed/accuracy/power/size, same model
+│   ├── PERFORMANCE_ANALYSIS.md   # UART vs RTL time breakdown, LUT budget, array-scaling feasibility
 │   └── reference/de1_soc_user_manual/  # vendored Terasic DE1-SoC manual
 └── pico-ice-sdk/                 # vendored, gitignored -- see docs/FPGA.md §6
 ```
@@ -131,7 +133,7 @@ make hw-test PORT=/dev/cu.usbmodemXXXX   # broader regression suite (see tests/h
 
 ### 3.2 MNIST digit classification demo
 
-Runs a trained+quantized 64→32→10 MLP through the real 2×2 array, tile by
+Runs a trained+quantized 144→64→10 MLP through the real 2×2 array, tile by
 tile, via `mnist/infer.py`'s `matmul_tiled()` driver (built on the K-dim
 tiling from §3.1/§4) — either against real hardware or, with `--offline`, in
 pure numpy with no board at all. `mnist/model/mnist_2x2_int8.npz` is already
@@ -159,12 +161,15 @@ retrain it.
    used only for the demo's LED feedback in step 5).
 
 4. **Sanity-check accuracy on real hardware** — classifies N random real
-   MNIST test images end-to-end over UART (~1.9 s/image; each image is
-   hundreds of tiled `RUN`s, see §4's latency note):
+   MNIST test images end-to-end over UART (~8.1 s/image measured on real
+   pico2-ice hardware with the 144→64→10 model — see §4's latency note):
    ```bash
    python3 mnist/infer.py --port /dev/cu.usbmodemXXXX --test-n 20
    # no board handy? pure-numpy backend, same fixed-point math, no LED:
    python3 mnist/infer.py --offline --test-n 200
+   # want both, on the exact same images, side by side (hardware vs local Mac,
+   # one-at-a-time vs batched)? see docs/HARDWARE_COMPARISON.md:
+   python3 mnist/infer.py --port /dev/cu.usbmodemXXXX --compare --test-n 20
    ```
 
 5. **Launch the interactive drawing demo** — draw a digit, click Predict,
@@ -194,10 +199,14 @@ retrain it.
   `LEN=1` flags byte). Verified in sim (`accumulator_tb`, `tpu_core_tb` Test 8,
   `tpu_sequencer_tb` Test 7) and on real pico2-ice hardware (`tpu_host.py`'s
   `TPU.matmul_tiled()`, `tests/hw_regression.py`'s randomized multi-tile stress case).
-- **MNIST** — `mnist/train_mnist.py` trains and quantizes a small 64→32→10 MLP (int8
-  weights/activations, int16 bias) sized and empirically verified against the
-  accumulator's non-saturating int16 width; 94.95% quantized test accuracy in sim,
-  93.33% on a real-hardware sample (`mnist/infer.py`, ~1.9s/image end-to-end over UART).
+- **MNIST** — `mnist/train_mnist.py` trains and quantizes a 144→64→10 MLP (12×12
+  downsampled input, int8 weights/activations, int16 bias) sized and empirically
+  verified against the accumulator's non-saturating int16 width (5% calibration
+  safety margin, zero overflow across the full 10k-image test set); 97.50%
+  quantized test accuracy in sim, 95.00% (19/20) on a real-hardware sample
+  (`mnist/infer.py --port ... --test-n 20`), at ~8100 ms/image end-to-end over
+  UART — up from ~1.9s/image on the smaller, less accurate 64→32→10 model, since
+  RUN count (and thus UART-framing-bound latency) scales with each layer's K×N.
 - **Interactive demo** — `mnist/draw_demo.py`: draw a digit, classify it end-to-end on
   real pico2-ice silicon via `mnist/infer.py`'s multi-layer `matmul_tiled()` driver, with
   the board's LED flipping green→blue on completion (`firmware/main.c`'s LED command

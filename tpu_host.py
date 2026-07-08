@@ -34,6 +34,11 @@ STATUS_ERR = 0xFF
 
 DEFAULT_BAUD = 115200
 
+# Must match fpga/Makefile's CLK_FREQ (default 12 MHz) and firmware/main.c's
+# ice_fpga_init() request -- the clock the RP2350 actually exports to the
+# FPGA on real pico2-ice hardware, not iverilog sim's 50 MHz DE1-SoC default.
+FPGA_CLK_FREQ = 12_000_000
+
 
 class TPUError(RuntimeError):
     pass
@@ -44,6 +49,11 @@ class TPU:
 
     def __init__(self, port, baud=DEFAULT_BAUD, timeout=2.0):
         self.ser = serial.Serial(port, baud, timeout=timeout)
+        # cmd byte -> [call count, wire bytes tx (incl. CMD/LEN header), wire bytes rx]
+        # Lets a caller measure exactly how many bytes crossed the wire per command
+        # type, to separate UART transmission time from actual RTL execution time
+        # (see mnist/infer.py's --timing-breakdown and docs/PERFORMANCE_ANALYSIS.md).
+        self.stats = {}
 
     def close(self):
         self.ser.close()
@@ -67,15 +77,44 @@ class TPU:
         return buf
 
     def _send_cmd(self, cmd, payload=b""):
-        self.ser.write(bytes([cmd, len(payload)]) + payload)
+        wire_tx = bytes([cmd, len(payload)]) + payload
+        self.ser.write(wire_tx)
         status, length = self._read_exact(2)
         resp = self._read_exact(length) if length else b""
+        wire_rx = 2 + length
+        n, bytes_tx, bytes_rx = self.stats.get(cmd, (0, 0, 0))
+        self.stats[cmd] = (n + 1, bytes_tx + len(wire_tx), bytes_rx + wire_rx)
         if status != STATUS_OK:
             raise TPUError(
                 f"TPU returned STATUS=0x{status:02X} for CMD=0x{cmd:02X} "
                 f"(0xFF = unknown command or framing error)"
             )
         return resp
+
+    def reset_stats(self):
+        self.stats = {}
+
+    def uart_wire_seconds(self):
+        """Real seconds spent shifting bits across the 115200-baud link itself
+        (8N1 = 10 bits/byte), computed from every byte actually seen on the
+        wire since the last reset_stats(). Independent of CLK_FREQ -- baud
+        rate sets real bit time directly, see docs/sequencer_uart_design.md §1/§2."""
+        total_bytes = sum(bytes_tx + bytes_rx for _, bytes_tx, bytes_rx in self.stats.values())
+        return total_bytes * 10 / self.ser.baudrate
+
+    def estimated_rtl_seconds(self, clk_freq=FPGA_CLK_FREQ):
+        """Estimated wall-clock time actually spent inside tpu_core's
+        datapath (no UART, no USB) -- RUN costs 21 cycles dispatch-to-result
+        (docs/sequencer_uart_design.md §3.3, cycle-accurate from the RTL);
+        LOAD_*/RESET just latch a register file and ACK, budgeted at a
+        conservative 2 cycles since that path isn't cycle-counted in the docs
+        the way RUN is. clk_freq defaults to the 12 MHz this repo's firmware
+        exports to the FPGA (firmware/main.c's ice_fpga_init call, must match
+        fpga/Makefile's CLK_FREQ)."""
+        run_calls = self.stats.get(CMD_RUN, (0, 0, 0))[0]
+        other_calls = sum(n for cmd, (n, _, _) in self.stats.items() if cmd != CMD_RUN)
+        cycles = run_calls * 21 + other_calls * 2
+        return cycles / clk_freq
 
     # -- protocol commands ------------------------------------------------
 
