@@ -4,23 +4,22 @@ module mmu_tb;
     logic                clk;
     logic                reset;
     logic                loading_phase;
-    logic                capture_weight_col_0;
-    logic                capture_weight_col_1;
+    logic [1:0]          capture_weight_col;
 
-    logic signed [7:0]   in_row_0, in_row_1;
-    logic                in_row_0_valid, in_row_1_valid;
-    
-    logic signed [7:0]   in_col_0, in_col_1;
-    logic                in_col_0_valid, in_col_1_valid;
-    
-    logic signed [15:0]  out_partial_sum_0, out_partial_sum_1;
-    logic                out_partial_sum_0_valid, out_partial_sum_1_valid;
+    logic signed [1:0][7:0] in_row;
+    logic        [1:0]      in_row_valid;
+
+    logic signed [1:0][7:0] in_col;
+    logic        [1:0]      in_col_valid;
+
+    logic signed [1:0][15:0] out_partial_sum;
+    logic        [1:0]       out_partial_sum_valid;
 
     int errors = 0;
     int exp_col0_q[$], exp_col1_q[$];
 
     // Instantiate MMU
-    mmu uut (.*);
+    mmu #(.ARRAY_ROWS(2), .NUM_COLS(2)) uut (.*);
 
     // Clock generator (10ns period)
     always #5 clk = ~clk;
@@ -30,33 +29,33 @@ module mmu_tb;
     // instead of requiring you to eyeball the telemetry) ---
     always @(posedge clk) begin
         if (!reset) begin
-            if (out_partial_sum_0_valid) begin
+            if (out_partial_sum_valid[0]) begin
                 if (exp_col0_q.size() == 0) begin
-                    $error("[FAIL] Unexpected col0 output %0d at time %0t", out_partial_sum_0, $time);
+                    $error("[FAIL] Unexpected col0 output %0d at time %0t", out_partial_sum[0], $time);
                     errors++;
                 end else begin
                     int e;
                     e = exp_col0_q.pop_front();
-                    if (out_partial_sum_0 !== e) begin
-                        $error("[FAIL] col0 at %0t: got %0d, expected %0d", $time, out_partial_sum_0, e);
+                    if (out_partial_sum[0] !== e) begin
+                        $error("[FAIL] col0 at %0t: got %0d, expected %0d", $time, out_partial_sum[0], e);
                         errors++;
                     end else begin
-                        $display("[PASS] col0 at %0t: %0d", $time, out_partial_sum_0);
+                        $display("[PASS] col0 at %0t: %0d", $time, out_partial_sum[0]);
                     end
                 end
             end
-            if (out_partial_sum_1_valid) begin
+            if (out_partial_sum_valid[1]) begin
                 if (exp_col1_q.size() == 0) begin
-                    $error("[FAIL] Unexpected col1 output %0d at time %0t", out_partial_sum_1, $time);
+                    $error("[FAIL] Unexpected col1 output %0d at time %0t", out_partial_sum[1], $time);
                     errors++;
                 end else begin
                     int e;
                     e = exp_col1_q.pop_front();
-                    if (out_partial_sum_1 !== e) begin
-                        $error("[FAIL] col1 at %0t: got %0d, expected %0d", $time, out_partial_sum_1, e);
+                    if (out_partial_sum[1] !== e) begin
+                        $error("[FAIL] col1 at %0t: got %0d, expected %0d", $time, out_partial_sum[1], e);
                         errors++;
                     end else begin
-                        $display("[PASS] col1 at %0t: %0d", $time, out_partial_sum_1);
+                        $display("[PASS] col1 at %0t: %0d", $time, out_partial_sum[1]);
                     end
                 end
             end
@@ -64,36 +63,38 @@ module mmu_tb;
     end
 
     // --- Dynamic Telemetry Logger ---
+    // Hierarchical paths follow mmu's generate-block naming:
+    // uut.gen_row[r].gen_col[c].pe_inst
     always @(negedge clk) begin
         if (!reset) begin
             $display("[Time=%0t] --- Mode: %s ---", $time, loading_phase ? "WEIGHT LOAD" : "COMPUTE");
-            
+
             // PE00 Telemetry
             $display("  PE00 | Act: In=%2d (V:%b), Out=%2d | Weight: In=%2d (V:%b), Reg=%2d | PSum: In=%2d (V:%b), Out=%2d (V:%b)",
-                     uut.pe00.in_activation,  uut.pe00.in_activation_valid,  uut.pe00.out_activation,
-                     uut.pe00.in_weight,      uut.pe00.in_weight_valid,      uut.pe00.weight_reg,
-                     uut.pe00.in_partial_sum, uut.pe00.in_partial_sum_valid, uut.pe00.out_partial_sum, uut.pe00.out_partial_sum_valid);
-            
+                     uut.gen_row[0].gen_col[0].pe_inst.in_activation,  uut.gen_row[0].gen_col[0].pe_inst.in_activation_valid,  uut.gen_row[0].gen_col[0].pe_inst.out_activation,
+                     uut.gen_row[0].gen_col[0].pe_inst.in_weight,      uut.gen_row[0].gen_col[0].pe_inst.in_weight_valid,      uut.gen_row[0].gen_col[0].pe_inst.weight_reg,
+                     uut.gen_row[0].gen_col[0].pe_inst.in_partial_sum, uut.gen_row[0].gen_col[0].pe_inst.in_partial_sum_valid, uut.gen_row[0].gen_col[0].pe_inst.out_partial_sum, uut.gen_row[0].gen_col[0].pe_inst.out_partial_sum_valid);
+
             // PE01 Telemetry
             $display("  PE01 | Act: In=%2d (V:%b), Out=%2d | Weight: In=%2d (V:%b), Reg=%2d | PSum: In=%2d (V:%b), Out=%2d (V:%b)",
-                     uut.pe01.in_activation,  uut.pe01.in_activation_valid,  uut.pe01.out_activation,
-                     uut.pe01.in_weight,      uut.pe01.in_weight_valid,      uut.pe01.weight_reg,
-                     uut.pe01.in_partial_sum, uut.pe01.in_partial_sum_valid, uut.pe01.out_partial_sum, uut.pe01.out_partial_sum_valid);
-            
+                     uut.gen_row[0].gen_col[1].pe_inst.in_activation,  uut.gen_row[0].gen_col[1].pe_inst.in_activation_valid,  uut.gen_row[0].gen_col[1].pe_inst.out_activation,
+                     uut.gen_row[0].gen_col[1].pe_inst.in_weight,      uut.gen_row[0].gen_col[1].pe_inst.in_weight_valid,      uut.gen_row[0].gen_col[1].pe_inst.weight_reg,
+                     uut.gen_row[0].gen_col[1].pe_inst.in_partial_sum, uut.gen_row[0].gen_col[1].pe_inst.in_partial_sum_valid, uut.gen_row[0].gen_col[1].pe_inst.out_partial_sum, uut.gen_row[0].gen_col[1].pe_inst.out_partial_sum_valid);
+
             // PE10 Telemetry
             $display("  PE10 | Act: In=%2d (V:%b), Out=%2d | Weight: In=%2d (V:%b), Reg=%2d | PSum: In=%2d (V:%b), Out=%2d (V:%b)",
-                     uut.pe10.in_activation,  uut.pe10.in_activation_valid,  uut.pe10.out_activation,
-                     uut.pe10.in_weight,      uut.pe10.in_weight_valid,      uut.pe10.weight_reg,
-                     uut.pe10.in_partial_sum, uut.pe10.in_partial_sum_valid, uut.pe10.out_partial_sum, uut.pe10.out_partial_sum_valid);
-            
+                     uut.gen_row[1].gen_col[0].pe_inst.in_activation,  uut.gen_row[1].gen_col[0].pe_inst.in_activation_valid,  uut.gen_row[1].gen_col[0].pe_inst.out_activation,
+                     uut.gen_row[1].gen_col[0].pe_inst.in_weight,      uut.gen_row[1].gen_col[0].pe_inst.in_weight_valid,      uut.gen_row[1].gen_col[0].pe_inst.weight_reg,
+                     uut.gen_row[1].gen_col[0].pe_inst.in_partial_sum, uut.gen_row[1].gen_col[0].pe_inst.in_partial_sum_valid, uut.gen_row[1].gen_col[0].pe_inst.out_partial_sum, uut.gen_row[1].gen_col[0].pe_inst.out_partial_sum_valid);
+
             // PE11 Telemetry
             $display("  PE11 | Act: In=%2d (V:%b), Out=%2d | Weight: In=%2d (V:%b), Reg=%2d | PSum: In=%2d (V:%b), Out=%2d (V:%b)",
-                     uut.pe11.in_activation,  uut.pe11.in_activation_valid,  uut.pe11.out_activation,
-                     uut.pe11.in_weight,      uut.pe11.in_weight_valid,      uut.pe11.weight_reg,
-                     uut.pe11.in_partial_sum, uut.pe11.in_partial_sum_valid, uut.pe11.out_partial_sum, uut.pe11.out_partial_sum_valid);
-                     
-            $display("  SYSTEM OUTPUTS | Col0 PSum = %4d (Valid: %b) | Col1 PSum = %4d (Valid: %b)", 
-                     out_partial_sum_0, out_partial_sum_0_valid, out_partial_sum_1, out_partial_sum_1_valid);
+                     uut.gen_row[1].gen_col[1].pe_inst.in_activation,  uut.gen_row[1].gen_col[1].pe_inst.in_activation_valid,  uut.gen_row[1].gen_col[1].pe_inst.out_activation,
+                     uut.gen_row[1].gen_col[1].pe_inst.in_weight,      uut.gen_row[1].gen_col[1].pe_inst.in_weight_valid,      uut.gen_row[1].gen_col[1].pe_inst.weight_reg,
+                     uut.gen_row[1].gen_col[1].pe_inst.in_partial_sum, uut.gen_row[1].gen_col[1].pe_inst.in_partial_sum_valid, uut.gen_row[1].gen_col[1].pe_inst.out_partial_sum, uut.gen_row[1].gen_col[1].pe_inst.out_partial_sum_valid);
+
+            $display("  SYSTEM OUTPUTS | Col0 PSum = %4d (Valid: %b) | Col1 PSum = %4d (Valid: %b)",
+                     out_partial_sum[0], out_partial_sum_valid[0], out_partial_sum[1], out_partial_sum_valid[1]);
             $display("-------------------------------------------------------------------------------------------------------");
         end
     end
@@ -101,24 +102,19 @@ module mmu_tb;
     // --- Drive Test Signals ---
     initial begin
         // Reset state initialization
-        clk                  = 0; 
-        reset                = 1;
-        loading_phase        = 0; 
-        capture_weight_col_0 = 0; 
-        capture_weight_col_1 = 0;
-        in_row_0             = 0; 
-        in_row_0_valid       = 0; 
-        in_row_1             = 0; 
-        in_row_1_valid       = 0;
-        in_col_0             = 0; 
-        in_col_0_valid       = 0; 
-        in_col_1             = 0; 
-        in_col_1_valid       = 0;
-        
+        clk                   = 0;
+        reset                 = 1;
+        loading_phase         = 0;
+        capture_weight_col    = 2'b00;
+        in_row                = '0;
+        in_row_valid          = 2'b00;
+        in_col                = '0;
+        in_col_valid          = 2'b00;
+
         #15;
         @(posedge clk);
-        #1 reset = 0; 
-        
+        #1 reset = 0;
+
         $display("\n=== Starting MMU Testbench ===\n");
 
         // Matrix 1 expected outputs: C1 = A1 @ W1 = [[8,11],[20,27]]
@@ -134,32 +130,30 @@ module mmu_tb;
         $display("\n Test 1: Staggered Stationary Weight Loading");
         @(posedge clk);
         #1;
-        loading_phase        = 1; 
-        capture_weight_col_0 = 1; 
-        capture_weight_col_1 = 1;
-        
+        loading_phase      = 1;
+        capture_weight_col = 2'b11;
+
         // Cycle 0: Inject bottom weights (row 1 weights) into the top ports
-        in_col_0       = 8'sd2; in_col_0_valid = 1'b1; 
-        in_col_1       = 8'sd3; in_col_1_valid = 1'b1;
-        
+        in_col[0] = 8'sd2; in_col_valid[0] = 1'b1;
+        in_col[1] = 8'sd3; in_col_valid[1] = 1'b1;
+
         @(posedge clk);
         #1;
         // Cycle 1: Push bottom weights down to row 1 PEs, inject top weights (row 0 weights)
-        in_col_0       = 8'sd4; in_col_0_valid = 1'b1; 
-        in_col_1       = 8'sd5; in_col_1_valid = 1'b1;
-        
+        in_col[0] = 8'sd4; in_col_valid[0] = 1'b1;
+        in_col[1] = 8'sd5; in_col_valid[1] = 1'b1;
+
         // At the next edge, PE00/PE01 capture [4,5] and PE10/PE11 capture [2,3]
         @(posedge clk);
         #1;
-        loading_phase        = 0; 
-        capture_weight_col_0 = 0; 
-        capture_weight_col_1 = 0;
-        in_col_0             = 0; in_col_0_valid = 1'b0; 
-        in_col_1             = 0; in_col_1_valid = 1'b0;
+        loading_phase      = 0;
+        capture_weight_col = 2'b00;
+        in_col[0] = 0; in_col_valid[0] = 1'b0;
+        in_col[1] = 0; in_col_valid[1] = 1'b0;
 
         // Give the pipeline one idle tick to settle
         @(posedge clk);
-        
+
         // ------------------------------------------
         // Test 2: Systolic Staggered Data Input Streaming
         // Target Activation Matrix (A):
@@ -169,32 +163,32 @@ module mmu_tb;
         //  C = A * W => [1*4 + 2*2,  1*5 + 2*3] = [8,  11]
         //               [3*4 + 4*2,  3*5 + 4*3] = [20, 27]
         // ------------------------------------------
-        
+
         $display("\n Test 2: Systolic Staggered Data Input Streaming");
         // Cycle 0: Feed A[0][0]=1 to Row 0. Row 1 waits.
         @(posedge clk);
         #1;
-        in_row_0 = 8'sd1; in_row_0_valid = 1'b1;
-        in_row_1 = 8'sd0; in_row_1_valid = 1'b0;
-        
+        in_row[0] = 8'sd1; in_row_valid[0] = 1'b1;
+        in_row[1] = 8'sd0; in_row_valid[1] = 1'b0;
+
         // Cycle 1: Stagger step. Feed A[1][0]=3 to Row 0, feed A[0][1]=2 to Row 1.
         @(posedge clk);
         #1;
-        in_row_0 = 8'sd3; in_row_0_valid = 1'b1;
-        in_row_1 = 8'sd2; in_row_1_valid = 1'b1;
-        
+        in_row[0] = 8'sd3; in_row_valid[0] = 1'b1;
+        in_row[1] = 8'sd2; in_row_valid[1] = 1'b1;
+
         // Cycle 2: Feed A[1][1]=4 to Row 1. Row 0 data stream is exhausted.
         @(posedge clk);
         #1;
-        in_row_0 = 8'sd0; in_row_0_valid = 1'b0;
-        in_row_1 = 8'sd4; in_row_1_valid = 1'b1;
-        
+        in_row[0] = 8'sd0; in_row_valid[0] = 1'b0;
+        in_row[1] = 8'sd4; in_row_valid[1] = 1'b1;
+
         // Cycle 3: All matrix data sent. Pull inputs to idle, wait for computations to flush.
         @(posedge clk);
         #1;
-        in_row_0 = 8'sd0; in_row_0_valid = 1'b0;
-        in_row_1 = 8'sd0; in_row_1_valid = 1'b0;
-        
+        in_row[0] = 8'sd0; in_row_valid[0] = 1'b0;
+        in_row[1] = 8'sd0; in_row_valid[1] = 1'b0;
+
         // Keep clock cycling to observe output accumulation results completely clearing out
         #40;
 
@@ -212,42 +206,42 @@ module mmu_tb;
 
         @(posedge clk);
         #1;
-        loading_phase = 1; capture_weight_col_0 = 1; capture_weight_col_1 = 1;
-        in_col_0 = 8'sd1; in_col_0_valid = 1'b1;
-        in_col_1 = 8'sd1; in_col_1_valid = 1'b1;
+        loading_phase = 1; capture_weight_col = 2'b11;
+        in_col[0] = 8'sd1; in_col_valid[0] = 1'b1;
+        in_col[1] = 8'sd1; in_col_valid[1] = 1'b1;
 
         @(posedge clk);
         #1;
-        in_col_0 = 8'sd1; in_col_0_valid = 1'b1;
-        in_col_1 = 8'sd1; in_col_1_valid = 1'b1;
+        in_col[0] = 8'sd1; in_col_valid[0] = 1'b1;
+        in_col[1] = 8'sd1; in_col_valid[1] = 1'b1;
 
         @(posedge clk);
         #1;
-        loading_phase = 0; capture_weight_col_0 = 0; capture_weight_col_1 = 0;
-        in_col_0 = 0; in_col_0_valid = 1'b0;
-        in_col_1 = 0; in_col_1_valid = 1'b0;
+        loading_phase = 0; capture_weight_col = 2'b00;
+        in_col[0] = 0; in_col_valid[0] = 1'b0;
+        in_col[1] = 0; in_col_valid[1] = 1'b0;
 
         @(posedge clk);  // idle settle tick, same as the original Phase1->Phase2 transition
 
         @(posedge clk);
         #1;
-        in_row_0 = 8'sd2; in_row_0_valid = 1'b1;
-        in_row_1 = 8'sd0; in_row_1_valid = 1'b0;
+        in_row[0] = 8'sd2; in_row_valid[0] = 1'b1;
+        in_row[1] = 8'sd0; in_row_valid[1] = 1'b0;
 
         @(posedge clk);
         #1;
-        in_row_0 = 8'sd4; in_row_0_valid = 1'b1;
-        in_row_1 = 8'sd3; in_row_1_valid = 1'b1;
+        in_row[0] = 8'sd4; in_row_valid[0] = 1'b1;
+        in_row[1] = 8'sd3; in_row_valid[1] = 1'b1;
 
         @(posedge clk);
         #1;
-        in_row_0 = 8'sd0; in_row_0_valid = 1'b0;
-        in_row_1 = 8'sd5; in_row_1_valid = 1'b1;
+        in_row[0] = 8'sd0; in_row_valid[0] = 1'b0;
+        in_row[1] = 8'sd5; in_row_valid[1] = 1'b1;
 
         @(posedge clk);
         #1;
-        in_row_0 = 8'sd0; in_row_0_valid = 1'b0;
-        in_row_1 = 8'sd0; in_row_1_valid = 1'b0;
+        in_row[0] = 8'sd0; in_row_valid[0] = 1'b0;
+        in_row[1] = 8'sd0; in_row_valid[1] = 1'b0;
 
         #40;
 

@@ -191,15 +191,8 @@ module tpu_top #(
     logic              [1:0] wf_col_valid;
 
     // MMU → accumulator
-    logic signed [15:0] mmu_out_0, mmu_out_1;
-    logic               mmu_out_0_valid, mmu_out_1_valid;
-
     logic signed [1:0][15:0] accum_in_data;
     logic              [1:0] accum_in_valid;
-    assign accum_in_data[0]  = mmu_out_0;
-    assign accum_in_data[1]  = mmu_out_1;
-    assign accum_in_valid[0] = mmu_out_0_valid;
-    assign accum_in_valid[1] = mmu_out_1_valid;
 
     // accumulator → bias
     logic signed [1:0][15:0] acc_row_out;
@@ -263,24 +256,17 @@ module tpu_top #(
         .mmu_in_valid   (skewed_valid)
     );
 
-    mmu u_mmu (
-        .clk                     (clk),
-        .reset                   (dp_reset),
-        .loading_phase           (seq_loading_phase),
-        .capture_weight_col_0    (wf_col_valid[0]),
-        .capture_weight_col_1    (wf_col_valid[1]),
-        .in_col_0                (wf_col[0]),
-        .in_col_0_valid          (wf_col_valid[0]),
-        .in_col_1                (wf_col[1]),
-        .in_col_1_valid          (wf_col_valid[1]),
-        .in_row_0                (skewed_act[0]),
-        .in_row_0_valid          (skewed_valid[0]),
-        .in_row_1                (skewed_act[1]),
-        .in_row_1_valid          (skewed_valid[1]),
-        .out_partial_sum_0       (mmu_out_0),
-        .out_partial_sum_0_valid (mmu_out_0_valid),
-        .out_partial_sum_1       (mmu_out_1),
-        .out_partial_sum_1_valid (mmu_out_1_valid)
+    mmu #(.ARRAY_ROWS(2), .NUM_COLS(2)) u_mmu (
+        .clk                   (clk),
+        .reset                 (dp_reset),
+        .loading_phase         (seq_loading_phase),
+        .capture_weight_col    (wf_col_valid),
+        .in_col                (wf_col),
+        .in_col_valid          (wf_col_valid),
+        .in_row                (skewed_act),
+        .in_row_valid          (skewed_valid),
+        .out_partial_sum       (accum_in_data),
+        .out_partial_sum_valid (accum_in_valid)
     );
 
     accumulator #(.NUM_COLS(2), .PSUM_WIDTH(16), .FIFO_DEPTH(FIFO_DEPTH)) u_accum (

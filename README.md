@@ -55,7 +55,6 @@ TPU/
 │   ├── mmu.sv
 │   ├── fifo.sv
 │   ├── weight_fifo.sv
-│   ├── weight_loader.sv
 │   ├── systolic_data_setup.sv
 │   ├── accumulator.sv
 │   ├── bias.sv

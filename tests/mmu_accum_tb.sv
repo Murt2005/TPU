@@ -10,26 +10,17 @@ module mmu_acc_integration_tb;
 
     // MMU Input Signals
     logic loading_phase;
-    logic capture_weight_col_0;
-    logic capture_weight_col_1;
+    logic [NUM_COLS-1:0] capture_weight_col;
 
-    logic signed [7:0] in_row_0, in_row_1;
-    logic              in_row_0_valid, in_row_1_valid;
-    logic signed [7:0] in_col_0, in_col_1;
-    logic              in_col_0_valid, in_col_1_valid;
+    logic signed [NUM_COLS-1:0][7:0] in_row;
+    logic              [NUM_COLS-1:0] in_row_valid;
+    logic signed [NUM_COLS-1:0][7:0] in_col;
+    logic              [NUM_COLS-1:0] in_col_valid;
 
-    // MMU Output / Accumulator Input Interconnect
-    logic signed [15:0] mmu_out_psum_0, mmu_out_psum_1;
-    logic               mmu_out_psum_0_valid, mmu_out_psum_1_valid;
-
-    // Array mapped signals for the Accumulator
+    // MMU Output / Accumulator Input Interconnect -- array mapped signals
+    // feed the accumulator directly now that mmu's outputs are arrays too.
     logic signed [NUM_COLS-1:0][PSUM_WIDTH-1:0] acc_in_psum;
     logic                       [NUM_COLS-1:0] acc_in_psum_valid;
-
-    assign acc_in_psum[0] = mmu_out_psum_0;
-    assign acc_in_psum[1] = mmu_out_psum_1;
-    assign acc_in_psum_valid[0] = mmu_out_psum_0_valid;
-    assign acc_in_psum_valid[1] = mmu_out_psum_1_valid;
 
     // Accumulator Output Signals
     logic signed [NUM_COLS-1:0][PSUM_WIDTH-1:0] out_row;
@@ -46,24 +37,17 @@ module mmu_acc_integration_tb;
     };
 
     // Module Instantiations
-    mmu u_mmu (
+    mmu #(.ARRAY_ROWS(2), .NUM_COLS(NUM_COLS)) u_mmu (
         .clk(clk),
         .reset(reset),
         .loading_phase(loading_phase),
-        .capture_weight_col_0(capture_weight_col_0),
-        .capture_weight_col_1(capture_weight_col_1),
-        .in_row_0(in_row_0),
-        .in_row_0_valid(in_row_0_valid),
-        .in_row_1(in_row_1),
-        .in_row_1_valid(in_row_1_valid),
-        .in_col_0(in_col_0),
-        .in_col_0_valid(in_col_0_valid),
-        .in_col_1(in_col_1),
-        .in_col_1_valid(in_col_1_valid),
-        .out_partial_sum_0(mmu_out_psum_0),
-        .out_partial_sum_0_valid(mmu_out_psum_0_valid),
-        .out_partial_sum_1(mmu_out_psum_1),
-        .out_partial_sum_1_valid(mmu_out_psum_1_valid)
+        .capture_weight_col(capture_weight_col),
+        .in_row(in_row),
+        .in_row_valid(in_row_valid),
+        .in_col(in_col),
+        .in_col_valid(in_col_valid),
+        .out_partial_sum(acc_in_psum),
+        .out_partial_sum_valid(acc_in_psum_valid)
     );
 
     accumulator #(
@@ -111,12 +95,9 @@ module mmu_acc_integration_tb;
         clk = 0;
         reset = 1;
         loading_phase = 0;
-        capture_weight_col_0 = 0;
-        capture_weight_col_1 = 0;
-        in_row_0 = 0; in_row_0_valid = 0;
-        in_row_1 = 0; in_row_1_valid = 0;
-        in_col_0 = 0; in_col_0_valid = 0;
-        in_col_1 = 0; in_col_1_valid = 0;
+        capture_weight_col = '0;
+        in_row = '0; in_row_valid = '0;
+        in_col = '0; in_col_valid = '0;
 
         #15 reset = 0;
         @(negedge clk);
@@ -125,46 +106,44 @@ module mmu_acc_integration_tb;
 
         // 2. Load Weights (W = [[4,5], [2,3]])
         $display("Phase 1: Loading Weights");
-        loading_phase = 1; 
-        capture_weight_col_0 = 1; 
-        capture_weight_col_1 = 1;
-        
-        in_col_0 = 8'sd2; in_col_0_valid = 1; 
-        in_col_1 = 8'sd3; in_col_1_valid = 1;
+        loading_phase = 1;
+        capture_weight_col = 2'b11;
+
+        in_col[0] = 8'sd2; in_col_valid[0] = 1;
+        in_col[1] = 8'sd3; in_col_valid[1] = 1;
         @(negedge clk);
-        
-        in_col_0 = 8'sd4; in_col_0_valid = 1; 
-        in_col_1 = 8'sd5; in_col_1_valid = 1;
+
+        in_col[0] = 8'sd4; in_col_valid[0] = 1;
+        in_col[1] = 8'sd5; in_col_valid[1] = 1;
         @(negedge clk);
-        
-        loading_phase = 0; 
-        capture_weight_col_0 = 0; 
-        capture_weight_col_1 = 0;
-        in_col_0 = 0; in_col_0_valid = 0;
-        in_col_1 = 0; in_col_1_valid = 0;
-        
+
+        loading_phase = 0;
+        capture_weight_col = 2'b00;
+        in_col[0] = 0; in_col_valid[0] = 0;
+        in_col[1] = 0; in_col_valid[1] = 0;
+
         @(negedge clk);
 
         // 3. Stream Activations (A = [[1,2], [3,4]])
         $display("Phase 2: Streaming Activations");
-        
+
         // Step 1: A[0][0]
-        in_row_0 = 8'sd1; in_row_0_valid = 1;
-        in_row_1 = 8'sd0; in_row_1_valid = 0;
+        in_row[0] = 8'sd1; in_row_valid[0] = 1;
+        in_row[1] = 8'sd0; in_row_valid[1] = 0;
         @(negedge clk);
-        
+
         // Step 2: A[1][0] and A[0][1]
-        in_row_0 = 8'sd3; in_row_0_valid = 1;
-        in_row_1 = 8'sd2; in_row_1_valid = 1;
+        in_row[0] = 8'sd3; in_row_valid[0] = 1;
+        in_row[1] = 8'sd2; in_row_valid[1] = 1;
         @(negedge clk);
-        
+
         // Step 3: A[1][1]
-        in_row_0 = 8'sd0; in_row_0_valid = 0;
-        in_row_1 = 8'sd4; in_row_1_valid = 1;
+        in_row[0] = 8'sd0; in_row_valid[0] = 0;
+        in_row[1] = 8'sd4; in_row_valid[1] = 1;
         @(negedge clk);
-        
+
         // Idle out
-        in_row_1 = 8'sd0; in_row_1_valid = 0;
+        in_row[1] = 8'sd0; in_row_valid[1] = 0;
 
         // 4. Wait for the accumulator to catch all staggered psums
         repeat (15) @(negedge clk);

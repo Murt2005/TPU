@@ -60,24 +60,30 @@ module weight_fifo_mmu_integration_tb;
         .any_shadow_full(any_shadow_full)
     );
 
-    mmu u_mmu (
+    logic signed [1:0][7:0]  mmu_in_row;
+    logic              [1:0] mmu_in_row_valid;
+    logic signed [1:0][15:0] mmu_out;
+    logic              [1:0] mmu_out_valid;
+    assign mmu_in_row[0]           = in_row_0;
+    assign mmu_in_row[1]           = in_row_1;
+    assign mmu_in_row_valid[0]     = in_row_0_valid;
+    assign mmu_in_row_valid[1]     = in_row_1_valid;
+    assign out_partial_sum_0       = mmu_out[0];
+    assign out_partial_sum_1       = mmu_out[1];
+    assign out_partial_sum_0_valid = mmu_out_valid[0];
+    assign out_partial_sum_1_valid = mmu_out_valid[1];
+
+    mmu #(.ARRAY_ROWS(2), .NUM_COLS(2)) u_mmu (
         .clk(clk),
         .reset(reset),
         .loading_phase(loading_phase),
-        .capture_weight_col_0(wf_col_valid[0]),
-        .capture_weight_col_1(wf_col_valid[1]),
-        .in_row_0(in_row_0),
-        .in_row_0_valid(in_row_0_valid),
-        .in_row_1(in_row_1),
-        .in_row_1_valid(in_row_1_valid),
-        .in_col_0(wf_col[0]),
-        .in_col_0_valid(wf_col_valid[0]),
-        .in_col_1(wf_col[1]),
-        .in_col_1_valid(wf_col_valid[1]),
-        .out_partial_sum_0(out_partial_sum_0),
-        .out_partial_sum_0_valid(out_partial_sum_0_valid),
-        .out_partial_sum_1(out_partial_sum_1),
-        .out_partial_sum_1_valid(out_partial_sum_1_valid)
+        .capture_weight_col(wf_col_valid),
+        .in_row(mmu_in_row),
+        .in_row_valid(mmu_in_row_valid),
+        .in_col(wf_col),
+        .in_col_valid(wf_col_valid),
+        .out_partial_sum(mmu_out),
+        .out_partial_sum_valid(mmu_out_valid)
     );
 
     always #5 clk = ~clk;
