@@ -177,9 +177,18 @@ module tpu_top #(
     logic signed [1:0][7:0] skewed_act;
     logic              [1:0] skewed_valid;
 
+    // sequencer's per-column weight_fifo write port, packed into arrays
+    // for weight_fifo's generate-block column interface
+    logic              [1:0] seq_we_col;
+    logic signed [1:0][7:0]  seq_wd_col;
+    assign seq_we_col[0] = seq_we_col_0;
+    assign seq_we_col[1] = seq_we_col_1;
+    assign seq_wd_col[0] = seq_wd_col_0;
+    assign seq_wd_col[1] = seq_wd_col_1;
+
     // weight_fifo → MMU
-    logic signed [7:0] wf_col_0, wf_col_1;
-    logic              wf_col_0_valid, wf_col_1_valid;
+    logic signed [1:0][7:0] wf_col;
+    logic              [1:0] wf_col_valid;
 
     // MMU → accumulator
     logic signed [15:0] mmu_out_0, mmu_out_1;
@@ -229,19 +238,15 @@ module tpu_top #(
         .bank_swap          (1'b0)
     );
 
-    weight_fifo #(.WEIGHT_WIDTH(WEIGHT_WIDTH), .FIFO_DEPTH(FIFO_DEPTH)) u_wf (
+    weight_fifo #(.WEIGHT_WIDTH(WEIGHT_WIDTH), .FIFO_DEPTH(FIFO_DEPTH), .NUM_COLS(2)) u_wf (
         .clk                (clk),
         .reset              (dp_reset),
-        .write_enable_col_0 (seq_we_col_0),
-        .write_data_col_0   (seq_wd_col_0),
-        .write_enable_col_1 (seq_we_col_1),
-        .write_data_col_1   (seq_wd_col_1),
+        .write_enable_col   (seq_we_col),
+        .write_data_col     (seq_wd_col),
         .swap_banks         (seq_swap_banks),
         .loading_phase      (seq_loading_phase),
-        .out_col_0          (wf_col_0),
-        .out_col_0_valid    (wf_col_0_valid),
-        .out_col_1          (wf_col_1),
-        .out_col_1_valid    (wf_col_1_valid),
+        .out_col            (wf_col),
+        .out_col_valid      (wf_col_valid),
         .shadow_loaded      (),
         .active_bank        (),
         .active_empty       (),
@@ -262,12 +267,12 @@ module tpu_top #(
         .clk                     (clk),
         .reset                   (dp_reset),
         .loading_phase           (seq_loading_phase),
-        .capture_weight_col_0    (wf_col_0_valid),
-        .capture_weight_col_1    (wf_col_1_valid),
-        .in_col_0                (wf_col_0),
-        .in_col_0_valid          (wf_col_0_valid),
-        .in_col_1                (wf_col_1),
-        .in_col_1_valid          (wf_col_1_valid),
+        .capture_weight_col_0    (wf_col_valid[0]),
+        .capture_weight_col_1    (wf_col_valid[1]),
+        .in_col_0                (wf_col[0]),
+        .in_col_0_valid          (wf_col_valid[0]),
+        .in_col_1                (wf_col[1]),
+        .in_col_1_valid          (wf_col_valid[1]),
         .in_row_0                (skewed_act[0]),
         .in_row_0_valid          (skewed_valid[0]),
         .in_row_1                (skewed_act[1]),

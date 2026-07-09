@@ -2,20 +2,25 @@
 
 // weight_fifo
 // ------------
-// Feeds stationary weights into MMU column 0 and column 1 during
+// Feeds stationary weights into all NUM_COLS MMU columns during
 // loading_phase, and lets off-chip memory (DMA/host) stream the NEXT
 // weight matrix in while the MMU is busy computing on the CURRENT one
 // (double buffering / ping-pong).
 //
 // Single responsibility: this module only knows how to (a) accept
 // off-chip weight writes into whichever bank is currently "shadow", and
-// (b) during loading_phase, drain the "active" bank's two column FIFOs
-// one element per cycle, presenting them on out_col_0 / out_col_1 with
-// valid tags.
+// (b) during loading_phase, drain the "active" bank's NUM_COLS column
+// FIFOs one element per cycle, presenting them on the out_col[] array
+// with valid tags.
 //
-// Built on top of the generic `fifo` module (4 instances: 2 columns x
-// 2 banks). All control is composed around that primitive rather than
-// reimplementing queue logic here.
+// Columns are a generate-block array (out_col[NUM_COLS], out_col_valid
+// [NUM_COLS], write_enable_col[NUM_COLS], write_data_col[NUM_COLS])
+// rather than individually-named ports, so scaling the MMU's column
+// count is a parameter change here, not a port-list rewrite.
+//
+// Built on top of the generic `fifo` module (2*NUM_COLS instances:
+// NUM_COLS columns x 2 banks). All control is composed around that
+// primitive rather than reimplementing queue logic here.
 //
 // ----------------------------------------------------------------------
 // Staggered loading contract (matches pe.sv / mmu.sv exactly):
@@ -31,10 +36,10 @@
 //   larger N).
 //
 // ----------------------------------------------------------------------
-// out_col_*_valid doubles as the MMU's capture_weight_col_* signal:
+// out_col_valid[N] doubles as the MMU's capture_weight_col_N signal:
 // capture should be asserted for exactly the cycles real weight data is
 // being presented, which is precisely "loading_phase AND bank has data."
-// Driving capture_weight_col_N directly from out_col_N_valid keeps that
+// Driving capture_weight_col_N directly from out_col_valid[N] keeps that
 // invariant correct automatically and removes a class of bugs where a
 // hand-built sequencer's capture pulse drifts out of sync with the FIFO
 // drain (e.g. capturing a stale/garbage beat once the FIFO runs dry
@@ -59,23 +64,22 @@
 //   (e.g. don't swap mid-compute-drain), so it's left to the sequencer.
 module weight_fifo #(
     parameter int WEIGHT_WIDTH = 8,
-    parameter int FIFO_DEPTH   = 4   // must be a power of 2, >= array dimension (N)
+    parameter int FIFO_DEPTH   = 4,  // must be a power of 2, >= array dimension (N)
+    parameter int NUM_COLS     = 2
 ) (
     input  logic clk,
     input  logic reset,
 
-    // Off-chip write interface
-    input  logic                            write_enable_col_0,
-    input  logic signed [WEIGHT_WIDTH-1:0]  write_data_col_0,
-    input  logic                            write_enable_col_1,
-    input  logic signed [WEIGHT_WIDTH-1:0]  write_data_col_1,
+    // Off-chip write interface: one write_enable/write_data pair per column.
+    input  logic                                          [NUM_COLS-1:0] write_enable_col,
+    input  logic signed [NUM_COLS-1:0][WEIGHT_WIDTH-1:0]                 write_data_col,
 
     // Bank control
     input  logic         swap_banks,
 
     // Convenience status: is the CURRENT shadow bank fully loaded
-    // (both column fifos non-empty would be a weak check across
-    // arbitrary N; instead this just reports "both shadow fifos are
+    // (all column fifos non-empty would be a weak check across
+    // arbitrary N; instead this just reports "every shadow fifo is
     // non-empty", giving the sequencer a hook to gate swap_banks on
     // having pushed at least one full column's worth of weights).
     output logic          shadow_loaded,
@@ -83,10 +87,8 @@ module weight_fifo #(
 
     input  logic loading_phase,
 
-    output logic signed [WEIGHT_WIDTH-1:0] out_col_0,
-    output logic                           out_col_0_valid,
-    output logic signed [WEIGHT_WIDTH-1:0] out_col_1,
-    output logic                           out_col_1_valid,
+    output logic signed [NUM_COLS-1:0][WEIGHT_WIDTH-1:0] out_col,
+    output logic                      [NUM_COLS-1:0]      out_col_valid,
 
     // Status
     output logic active_empty,
@@ -111,18 +113,18 @@ module weight_fifo #(
     logic shadow_bank_q;
     assign shadow_bank_q = ~active_bank_q;
 
-    // 4 underlying FIFOs: bank 0 / bank 1, each with col0 + col1
-    logic                          bank_write_enable [2][2]; // [bank][col]
-    logic signed [WEIGHT_WIDTH-1:0] bank_write_data   [2][2];
-    logic                          bank_read_enable  [2][2];
-    logic signed [WEIGHT_WIDTH-1:0] bank_read_data    [2][2];
-    logic                          bank_full         [2][2];
-    logic                          bank_empty        [2][2];
+    // 2*NUM_COLS underlying FIFOs: bank 0 / bank 1, each with NUM_COLS columns
+    logic                           bank_write_enable [2][NUM_COLS]; // [bank][col]
+    logic signed [WEIGHT_WIDTH-1:0] bank_write_data   [2][NUM_COLS];
+    logic                           bank_read_enable  [2][NUM_COLS];
+    logic signed [WEIGHT_WIDTH-1:0] bank_read_data    [2][NUM_COLS];
+    logic                           bank_full         [2][NUM_COLS];
+    logic                           bank_empty        [2][NUM_COLS];
 
     genvar b, c;
     generate
         for (b = 0; b < 2; b++) begin : gen_bank
-            for (c = 0; c < 2; c++) begin : gen_col
+            for (c = 0; c < NUM_COLS; c++) begin : gen_col
                 fifo #(
                     .WIDTH(WEIGHT_WIDTH),
                     .DEPTH(FIFO_DEPTH)
@@ -141,20 +143,20 @@ module weight_fifo #(
     endgenerate
 
     // Off-chip write port routing: always targets the shadow bank.
-    // Bank index is dynamic (depends on active_bank_q), so route the
-    // single external write_enable/write_data pair to whichever
-    // physical fifo is currently the shadow one for each column.
+    // Bank index is dynamic (depends on active_bank_q), so route each
+    // column's external write_enable/write_data pair to whichever
+    // physical fifo is currently the shadow one for that column.
     always_comb begin
         for (int bi = 0; bi < 2; bi++) begin
-            for (int ci = 0; ci < 2; ci++) begin
+            for (int ci = 0; ci < NUM_COLS; ci++) begin
                 bank_write_enable[bi][ci] = 1'b0;
                 bank_write_data[bi][ci]   = '0;
             end
         end
-        bank_write_enable[shadow_bank_q][0] = write_enable_col_0;
-        bank_write_data[shadow_bank_q][0]   = write_data_col_0;
-        bank_write_enable[shadow_bank_q][1] = write_enable_col_1;
-        bank_write_data[shadow_bank_q][1]   = write_data_col_1;
+        for (int ci = 0; ci < NUM_COLS; ci++) begin
+            bank_write_enable[shadow_bank_q][ci] = write_enable_col[ci];
+            bank_write_data[shadow_bank_q][ci]   = write_data_col[ci];
+        end
     end
 
     // MMU-facing drain port routing: always targets the active bank.
@@ -162,18 +164,23 @@ module weight_fifo #(
     // column's active fifo is non-empty -- this single condition is
     // reused as both "pop this entry" and "this is a valid weight beat
     // for the MMU to capture," per the design note above.
-    logic pop_col_0, pop_col_1;
+    logic [NUM_COLS-1:0] pop_col;
 
-    assign pop_col_0 = loading_phase && !bank_empty[active_bank_q][0];
-    assign pop_col_1 = loading_phase && !bank_empty[active_bank_q][1];
+    always_comb begin
+        for (int ci = 0; ci < NUM_COLS; ci++) begin
+            pop_col[ci] = loading_phase && !bank_empty[active_bank_q][ci];
+        end
+    end
 
     always_comb begin
         for (int bi = 0; bi < 2; bi++) begin
-            bank_read_enable[bi][0] = 1'b0;
-            bank_read_enable[bi][1] = 1'b0;
+            for (int ci = 0; ci < NUM_COLS; ci++) begin
+                bank_read_enable[bi][ci] = 1'b0;
+            end
         end
-        bank_read_enable[active_bank_q][0] = pop_col_0;
-        bank_read_enable[active_bank_q][1] = pop_col_1;
+        for (int ci = 0; ci < NUM_COLS; ci++) begin
+            bank_read_enable[active_bank_q][ci] = pop_col[ci];
+        end
     end
 
     // Registered outputs to the MMU (FIFO read_data is already a
@@ -184,22 +191,30 @@ module weight_fifo #(
     // together, synchronously, on the same edge the pop happens).
     always_ff @(posedge clk) begin
         if (reset) begin
-            out_col_0       <= '0;
-            out_col_0_valid <= 1'b0;
-            out_col_1       <= '0;
-            out_col_1_valid <= 1'b0;
+            for (int ci = 0; ci < NUM_COLS; ci++) begin
+                out_col[ci]       <= '0;
+                out_col_valid[ci] <= 1'b0;
+            end
         end else begin
-            out_col_0       <= pop_col_0 ? bank_read_data[active_bank_q][0] : '0;
-            out_col_0_valid <= pop_col_0;
-            out_col_1       <= pop_col_1 ? bank_read_data[active_bank_q][1] : '0;
-            out_col_1_valid <= pop_col_1;
+            for (int ci = 0; ci < NUM_COLS; ci++) begin
+                out_col[ci]       <= pop_col[ci] ? bank_read_data[active_bank_q][ci] : '0;
+                out_col_valid[ci] <= pop_col[ci];
+            end
         end
     end
 
     // Status flags
-    assign active_empty   = bank_empty[active_bank_q][0] && bank_empty[active_bank_q][1];
-    assign active_full    = bank_full[active_bank_q][0]  || bank_full[active_bank_q][1];
-    assign any_shadow_full = bank_full[shadow_bank_q][0] || bank_full[shadow_bank_q][1];
-    assign shadow_loaded  = !bank_empty[shadow_bank_q][0] && !bank_empty[shadow_bank_q][1];
+    always_comb begin
+        active_empty    = 1'b1;
+        active_full     = 1'b0;
+        any_shadow_full = 1'b0;
+        shadow_loaded   = 1'b1;
+        for (int ci = 0; ci < NUM_COLS; ci++) begin
+            active_empty    &= bank_empty[active_bank_q][ci];
+            active_full     |= bank_full[active_bank_q][ci];
+            any_shadow_full |= bank_full[shadow_bank_q][ci];
+            shadow_loaded   &= !bank_empty[shadow_bank_q][ci];
+        end
+    end
 
 endmodule

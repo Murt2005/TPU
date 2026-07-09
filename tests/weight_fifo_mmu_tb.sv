@@ -16,14 +16,21 @@ module weight_fifo_mmu_integration_tb;
 
     // weight_fifo <-> mmu glue
     logic loading_phase;
-    logic signed [WEIGHT_WIDTH-1:0] wf_col_0, wf_col_1;
-    logic wf_col_0_valid, wf_col_1_valid;
+    logic signed [1:0][WEIGHT_WIDTH-1:0] wf_col;
+    logic [1:0] wf_col_valid;
 
     // off-chip write port
     logic write_enable_col_0, write_enable_col_1;
     logic signed [WEIGHT_WIDTH-1:0] write_data_col_0, write_data_col_1;
     logic swap_banks;
     logic shadow_loaded, active_bank, active_empty, active_full, any_shadow_full;
+
+    logic [1:0] write_enable_col;
+    logic signed [1:0][WEIGHT_WIDTH-1:0] write_data_col;
+    assign write_enable_col[0] = write_enable_col_0;
+    assign write_enable_col[1] = write_enable_col_1;
+    assign write_data_col[0]   = write_data_col_0;
+    assign write_data_col[1]   = write_data_col_1;
 
     // mmu activation/output side
     logic signed [7:0] in_row_0, in_row_1;
@@ -40,18 +47,14 @@ module weight_fifo_mmu_integration_tb;
     ) u_wf (
         .clk(clk),
         .reset(reset),
-        .write_enable_col_0(write_enable_col_0),
-        .write_data_col_0(write_data_col_0),
-        .write_enable_col_1(write_enable_col_1),
-        .write_data_col_1(write_data_col_1),
+        .write_enable_col(write_enable_col),
+        .write_data_col(write_data_col),
         .swap_banks(swap_banks),
         .shadow_loaded(shadow_loaded),
         .active_bank(active_bank),
         .loading_phase(loading_phase),
-        .out_col_0(wf_col_0),
-        .out_col_0_valid(wf_col_0_valid),
-        .out_col_1(wf_col_1),
-        .out_col_1_valid(wf_col_1_valid),
+        .out_col(wf_col),
+        .out_col_valid(wf_col_valid),
         .active_empty(active_empty),
         .active_full(active_full),
         .any_shadow_full(any_shadow_full)
@@ -61,16 +64,16 @@ module weight_fifo_mmu_integration_tb;
         .clk(clk),
         .reset(reset),
         .loading_phase(loading_phase),
-        .capture_weight_col_0(wf_col_0_valid),
-        .capture_weight_col_1(wf_col_1_valid),
+        .capture_weight_col_0(wf_col_valid[0]),
+        .capture_weight_col_1(wf_col_valid[1]),
         .in_row_0(in_row_0),
         .in_row_0_valid(in_row_0_valid),
         .in_row_1(in_row_1),
         .in_row_1_valid(in_row_1_valid),
-        .in_col_0(wf_col_0),
-        .in_col_0_valid(wf_col_0_valid),
-        .in_col_1(wf_col_1),
-        .in_col_1_valid(wf_col_1_valid),
+        .in_col_0(wf_col[0]),
+        .in_col_0_valid(wf_col_valid[0]),
+        .in_col_1(wf_col[1]),
+        .in_col_1_valid(wf_col_valid[1]),
         .out_partial_sum_0(out_partial_sum_0),
         .out_partial_sum_0_valid(out_partial_sum_0_valid),
         .out_partial_sum_1(out_partial_sum_1),

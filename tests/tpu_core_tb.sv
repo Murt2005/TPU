@@ -17,8 +17,15 @@ module tpu_core_tb;
     logic swap_banks;
     logic loading_phase;
 
-    logic signed [WEIGHT_WIDTH-1:0] wf_col_0, wf_col_1;
-    logic wf_col_0_valid, wf_col_1_valid;
+    logic [1:0] write_enable_col;
+    logic signed [1:0][WEIGHT_WIDTH-1:0] write_data_col;
+    assign write_enable_col[0] = write_enable_col_0;
+    assign write_enable_col[1] = write_enable_col_1;
+    assign write_data_col[0]   = write_data_col_0;
+    assign write_data_col[1]   = write_data_col_1;
+
+    logic signed [1:0][WEIGHT_WIDTH-1:0] wf_col;
+    logic [1:0] wf_col_valid;
 
     // Unified Buffer control signals (host write / UB read)
     logic        host_write_addr;              // 1-bit: ROWS=2 → ADDR_WIDTH=1
@@ -105,11 +112,9 @@ module tpu_core_tb;
 
     weight_fifo #(.WEIGHT_WIDTH(WEIGHT_WIDTH), .FIFO_DEPTH(FIFO_DEPTH)) u_wf (
         .clk(clk), .reset(reset),
-        .write_enable_col_0(write_enable_col_0), .write_data_col_0(write_data_col_0),
-        .write_enable_col_1(write_enable_col_1), .write_data_col_1(write_data_col_1),
+        .write_enable_col(write_enable_col), .write_data_col(write_data_col),
         .swap_banks(swap_banks), .loading_phase(loading_phase),
-        .out_col_0(wf_col_0), .out_col_0_valid(wf_col_0_valid),
-        .out_col_1(wf_col_1), .out_col_1_valid(wf_col_1_valid),
+        .out_col(wf_col), .out_col_valid(wf_col_valid),
         .shadow_loaded(), .active_bank(), .active_empty(),
         .active_full(), .any_shadow_full()
     );
@@ -123,10 +128,10 @@ module tpu_core_tb;
     mmu u_mmu (
         .clk(clk), .reset(reset),
         .loading_phase(loading_phase),
-        .capture_weight_col_0(wf_col_0_valid),
-        .capture_weight_col_1(wf_col_1_valid),
-        .in_col_0(wf_col_0), .in_col_0_valid(wf_col_0_valid),
-        .in_col_1(wf_col_1), .in_col_1_valid(wf_col_1_valid),
+        .capture_weight_col_0(wf_col_valid[0]),
+        .capture_weight_col_1(wf_col_valid[1]),
+        .in_col_0(wf_col[0]), .in_col_0_valid(wf_col_valid[0]),
+        .in_col_1(wf_col[1]), .in_col_1_valid(wf_col_valid[1]),
         .in_row_0(skewed_act_data[0]), .in_row_0_valid(skewed_act_valid[0]),
         .in_row_1(skewed_act_data[1]), .in_row_1_valid(skewed_act_valid[1]),
         .out_partial_sum_0(mmu_out_0), .out_partial_sum_0_valid(mmu_out_0_valid),
