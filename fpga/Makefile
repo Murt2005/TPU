@@ -6,6 +6,11 @@
 ##
 ##  Usage:
 ##    make            Build tpu_top.bin
+##    make json        Synthesize only, up to tpu_top.json (yosys)
+##    make asc         Place & route only, up to tpu_top.asc (nextpnr)
+##    make bin         Pack only, up to tpu_top.bin (icepack)
+##    make stat        Print yosys post-synth cell/LUT/FF counts
+##    make util        Print nextpnr post-PnR device utilisation (LC/RAM/IO/etc.)
 ##    make time        Print a static timing report (post-PnR fMax)
 ##    make prog        Flash tpu_top.bin over USB DFU (board must be in DFU mode)
 ##    make clean       Remove build artifacts
@@ -50,9 +55,13 @@ RTL := $(RTL_DIR)/uart_rx.sv \
        $(RTL_DIR)/activation.sv \
        $(RTL_DIR)/tpu_top.sv
 
-.PHONY: all time prog clean
+.PHONY: all json asc bin stat util time prog clean
 
 all: $(TOP).bin
+
+json: $(TOP).json
+asc: $(TOP).asc
+bin: $(TOP).bin
 
 $(TOP).json: $(RTL)
 	$(YOSYS) -q -p "\
@@ -65,6 +74,20 @@ $(TOP).asc: $(TOP).json $(PCF)
 
 $(TOP).bin: $(TOP).asc
 	$(ICEPACK) $< $@
+
+# make stat: yosys's own post-synth cell/LUT/FF-type breakdown
+stat: $(RTL)
+	@$(YOSYS) -p "\
+		read_verilog -sv $(RTL); \
+		chparam -set CLK_FREQ $(CLK_FREQ) $(TOP); \
+		synth_ice40 -top $(TOP)" 2>&1 \
+		| awk '/^=== design hierarchy ===/{exit} /^=== $(TOP) ===/{p=1} p'
+
+# make util: nextpnr's post-PnR device utilisation table (LCs, BRAM,
+# IO, DSP, etc. used vs. available on the UP5K)
+util: $(TOP).json $(PCF)
+	@$(NEXTPNR) --up5k --package sg48 --pcf $(PCF) --json $(TOP).json --asc $(TOP).asc 2>&1 \
+		| awk '/^Info: Placed [0-9]+ cells based on constraints\.$$/{exit} /^Info: Device utilisation:/{p=1} p'
 
 # Some icestorm installs (e.g. Homebrew, as of icestorm 1.1) fail to resolve
 # the up5k chipdb via `-d up5k` ("Can't find chipdb file for device 5k").
