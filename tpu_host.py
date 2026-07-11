@@ -20,10 +20,19 @@ Protocol (8-N-1, host-initiates everything -- see rtl/tpu_sequencer.sv):
                               round trip; weights in NATURAL row-major order
                               (no bottom-first reorder on the wire), response
                               identical to RUN's. See TPU.run_tile().
+    0x07 STREAM_RUN    LEN=2+8*K  [flags, K_TILES, tile_0 w+a bytes, ...] --
+                              a whole K-run (up to 31 tiles) in ONE round
+                              trip, accumulated tile-by-tile in the datapath.
+                              flags[0]=TILE_FIRST applies to the frame's
+                              first tile, flags[1]=TILE_LAST to its last, so
+                              longer K-runs span multiple frames. Response:
+                              result bytes on a TILE_LAST frame, else a bare
+                              ACK. See TPU.stream_run().
 """
 import argparse
 import struct
 import sys
+import time
 
 import numpy as np
 import serial
@@ -34,6 +43,23 @@ CMD_LOAD_ACT = 0x03
 CMD_RUN = 0x04
 CMD_RESET = 0x05
 CMD_RUN_TILE = 0x06
+CMD_STREAM_RUN = 0x07
+
+# One STREAM_RUN tile = 2x2 weights + 2x2 acts = 8 payload bytes; the 1-byte
+# LEN caps a frame at 255 payload bytes, minus 2 header bytes (flags, K_TILES).
+STREAM_TILE_BYTES = 8
+MAX_STREAM_TILES = (255 - 2) // STREAM_TILE_BYTES  # 31
+
+# The pico2-ice firmware's stock USB->UART bridge (pico-ice-sdk
+# ice_usb_cdc_to_uart0) silently DROPS bytes once the RP2350's 32-deep UART
+# TX FIFO is full, and USB delivers a burst far faster than the UART drains
+# it -- so any frame longer than the FIFO loses its tail. Pace writes bigger
+# than one FIFO's worth down to wire speed (chunks + drain-time sleeps);
+# this costs nothing measurable since the UART is the throughput floor
+# anyway, and stays correct (just redundant) once the firmware-side fix in
+# firmware/main.c (blocking bridge write) is flashed.
+BRIDGE_FIFO_BYTES = 32
+BRIDGE_CHUNK_BYTES = 28  # a little margin under the FIFO depth
 
 STATUS_OK = 0xAA
 STATUS_ERR = 0xFF
@@ -84,7 +110,17 @@ class TPU:
 
     def _send_cmd(self, cmd, payload=b""):
         wire_tx = bytes([cmd, len(payload)]) + payload
-        self.ser.write(wire_tx)
+        if len(wire_tx) <= BRIDGE_FIFO_BYTES:
+            self.ser.write(wire_tx)
+        else:
+            # Paced write: never let more than one UART FIFO's worth be in
+            # flight ahead of the wire (see BRIDGE_* comment above).
+            byte_s = 10 / self.ser.baudrate  # 8N1 = 10 bits/byte
+            for i in range(0, len(wire_tx), BRIDGE_CHUNK_BYTES):
+                chunk = wire_tx[i:i + BRIDGE_CHUNK_BYTES]
+                self.ser.write(chunk)
+                if i + BRIDGE_CHUNK_BYTES < len(wire_tx):
+                    time.sleep(len(chunk) * byte_s * 1.1)
         status, length = self._read_exact(2)
         resp = self._read_exact(length) if length else b""
         wire_rx = 2 + length
@@ -120,8 +156,13 @@ class TPU:
         run_like = (CMD_RUN, CMD_RUN_TILE)  # RUN_TILE unpacks in the same
         # dispatch cycle RUN's flags do, then runs the identical pipeline
         run_calls = sum(self.stats.get(cmd, (0, 0, 0))[0] for cmd in run_like)
-        other_calls = sum(n for cmd, (n, _, _) in self.stats.items() if cmd not in run_like)
-        cycles = run_calls * 21 + other_calls * 2
+        # A STREAM_RUN frame runs one ~21-cycle pass per tile; recover the
+        # tile count from the wire bytes (4 header bytes per frame, 8/tile).
+        n_sr, tx_sr, _ = self.stats.get(CMD_STREAM_RUN, (0, 0, 0))
+        stream_tiles = max(0, tx_sr - 4 * n_sr) // STREAM_TILE_BYTES
+        other_calls = sum(n for cmd, (n, _, _) in self.stats.items()
+                          if cmd not in run_like + (CMD_STREAM_RUN,))
+        cycles = (run_calls + stream_tiles) * 21 + other_calls * 2
         return cycles / clk_freq
 
     # -- protocol commands ------------------------------------------------
@@ -203,6 +244,36 @@ class TPU:
         r0c0, r0c1, r1c0, r1c1 = struct.unpack("<hhhh", resp)
         return np.array([[r0c0, r0c1], [r1c0, r1c1]], dtype=np.int16)
 
+    def stream_run(self, w_tiles, a_tiles, first=True, last=True):
+        """A whole K-run (or a chunk of one) in a single CMD_STREAM_RUN
+        round trip: up to MAX_STREAM_TILES (w, a) tile pairs, accumulated
+        tile-by-tile in the datapath (docs/SEQUENCER_REDESIGN.md §3.2).
+        Weights go in natural row-major order, like run_tile(). first/last
+        apply to the frame's first/last tile respectively, so a K-run longer
+        than one frame chains: first=True,last=False / False,False / ... /
+        False,last=True. Returns the 2x2 int16 result when last=True, else
+        None. Bias is not part of the frame -- load_bias() once per block."""
+        if len(w_tiles) != len(a_tiles):
+            raise ValueError("need one activation tile per weight tile")
+        k_tiles = len(w_tiles)
+        if not 1 <= k_tiles <= MAX_STREAM_TILES:
+            raise ValueError(f"K_TILES must be 1..{MAX_STREAM_TILES}, got {k_tiles}")
+        flags = (0x01 if first else 0) | (0x02 if last else 0)
+        payload = bytearray([flags, k_tiles])
+        for w, a in zip(w_tiles, a_tiles):
+            w = np.asarray(w, dtype=np.int8)
+            a = np.asarray(a, dtype=np.int8)
+            if w.shape != (2, 2) or a.shape != (2, 2):
+                raise ValueError("each tile must be a 2x2 matrix")
+            payload += w.tobytes() + a.tobytes()
+        resp = self._send_cmd(CMD_STREAM_RUN, bytes(payload))
+        if not last:
+            return None
+        if len(resp) != 8:
+            raise TPUError(f"STREAM_RUN response had {len(resp)} data bytes, expected 8")
+        r0c0, r0c1, r1c0, r1c1 = struct.unpack("<hhhh", resp)
+        return np.array([[r0c0, r0c1], [r1c0, r1c1]], dtype=np.int16)
+
     def reset(self):
         self._send_cmd(CMD_RESET)
 
@@ -220,11 +291,12 @@ class TPU:
 
         Tiles the K dimension into 2-wide weight-reload passes accumulated
         in hardware (rtl/accumulator.sv's persistent PSUM), and the M/N
-        dimensions into 2x2 blocks run one at a time. Each K-tile pass is a
-        single CMD_RUN_TILE round trip (run_tile()) rather than the legacy
-        LOAD_WEIGHTS/LOAD_ACT/RUN triple. Bias/ReLU are applied once per
-        (M,N) block, on that block's final K-tile pass, exactly matching a
-        single un-tiled matmul.
+        dimensions into 2x2 blocks run one at a time. Each (M,N) block's
+        whole K-run goes over the wire as CMD_STREAM_RUN frames
+        (stream_run()) of up to MAX_STREAM_TILES tiles each -- one round
+        trip per frame instead of one (RUN_TILE) or three (legacy) per
+        K-tile. Bias/ReLU are applied once per (M,N) block, on that block's
+        final K-tile pass, exactly matching a single un-tiled matmul.
         """
         a = np.asarray(a, dtype=np.int8)
         w = np.asarray(w, dtype=np.int8)
@@ -245,12 +317,14 @@ class TPU:
         for m0 in range(0, m, 2):
             for n0 in range(0, n, 2):
                 self.load_bias(bias[n0:n0 + 2])
+                w_tiles = [w[k0:k0 + 2, n0:n0 + 2] for k0 in range(0, k, 2)]
+                a_tiles = [a[m0:m0 + 2, k0:k0 + 2] for k0 in range(0, k, 2)]
                 result = None
-                for ki, k0 in enumerate(range(0, k, 2)):
-                    result = self.run_tile(w[k0:k0 + 2, n0:n0 + 2],
-                                           a[m0:m0 + 2, k0:k0 + 2],
-                                           first=(ki == 0),
-                                           last=(ki == num_k_tiles - 1))
+                for c0 in range(0, num_k_tiles, MAX_STREAM_TILES):
+                    c1 = min(c0 + MAX_STREAM_TILES, num_k_tiles)
+                    result = self.stream_run(w_tiles[c0:c1], a_tiles[c0:c1],
+                                             first=(c0 == 0),
+                                             last=(c1 == num_k_tiles))
                 out[m0:m0 + 2, n0:n0 + 2] = result
         return out
 

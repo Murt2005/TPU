@@ -59,6 +59,41 @@
 //
 //  0x05  RESET         LEN=0  pulses internal reset for 4 cycles; responds OK
 //
+//  0x07  STREAM_RUN    LEN=2+K_TILES*(ARRAY_ROWS*NUM_COLS+M_TILE*ARRAY_ROWS)
+//                             payload: [flags, K_TILES,
+//                                       tile_0: weight bytes (natural
+//                                         row-major, like RUN_TILE),
+//                                               act bytes (row-major),
+//                                       tile_1: ..., ...]
+//                             A whole K-run in one frame: the sequencer
+//                             deserializes each tile straight into the
+//                             register file as its bytes arrive (no
+//                             whole-frame buffering) and runs the full
+//                             pipeline pass between tiles, accumulating in
+//                             the datapath. flags[0]=TILE_FIRST applies to
+//                             this frame's FIRST tile, flags[1]=TILE_LAST to
+//                             its LAST tile, so a K-run longer than one
+//                             frame's 255-byte LEN budget (max K_TILES =
+//                             (255-2)/(tile bytes), 31 at 2x2) spans several
+//                             STREAM_RUN frames: first=1,last=0 / 0,0 / ...
+//                             / 0,last=1. (This flags byte is the one
+//                             deviation from docs/SEQUENCER_REDESIGN.md
+//                             §3.2's payload sketch — required because MNIST
+//                             layer 1's K=144 means 72 K-tiles per output
+//                             block, over the single-frame cap.)
+//                             Response: on a TILE_LAST frame, STATUS=0xAA +
+//                             the usual result bytes; otherwise a bare
+//                             STATUS_OK/LEN=0 ACK. K_TILES=0 or a LEN that
+//                             doesn't equal 2+K_TILES*(tile bytes) answers
+//                             STATUS_ERR immediately.
+//                             TIMING ASSUMPTION: between tiles the sequencer
+//                             spends one pipeline pass (~25-35 cycles) not
+//                             consuming rx bytes; this is safe because one
+//                             UART byte takes 10*CLK_FREQ/BAUD_RATE cycles
+//                             (~1042 at 12 MHz / 115200) — orders of
+//                             magnitude longer. Any CLK_FREQ/BAUD pairing
+//                             must keep byte time above pass latency.
+//
 //  0x06  RUN_TILE      LEN=1+ARRAY_ROWS*NUM_COLS+M_TILE*ARRAY_ROWS (9)
 //                             payload: [flags,
 //                                       weight bytes (ARRAY_ROWS*NUM_COLS,
@@ -175,6 +210,7 @@ module tpu_sequencer #(
     localparam logic [7:0] CMD_RUN          = 8'h04;
     localparam logic [7:0] CMD_RESET        = 8'h05;
     localparam logic [7:0] CMD_RUN_TILE     = 8'h06;
+    localparam logic [7:0] CMD_STREAM_RUN   = 8'h07;
 
     localparam logic [7:0] STATUS_OK  = 8'hAA;
     localparam logic [7:0] STATUS_ERR = 8'hFF;
@@ -190,6 +226,7 @@ module tpu_sequencer #(
     localparam int A_BYTES       = M_TILE * ARRAY_ROWS;     // LOAD_ACT
     localparam int B_BYTES       = 2 * NUM_COLS;            // LOAD_BIAS
     localparam int RT_BYTES      = 1 + W_BYTES + A_BYTES;   // RUN_TILE
+    localparam int TILE_BYTES    = W_BYTES + A_BYTES;       // one STREAM_RUN tile
     localparam int MAX_RTB       = (RT_BYTES > B_BYTES) ? RT_BYTES : B_BYTES;
     localparam int PAYLOAD_BYTES = (MAX_RTB > 8) ? MAX_RTB : 8;
 
@@ -233,7 +270,14 @@ module tpu_sequencer #(
 
         // TX substates
         S_TX_STATUS     = 5'd12,
-        S_TX_DATA       = 5'd13
+        S_TX_DATA       = 5'd13,
+
+        // STREAM_RUN substates: frame header, then per-tile byte
+        // deserialization (straight into the register file — no
+        // whole-frame payload buffering)
+        S_SR_FLAGS      = 5'd14,
+        S_SR_KT         = 5'd15,
+        S_SR_RECV_TILE  = 5'd16
     } state_t;
 
     state_t state;
@@ -251,6 +295,17 @@ module tpu_sequencer #(
 
     // Shared loop counter for the RUN substates (each phase resets it on exit)
     logic [7:0] run_cnt;
+
+    // STREAM_RUN bookkeeping: frame-level flags, tile count/index, and the
+    // row/col cursor used to deserialize the current tile's bytes into
+    // reg_weights (sr_act_phase=0) then reg_act (sr_act_phase=1).
+    logic       stream_active;   // diverts S_WAIT's exit back to the next tile
+    logic       stream_first;    // frame flags[0]: TILE_FIRST for this frame's tile 0
+    logic       stream_last;     // frame flags[1]: TILE_LAST for this frame's final tile
+    logic [7:0] k_tiles_reg;
+    logic [7:0] tile_idx;
+    logic [7:0] sr_row, sr_col;
+    logic       sr_act_phase;
 
     // WAIT timeout
     logic [TIMEOUT_W-1:0]  wait_cnt;
@@ -311,6 +366,14 @@ module tpu_sequencer #(
             tx_len_reg         <= '0;
             tx_byte_idx        <= '0;
             run_cnt            <= '0;
+            stream_active      <= 1'b0;
+            stream_first       <= 1'b0;
+            stream_last        <= 1'b0;
+            k_tiles_reg        <= '0;
+            tile_idx           <= '0;
+            sr_row             <= '0;
+            sr_col             <= '0;
+            sr_act_phase       <= 1'b0;
             wait_cnt           <= '0;
             rows_got           <= '0;
             reset_cnt          <= '0;
@@ -367,7 +430,14 @@ module tpu_sequencer #(
                         len_reg  <= rx_data;
                         byte_cnt <= '0;
                         if (rx_data == 8'h00) begin
+                            // (a LEN=0 STREAM_RUN lands in S_EXEC_DISPATCH's
+                            // default arm → STATUS_ERR, as it should)
                             state <= S_EXEC_DISPATCH;
+                        end else if (cmd_reg == CMD_STREAM_RUN) begin
+                            // STREAM_RUN never buffers its (potentially
+                            // 255-byte) payload — deserialize it tile by
+                            // tile in the S_SR_* states instead.
+                            state <= S_SR_FLAGS;
                         end else begin
                             state <= S_RECV_PAYLOAD;
                         end
@@ -566,17 +636,25 @@ module tpu_sequencer #(
                     end
                 end
 
-                // Step 6: wait for completion, then respond.
+                // Step 6: wait for completion, then respond (or, mid-stream,
+                // loop straight back for the next tile).
                 //   tile_last=1: wait for all M_TILE final_row_valid pulses
-                //     and return the full result matrix.
+                //     and return the full result matrix. Only ever true on a
+                //     stream's genuinely final tile, so it also ends the
+                //     stream.
                 //   tile_last=0: wait for accum_pass_done instead (bias/
-                //     activation never fire this pass) and return a bare
-                //     ACK -- no result exists yet for a mid-K-reduction pass.
+                //     activation never fire this pass). Mid-stream with more
+                //     tiles to go: no response — return to S_SR_RECV_TILE
+                //     for the next tile's bytes. Otherwise (legacy RUN/
+                //     RUN_TILE with last=0, or a stream frame whose
+                //     TILE_LAST flag is 0): bare ACK, running sum stays in
+                //     the accumulator for the next frame.
                 S_WAIT: begin
                     wait_cnt <= wait_cnt + 1'b1;
                     if (reg_tile_last) begin
                         if (rows_got == ROWS_GOT_W'(M_TILE)) begin
-                            result_ok <= 1'b1;
+                            result_ok     <= 1'b1;
+                            stream_active <= 1'b0;
                             // Pack response: STATUS_OK, LEN, row-major int16 LE
                             tx_payload[0] <= STATUS_OK;
                             tx_payload[1] <= 8'(RESULT_BYTES);
@@ -590,6 +668,7 @@ module tpu_sequencer #(
                             state         <= S_TX_STATUS;
                         end else if (wait_cnt == WAIT_TIMEOUT[TIMEOUT_W-1:0]) begin
                             // Timeout — something wrong with pipeline
+                            stream_active <= 1'b0;
                             tx_payload[0] <= STATUS_ERR;
                             tx_payload[1] <= 8'h00;
                             tx_len_reg    <= 8'd2;
@@ -598,18 +677,134 @@ module tpu_sequencer #(
                         end
                     end else begin
                         if (accum_pass_done) begin
-                            result_ok     <= 1'b1;
-                            tx_payload[0] <= STATUS_OK;
-                            tx_payload[1] <= 8'h00;   // no result yet -- mid-tile ACK
-                            tx_len_reg    <= 8'd2;
-                            tx_byte_idx   <= 8'd0;
-                            state         <= S_TX_STATUS;
+                            result_ok <= 1'b1;
+                            if (stream_active && tile_idx != k_tiles_reg - 8'd1) begin
+                                // More tiles in this frame — no response,
+                                // straight back to the byte deserializer.
+                                tile_idx <= tile_idx + 8'd1;
+                                rows_got <= '0;
+                                wait_cnt <= '0;
+                                run_cnt  <= '0;
+                                state    <= S_SR_RECV_TILE;
+                            end else begin
+                                stream_active <= 1'b0;
+                                tx_payload[0] <= STATUS_OK;
+                                tx_payload[1] <= 8'h00;   // no result yet -- mid-K ACK
+                                tx_len_reg    <= 8'd2;
+                                tx_byte_idx   <= 8'd0;
+                                state         <= S_TX_STATUS;
+                            end
                         end else if (wait_cnt == WAIT_TIMEOUT[TIMEOUT_W-1:0]) begin
+                            stream_active <= 1'b0;
                             tx_payload[0] <= STATUS_ERR;
                             tx_payload[1] <= 8'h00;
                             tx_len_reg    <= 8'd2;
                             tx_byte_idx   <= 8'd0;
                             state         <= S_TX_STATUS;
+                        end
+                    end
+                end
+
+                // STREAM_RUN header byte 1: frame-level TILE_FIRST/TILE_LAST
+                S_SR_FLAGS: begin
+                    if (rx_error_rise) begin
+                        tx_payload[0] <= STATUS_ERR;
+                        tx_payload[1] <= 8'h00;
+                        tx_len_reg    <= 8'd2;
+                        tx_byte_idx   <= 8'd0;
+                        state         <= S_TX_STATUS;
+                    end else if (rx_valid) begin
+                        stream_first <= rx_data[0];
+                        stream_last  <= rx_data[1];
+                        state        <= S_SR_KT;
+                    end
+                end
+
+                // STREAM_RUN header byte 2: K_TILES. Validate it against the
+                // frame LEN before trusting it — a mismatch means the host
+                // and sequencer would disagree on where tiles end, so refuse
+                // the frame up front rather than compute garbage.
+                S_SR_KT: begin
+                    if (rx_error_rise) begin
+                        tx_payload[0] <= STATUS_ERR;
+                        tx_payload[1] <= 8'h00;
+                        tx_len_reg    <= 8'd2;
+                        tx_byte_idx   <= 8'd0;
+                        state         <= S_TX_STATUS;
+                    end else if (rx_valid) begin
+                        if (rx_data == 8'd0 ||
+                            {8'd0, len_reg} != 16'd2 + 16'(rx_data) * 16'(TILE_BYTES)) begin
+                            // Malformed frame. Note the host's remaining
+                            // frame bytes (if any) will be misparsed as new
+                            // commands — on any STATUS_ERR the host must
+                            // flush and re-sync (tpu_host.py raises).
+                            tx_payload[0] <= STATUS_ERR;
+                            tx_payload[1] <= 8'h00;
+                            tx_len_reg    <= 8'd2;
+                            tx_byte_idx   <= 8'd0;
+                            state         <= S_TX_STATUS;
+                        end else begin
+                            k_tiles_reg   <= rx_data;
+                            tile_idx      <= '0;
+                            sr_row        <= '0;
+                            sr_col        <= '0;
+                            sr_act_phase  <= 1'b0;
+                            stream_active <= 1'b1;
+                            state         <= S_SR_RECV_TILE;
+                        end
+                    end
+                end
+
+                // STREAM_RUN tile deserializer: write each arriving byte
+                // straight into the register file — weights first (natural
+                // row-major, same wire order as RUN_TILE), then activations.
+                // On the tile's final byte, latch this tile's first/last
+                // into the accumulator controls and launch the standard
+                // S_WR_UB → ... → S_WAIT pass. S_WAIT routes back here for
+                // the next tile (stream_active) until the frame is done.
+                S_SR_RECV_TILE: begin
+                    if (rx_error_rise) begin
+                        stream_active <= 1'b0;
+                        tx_payload[0] <= STATUS_ERR;
+                        tx_payload[1] <= 8'h00;
+                        tx_len_reg    <= 8'd2;
+                        tx_byte_idx   <= 8'd0;
+                        state         <= S_TX_STATUS;
+                    end else if (rx_valid) begin
+                        if (!sr_act_phase) begin
+                            reg_weights[sr_row][sr_col] <= signed'(rx_data);
+                            if (sr_col == 8'(NUM_COLS - 1)) begin
+                                sr_col <= '0;
+                                if (sr_row == 8'(ARRAY_ROWS - 1)) begin
+                                    sr_row       <= '0;
+                                    sr_act_phase <= 1'b1;
+                                end else begin
+                                    sr_row <= sr_row + 8'd1;
+                                end
+                            end else begin
+                                sr_col <= sr_col + 8'd1;
+                            end
+                        end else begin
+                            reg_act[sr_row][sr_col] <= signed'(rx_data);
+                            if (sr_col == 8'(ARRAY_ROWS - 1)) begin
+                                sr_col <= '0;
+                                if (sr_row == 8'(M_TILE - 1)) begin
+                                    // Tile complete — run the pipeline pass.
+                                    sr_row         <= '0;
+                                    sr_act_phase   <= 1'b0;
+                                    reg_tile_first <= (tile_idx == 8'd0) && stream_first;
+                                    reg_tile_last  <= (tile_idx == k_tiles_reg - 8'd1) && stream_last;
+                                    rows_got       <= '0;
+                                    result_ok      <= 1'b0;
+                                    wait_cnt       <= '0;
+                                    run_cnt        <= '0;
+                                    state          <= S_WR_UB;
+                                end else begin
+                                    sr_row <= sr_row + 8'd1;
+                                end
+                            end else begin
+                                sr_col <= sr_col + 8'd1;
+                            end
                         end
                     end
                 end

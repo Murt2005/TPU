@@ -175,30 +175,38 @@ module tpu_sequencer_4x2_tb;
         rx_valid = 1'b0;
     endtask
 
-    // TX byte collect
+    // TX byte capture. Concurrent: a response can start while the stimulus
+    // side is still pacing out a STREAM_RUN frame's bytes (tx_busy is tied
+    // low, so the whole response fires within a few cycles) — polling for
+    // tx_valid only after sending would miss those 1-cycle pulses. Capture
+    // every byte as it happens; collect_n just waits for the count.
     logic [7:0] rx_buf [2 + RESULT_BYTES];
-    integer     rx_idx;
+    integer     cap_idx = 0;
 
-    task automatic collect_byte(integer idx);
+    always @(posedge clk) begin
+        if (tx_valid_out && cap_idx < 2 + RESULT_BYTES) begin
+            rx_buf[cap_idx] = tx_data;
+            cap_idx = cap_idx + 1;
+        end
+    end
+
+    // Wait until n response bytes have been captured, then reset the
+    // capture index (protocol is strictly request/response, so each
+    // response is fully consumed before the next command is sent).
+    task automatic collect_n(integer n);
         integer timeout;
         timeout = 0;
-        while (!tx_valid_out) begin
+        while (cap_idx < n) begin
             @(posedge clk);
             timeout = timeout + 1;
-            if (timeout > 2000) begin
-                $error("[FATAL] Timeout waiting for tx_valid (byte %0d)", idx);
+            if (timeout > 5000) begin
+                $error("[FATAL] Timeout waiting for %0d response bytes (got %0d)", n, cap_idx);
                 errors = errors + 1;
-                disable collect_byte;
+                cap_idx = 0;
+                disable collect_n;
             end
         end
-        rx_buf[idx] = tx_data;
-        @(posedge clk); #1;
-    endtask
-
-    task automatic collect_n(integer n);
-        integer i;
-        for (i = 0; i < n; i = i + 1)
-            collect_byte(i);
+        cap_idx = 0;
     endtask
 
     task automatic expect_ack(input string label);
@@ -318,6 +326,27 @@ module tpu_sequencer_4x2_tb;
         end
     endtask
 
+    // STREAM_RUN payload bytes go paced: the sequencer runs a full pipeline
+    // pass (~30 cycles at this shape) between tiles without consuming rx
+    // bytes, relying on the real UART byte cadence (~1042 cycles/byte at
+    // 12 MHz/115200) to cover it. 60 cycles/byte models that floor.
+    task automatic sr_send_byte(input logic [7:0] b);
+        host_send_byte(b);
+        repeat (60) @(posedge clk);
+    endtask
+
+    // Send the current W (natural row-major) + A as one STREAM_RUN tile and
+    // fold it into the tb-side expected accumulator.
+    task automatic sr_send_tile(input logic first);
+        for (int r = 0; r < ARRAY_ROWS; r++)
+            for (int c = 0; c < NUM_COLS; c++)
+                sr_send_byte(8'(W[r][c]));
+        for (int m = 0; m < M_TILE; m++)
+            for (int k = 0; k < ARRAY_ROWS; k++)
+                sr_send_byte(8'(A[m][k]));
+        accumulate_expected(first);
+    endtask
+
     // Tiled RUN pass (LEN=1 flags). first/last as in the protocol; when
     // last=0 expects a bare ACK, when last=1 checks the accumulated result.
     task automatic do_tiled_pass(input logic first, input logic last, input string label);
@@ -398,6 +427,26 @@ module tpu_sequencer_4x2_tb;
         W = '{'{-1, 1}, '{2, 2}, '{0, 3}, '{1, 0}};
         A = '{'{3, 1, 0, 2}, '{-1, 0, 1, 0}, '{0, 2, -2, 1}};
         do_run_tile_pass(1'b0, 1'b1, "T5 K-tile1");
+
+        // Test 6: STREAM_RUN with 3 tiles in one frame at the non-square
+        // shape — LEN = 2 + 3*(8+12) = 62 bytes, one response.
+        $display("[Test 6] STREAM_RUN: 3 tiles, one frame, 4x2 shape");
+        B = '{11, -11};
+        send_bias("T6");
+        host_send_byte(8'h07);
+        host_send_byte(8'(2 + 3*(W_BYTES + A_BYTES)));
+        sr_send_byte(8'h03);   // flags = TILE_FIRST|TILE_LAST
+        sr_send_byte(8'd3);    // K_TILES = 3
+        W = '{'{1, 2}, '{3, -1}, '{0, 2}, '{-2, 1}};
+        A = '{'{1, 2, 3, 4}, '{5, -1, 0, 2}, '{-3, 1, 2, 0}};
+        sr_send_tile(1'b1);
+        W = '{'{2, 0}, '{0, -2}, '{1, 1}, '{3, 0}};
+        A = '{'{0, 1, -1, 2}, '{2, 2, 1, 1}, '{1, 0, 3, -2}};
+        sr_send_tile(1'b0);
+        W = '{'{-1, 3}, '{1, 1}, '{2, -1}, '{0, 2}};
+        A = '{'{1, 1, 1, 1}, '{-2, 0, 2, 0}, '{0, 3, 0, -3}};
+        sr_send_tile(1'b0);
+        check_result("T6 STREAM_RUN");
 
         $display("\n=== SIMULATION COMPLETE ===");
         if (errors == 0)

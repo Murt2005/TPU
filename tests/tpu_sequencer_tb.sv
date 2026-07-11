@@ -142,6 +142,28 @@ module tpu_sequencer_tb;
         rx_valid = 1'b0;
     endtask
 
+    // STREAM_RUN payload bytes are sent paced: the sequencer spends one
+    // pipeline pass (~25 cycles) between tiles NOT consuming rx bytes, and
+    // relies on the UART byte cadence (10*CLK_FREQ/BAUD ≈ 1042 cycles at
+    // 12 MHz/115200) to cover that window. host_send_byte's back-to-back
+    // 2-cycle spacing would violate the real link's timing and drop bytes;
+    // 60 cycles/byte models the cadence floor the design actually assumes.
+    task automatic sr_send_byte(input logic [7:0] b);
+        host_send_byte(b);
+        repeat (60) @(posedge clk);
+    endtask
+
+    // One STREAM_RUN tile: weights in natural row-major order, then acts.
+    task automatic sr_send_tile(
+        input logic signed [7:0] w00, w01, w10, w11,
+        input logic signed [7:0] a00, a01, a10, a11
+    );
+        sr_send_byte(8'(w00)); sr_send_byte(8'(w01));
+        sr_send_byte(8'(w10)); sr_send_byte(8'(w11));
+        sr_send_byte(8'(a00)); sr_send_byte(8'(a01));
+        sr_send_byte(8'(a10)); sr_send_byte(8'(a11));
+    endtask
+
     // Simulate a UART framing error: uart_rx latches rx_error (no rx_valid
     // for the corrupted byte) and clears it on the next good byte.
     task automatic inject_framing_error;
@@ -151,30 +173,38 @@ module tpu_sequencer_tb;
         rx_error_in = 1'b0;
     endtask
 
-    // TX byte collect — stores into module-level rx_buf, advances rx_idx
+    // TX byte capture. Concurrent: a response can start while the stimulus
+    // side is still pacing out a STREAM_RUN frame's bytes (tx_busy is tied
+    // low, so the whole response fires within a few cycles) — polling for
+    // tx_valid only after sending would miss those 1-cycle pulses. Capture
+    // every byte as it happens; collect_n just waits for the count.
     logic [7:0] rx_buf [10];   // big enough for longest RUN response
-    integer     rx_idx;
+    integer     cap_idx = 0;
 
-    task automatic collect_byte(integer idx);
+    always @(posedge clk) begin
+        if (tx_valid_out && cap_idx < 10) begin
+            rx_buf[cap_idx] = tx_data;
+            cap_idx = cap_idx + 1;
+        end
+    end
+
+    // Wait until n response bytes have been captured, then reset the
+    // capture index (protocol is strictly request/response, so each
+    // response is fully consumed before the next command is sent).
+    task automatic collect_n(integer n);
         integer timeout;
         timeout = 0;
-        while (!tx_valid_out) begin
+        while (cap_idx < n) begin
             @(posedge clk);
             timeout = timeout + 1;
-            if (timeout > 2000) begin
-                $error("[FATAL] Timeout waiting for tx_valid (byte %0d)", idx);
+            if (timeout > 5000) begin
+                $error("[FATAL] Timeout waiting for %0d response bytes (got %0d)", n, cap_idx);
                 errors = errors + 1;
-                disable collect_byte;
+                cap_idx = 0;
+                disable collect_n;
             end
         end
-        rx_buf[idx] = tx_data;
-        @(posedge clk); #1;
-    endtask
-
-    task automatic collect_n(integer n);
-        integer i;
-        for (i = 0; i < n; i = i + 1)
-            collect_byte(i);
+        cap_idx = 0;
     endtask
 
     // Sends LOAD_WEIGHTS, LOAD_BIAS, LOAD_ACT, RUN, then checks 10-byte response
@@ -538,6 +568,105 @@ module tpu_sequencer_tb;
 
         $display("[Test 10b] Post-framing-error compute");
         do_compute(4,5,2,3, 16'sd100,16'sd200, 1,2,3,4, 16'sd108,16'sd211,16'sd120,16'sd227, "T10b");
+
+        // Test 11: STREAM_RUN — the doc §3.2 worked example (plus the flags
+        // byte this implementation adds): two identity-weight tiles in ONE
+        // frame, datapath accumulates, single response.
+        //   tile0: W=I, A=[[1,2],[3,4]]; tile1: W=I, A=[[5,6],[7,8]]
+        //   Y = [[6,8],[10,12]], bias=[0,0]
+        $display("[Test 11] STREAM_RUN: 2 tiles, one frame, one response");
+        host_send_byte(8'h02);   // LOAD_BIAS = [0,0]
+        host_send_byte(8'h04);
+        host_send_byte(8'h00); host_send_byte(8'h00);
+        host_send_byte(8'h00); host_send_byte(8'h00);
+        collect_n(2);
+        if (rx_buf[0] !== 8'hAA || rx_buf[1] !== 8'h00) begin
+            $error("[FAIL] T11 BIAS ACK: got [%02X,%02X]", rx_buf[0], rx_buf[1]);
+            errors++;
+        end
+        host_send_byte(8'h07);   // CMD_STREAM_RUN
+        host_send_byte(8'h12);   // LEN = 2 + 2*8 = 18
+        sr_send_byte(8'h03);     // flags = TILE_FIRST|TILE_LAST
+        sr_send_byte(8'h02);     // K_TILES = 2
+        sr_send_tile(1,0,0,1, 1,2,3,4);
+        sr_send_tile(1,0,0,1, 5,6,7,8);
+        collect_n(10);
+        if (rx_buf[0] !== 8'hAA || rx_buf[1] !== 8'h08 ||
+            signed'({rx_buf[3],rx_buf[2]}) !== 16'sd6  ||
+            signed'({rx_buf[5],rx_buf[4]}) !== 16'sd8  ||
+            signed'({rx_buf[7],rx_buf[6]}) !== 16'sd10 ||
+            signed'({rx_buf[9],rx_buf[8]}) !== 16'sd12) begin
+            $error("[FAIL] T11 STREAM_RUN: got [%02X,%02X] rows [%0d,%0d / %0d,%0d]",
+                   rx_buf[0], rx_buf[1],
+                   signed'({rx_buf[3],rx_buf[2]}), signed'({rx_buf[5],rx_buf[4]}),
+                   signed'({rx_buf[7],rx_buf[6]}), signed'({rx_buf[9],rx_buf[8]}));
+            errors++;
+        end else begin
+            $display("[PASS] T11: row0=[6,8] row1=[10,12] from one 2-tile frame");
+        end
+        repeat (20) @(posedge clk);
+
+        // Test 12: a K-run spanning TWO STREAM_RUN frames via the flags
+        // byte (first=1,last=0 then first=0,last=1) — the multi-frame
+        // continuation MNIST's K=144 layer needs. Same math as Test 7.
+        $display("[Test 12] STREAM_RUN K-run across two frames (flags chunking)");
+        host_send_byte(8'h07);
+        host_send_byte(8'h0A);   // LEN = 2 + 1*8 = 10
+        sr_send_byte(8'h01);     // flags = TILE_FIRST only
+        sr_send_byte(8'h01);     // K_TILES = 1
+        sr_send_tile(1,0,0,1, 1,2,5,6);
+        collect_n(2);
+        if (rx_buf[0] !== 8'hAA || rx_buf[1] !== 8'h00) begin
+            $error("[FAIL] T12 frame0 ACK: got [%02X,%02X]", rx_buf[0], rx_buf[1]);
+            errors++;
+        end
+        host_send_byte(8'h07);
+        host_send_byte(8'h0A);
+        sr_send_byte(8'h02);     // flags = TILE_LAST only
+        sr_send_byte(8'h01);
+        sr_send_tile(2,0,0,2, 3,4,7,8);
+        collect_n(10);
+        if (rx_buf[0] !== 8'hAA || rx_buf[1] !== 8'h08 ||
+            signed'({rx_buf[3],rx_buf[2]}) !== 16'sd7  ||
+            signed'({rx_buf[5],rx_buf[4]}) !== 16'sd10 ||
+            signed'({rx_buf[7],rx_buf[6]}) !== 16'sd19 ||
+            signed'({rx_buf[9],rx_buf[8]}) !== 16'sd22) begin
+            $error("[FAIL] T12 frame1: got [%02X,%02X] rows [%0d,%0d / %0d,%0d]",
+                   rx_buf[0], rx_buf[1],
+                   signed'({rx_buf[3],rx_buf[2]}), signed'({rx_buf[5],rx_buf[4]}),
+                   signed'({rx_buf[7],rx_buf[6]}), signed'({rx_buf[9],rx_buf[8]}));
+            errors++;
+        end else begin
+            $display("[PASS] T12: row0=[7,10] row1=[19,22] across two frames");
+        end
+        repeat (20) @(posedge clk);
+
+        // Test 13: malformed STREAM_RUN headers answer STATUS_ERR up front.
+        $display("[Test 13] STREAM_RUN header validation");
+        host_send_byte(8'h07);
+        host_send_byte(8'h0A);   // LEN says 1 tile...
+        sr_send_byte(8'h03);
+        sr_send_byte(8'h00);     // ...but K_TILES = 0
+        collect_n(2);
+        if (rx_buf[0] !== 8'hFF) begin
+            $error("[FAIL] T13a K_TILES=0: expected STATUS_ERR, got 0x%02X", rx_buf[0]);
+            errors++;
+        end else $display("[PASS] T13a: K_TILES=0 rejected");
+        repeat (10) @(posedge clk);
+        host_send_byte(8'h07);
+        host_send_byte(8'h0B);   // LEN = 11 != 2 + 1*8
+        sr_send_byte(8'h03);
+        sr_send_byte(8'h01);
+        collect_n(2);
+        if (rx_buf[0] !== 8'hFF) begin
+            $error("[FAIL] T13b LEN mismatch: expected STATUS_ERR, got 0x%02X", rx_buf[0]);
+            errors++;
+        end else $display("[PASS] T13b: LEN/K_TILES mismatch rejected");
+        // The 9 unsent frame bytes were never transmitted, so the sequencer
+        // is back in S_IDLE — a normal compute must still work.
+        repeat (10) @(posedge clk);
+        $display("[Test 13c] Post-reject compute");
+        do_compute(4,5,2,3, 16'sd100,16'sd200, 1,2,3,4, 16'sd108,16'sd211,16'sd120,16'sd227, "T13c");
 
         $display("\n=== SIMULATION COMPLETE ===");
         if (errors == 0)

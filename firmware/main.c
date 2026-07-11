@@ -40,6 +40,27 @@
 // Implemented in pico-ice-sdk/src/ice_fpga.c but not declared in ice_fpga.h.
 extern int ice_fpga_configured(const ice_fpga fpga);
 
+// Per-CDC-interface RX byte handlers, defined (non-static) in
+// pico-ice-sdk/src/ice_usb.c so they can be replaced here.
+extern void (*tud_cdc_rx_cb_table[])(uint8_t);
+
+// Replacement for the SDK's ice_usb_cdc_to_uart0(), which does
+//     if (uart_is_writable(uart0)) { uart_putc(uart0, byte); }
+// i.e. SILENTLY DROPS bytes once the RP2350's 32-deep UART TX FIFO is
+// full. USB delivers bytes far faster than 115200 baud drains them, so any
+// host write burst longer than the FIFO loses its tail -- fine for the TPU
+// protocol's original <=11-byte frames, fatal for CMD_STREAM_RUN's frames
+// of up to 253 bytes. Blocking here instead lets TinyUSB's CDC flow
+// control (NAK when its 512-byte RX FIFO fills) push the backpressure all
+// the way to the host, so no byte is ever lost regardless of frame size.
+// The stall is bounded by the FIFO drain rate (~87 us/byte at 115200) and
+// only delays tud_task() while a burst drains -- acceptable for this
+// single-purpose bridge. (tpu_host.py also paces its writes to wire speed,
+// so with a current host this path rarely even engages.)
+static void cdc_to_uart0_blocking(uint8_t byte) {
+    uart_putc_raw(uart0, byte);
+}
+
 int main(void) {
     // Enable the UART
     uart_init(uart0, 115200);
@@ -48,6 +69,9 @@ int main(void) {
 
     // Configure the piping as configured in <tusb_config.h>
     ice_usb_init();
+
+    // Swap in the non-dropping CDC->UART bridge (see comment above).
+    tud_cdc_rx_cb_table[ICE_USB_UART0_CDC] = &cdc_to_uart0_blocking;
 
     // Initialize the FPGA -- 12 MHz, not ICE_FPGA_DEFAULT_FREQUENCY (48 MHz):
     // must match fpga/pico2_ice/Makefile's CLK_FREQ.

@@ -141,6 +141,31 @@ def run_tile_equivalence(tpu, n, seed):
     return passed
 
 
+def run_stream_boundaries(tpu, seed):
+    """CMD_STREAM_RUN K-runs at the frame-chunking boundaries: 1 tile
+    (degenerate single-frame), 31 (exactly one full frame), 32 and 40
+    (multi-frame chains, where the flags byte carries TILE_FIRST/TILE_LAST
+    across frames -- the case MNIST's K=144 layer depends on). Goes through
+    matmul_tiled(), which is the code path inference actually uses."""
+    rng = np.random.default_rng(seed + 2)
+    fails = 0
+    cases = (1, 3, 31, 32, 40)
+    for kt in cases:
+        a = rng.integers(-20, 20, size=(2, 2 * kt)).astype(np.int8)
+        w = rng.integers(-20, 20, size=(2 * kt, 2)).astype(np.int8)
+        bias = rng.integers(-50, 50, size=2).astype(np.int16)
+        expected = golden(a, w, bias)
+        got = tpu.matmul_tiled(a, w, bias)
+        if not np.array_equal(got, expected):
+            fails += 1
+            print(f"       [stream K_TILES={kt}] got={got.tolist()} expected={expected.tolist()}")
+    passed = fails == 0
+    status = "PASS" if passed else "FAIL"
+    print(f"[{status}] stream boundaries: {len(cases) - fails}/{len(cases)} K-runs "
+          f"(K_TILES in {cases}) matched the golden model")
+    return passed
+
+
 def run_stress(tpu, n, seed):
     rng = np.random.default_rng(seed)
     fails = 0
@@ -179,6 +204,7 @@ def main():
         results.append(run_stress(tpu, args.stress_n, args.seed))
         results.append(run_tiled_stress(tpu, min(args.stress_n, 50), args.seed))
         results.append(run_tile_equivalence(tpu, min(args.stress_n, 50), args.seed))
+        results.append(run_stream_boundaries(tpu, args.seed))
 
     print("=" * 60)
     if all(results):
