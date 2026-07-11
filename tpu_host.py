@@ -15,6 +15,11 @@ Protocol (8-N-1, host-initiates everything -- see rtl/tpu_sequencer.sv):
     0x04 RUN           LEN=0  -> [r0c0,r0c1,r1c0,r1c1] int16 LE (8 bytes)
                or       LEN=1  [flags] -- K-tiling variant, see TPU.run()
     0x05 RESET         LEN=0
+    0x06 RUN_TILE      LEN=9  [flags, w00,w01,w10,w11, a00,a01,a10,a11] --
+                              LOAD_WEIGHTS+LOAD_ACT+RUN folded into one
+                              round trip; weights in NATURAL row-major order
+                              (no bottom-first reorder on the wire), response
+                              identical to RUN's. See TPU.run_tile().
 """
 import argparse
 import struct
@@ -28,6 +33,7 @@ CMD_LOAD_BIAS = 0x02
 CMD_LOAD_ACT = 0x03
 CMD_RUN = 0x04
 CMD_RESET = 0x05
+CMD_RUN_TILE = 0x06
 
 STATUS_OK = 0xAA
 STATUS_ERR = 0xFF
@@ -111,8 +117,10 @@ class TPU:
         the way RUN is. clk_freq defaults to the 12 MHz this repo's firmware
         exports to the FPGA (firmware/main.c's ice_fpga_init call, must match
         fpga/Makefile's CLK_FREQ)."""
-        run_calls = self.stats.get(CMD_RUN, (0, 0, 0))[0]
-        other_calls = sum(n for cmd, (n, _, _) in self.stats.items() if cmd != CMD_RUN)
+        run_like = (CMD_RUN, CMD_RUN_TILE)  # RUN_TILE unpacks in the same
+        # dispatch cycle RUN's flags do, then runs the identical pipeline
+        run_calls = sum(self.stats.get(cmd, (0, 0, 0))[0] for cmd in run_like)
+        other_calls = sum(n for cmd, (n, _, _) in self.stats.items() if cmd not in run_like)
         cycles = run_calls * 21 + other_calls * 2
         return cycles / clk_freq
 
@@ -171,6 +179,30 @@ class TPU:
         r0c0, r0c1, r1c0, r1c1 = struct.unpack("<hhhh", resp)
         return np.array([[r0c0, r0c1], [r1c0, r1c1]], dtype=np.int16)
 
+    def run_tile(self, w, a, first=True, last=True):
+        """One K-tile pass -- LOAD_WEIGHTS + LOAD_ACT + RUN folded into a
+        single CMD_RUN_TILE round trip (3x fewer transactions per tile; see
+        docs/SEQUENCER_REDESIGN.md §3.1). w and a are 2x2 int8 row-major;
+        unlike load_weights(), the weights go over the wire in natural
+        row-major order -- the sequencer does the bottom-first reorder
+        internally. first/last have exactly run()'s K-tiling semantics;
+        returns the 2x2 int16 result when last=True, else None. Bias is not
+        part of the frame -- call load_bias() once per output block."""
+        w = np.asarray(w, dtype=np.int8)
+        a = np.asarray(a, dtype=np.int8)
+        if w.shape != (2, 2):
+            raise ValueError("weights must be a 2x2 matrix")
+        if a.shape != (2, 2):
+            raise ValueError("activations must be a 2x2 matrix")
+        flags = (0x01 if first else 0) | (0x02 if last else 0)
+        resp = self._send_cmd(CMD_RUN_TILE, bytes([flags]) + w.tobytes() + a.tobytes())
+        if not last:
+            return None
+        if len(resp) != 8:
+            raise TPUError(f"RUN_TILE response had {len(resp)} data bytes, expected 8")
+        r0c0, r0c1, r1c0, r1c1 = struct.unpack("<hhhh", resp)
+        return np.array([[r0c0, r0c1], [r1c0, r1c1]], dtype=np.int16)
+
     def reset(self):
         self._send_cmd(CMD_RESET)
 
@@ -187,10 +219,12 @@ class TPU:
         (N,) int16 array-like (defaults to zero); M, K, N must all be even.
 
         Tiles the K dimension into 2-wide weight-reload passes accumulated
-        in hardware (rtl/accumulator.sv's persistent PSUM, via run()'s
-        first/last), and the M/N dimensions into 2x2 blocks run one at a
-        time. Bias/ReLU are applied once per (M,N) block, on that block's
-        final K-tile pass, exactly matching a single un-tiled matmul.
+        in hardware (rtl/accumulator.sv's persistent PSUM), and the M/N
+        dimensions into 2x2 blocks run one at a time. Each K-tile pass is a
+        single CMD_RUN_TILE round trip (run_tile()) rather than the legacy
+        LOAD_WEIGHTS/LOAD_ACT/RUN triple. Bias/ReLU are applied once per
+        (M,N) block, on that block's final K-tile pass, exactly matching a
+        single un-tiled matmul.
         """
         a = np.asarray(a, dtype=np.int8)
         w = np.asarray(w, dtype=np.int8)
@@ -213,9 +247,10 @@ class TPU:
                 self.load_bias(bias[n0:n0 + 2])
                 result = None
                 for ki, k0 in enumerate(range(0, k, 2)):
-                    self.load_weights(w[k0:k0 + 2, n0:n0 + 2])
-                    self.load_activations(a[m0:m0 + 2, k0:k0 + 2])
-                    result = self.run(first=(ki == 0), last=(ki == num_k_tiles - 1))
+                    result = self.run_tile(w[k0:k0 + 2, n0:n0 + 2],
+                                           a[m0:m0 + 2, k0:k0 + 2],
+                                           first=(ki == 0),
+                                           last=(ki == num_k_tiles - 1))
                 out[m0:m0 + 2, n0:n0 + 2] = result
         return out
 

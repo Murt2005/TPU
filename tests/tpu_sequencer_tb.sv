@@ -17,6 +17,7 @@ module tpu_sequencer_tb;
     // sequencer ports
     logic [7:0] rx_data;
     logic       rx_valid;
+    logic       rx_error_in;   // tb-driven framing-error injection
     logic [7:0] tx_data;
     logic       tx_valid_out;
     logic       tx_busy;
@@ -63,7 +64,7 @@ module tpu_sequencer_tb;
     // DUT + datapath (2x2 defaults: ARRAY_ROWS=NUM_COLS=M_TILE=2)
     tpu_sequencer #(.WAIT_TIMEOUT(200)) dut (
         .clk(clk), .reset(reset),
-        .rx_data(rx_data), .rx_valid(rx_valid),
+        .rx_data(rx_data), .rx_valid(rx_valid), .rx_error(rx_error_in),
         .tx_data(tx_data), .tx_valid(tx_valid_out), .tx_busy(tx_busy),
         .write_enable_col(seq_we_col), .write_data_col(seq_wd_col),
         .swap_banks(seq_swap_banks), .loading_phase(seq_loading_phase),
@@ -139,6 +140,15 @@ module tpu_sequencer_tb;
         rx_valid = 1'b1;
         @(posedge clk); #1;
         rx_valid = 1'b0;
+    endtask
+
+    // Simulate a UART framing error: uart_rx latches rx_error (no rx_valid
+    // for the corrupted byte) and clears it on the next good byte.
+    task automatic inject_framing_error;
+        @(posedge clk); #1;
+        rx_error_in = 1'b1;
+        repeat (2) @(posedge clk); #1;
+        rx_error_in = 1'b0;
     endtask
 
     // TX byte collect — stores into module-level rx_buf, advances rx_idx
@@ -322,11 +332,70 @@ module tpu_sequencer_tb;
         repeat (20) @(posedge clk);
     endtask
 
+    // RUN_TILE (0x06): weights + acts + flags in ONE frame. Weights go over
+    // the wire in NATURAL row-major order (w00,w01,w10,w11) -- the sequencer
+    // does the bottom-first reorder internally, unlike legacy LOAD_WEIGHTS.
+    // When last=0 expects a bare ACK; when last=1 checks the 8-byte result.
+    task automatic do_run_tile(
+        input logic signed [7:0] w00, w01, w10, w11,
+        input logic signed [7:0] a00, a01, a10, a11,
+        input logic first, input logic last,
+        input logic signed [15:0] er0c0, er0c1, er1c0, er1c1,
+        input string label
+    );
+        logic signed [15:0] gr0c0, gr0c1, gr1c0, gr1c1;
+
+        // RUN_TILE: CMD=06, LEN=9, [flags, w00,w01,w10,w11, a00,a01,a10,a11]
+        host_send_byte(8'h06);
+        host_send_byte(8'h09);
+        host_send_byte({6'b0, last, first});
+        host_send_byte(8'(w00));
+        host_send_byte(8'(w01));
+        host_send_byte(8'(w10));
+        host_send_byte(8'(w11));
+        host_send_byte(8'(a00));
+        host_send_byte(8'(a01));
+        host_send_byte(8'(a10));
+        host_send_byte(8'(a11));
+
+        if (last) begin
+            collect_n(10);
+            gr0c0 = signed'({rx_buf[3], rx_buf[2]});
+            gr0c1 = signed'({rx_buf[5], rx_buf[4]});
+            gr1c0 = signed'({rx_buf[7], rx_buf[6]});
+            gr1c1 = signed'({rx_buf[9], rx_buf[8]});
+            if (rx_buf[0] !== 8'hAA || rx_buf[1] !== 8'h08) begin
+                $error("[FAIL] %s RUN_TILE header: [%02X,%02X]", label, rx_buf[0], rx_buf[1]);
+                errors++;
+            end else if (gr0c0 !== er0c0 || gr0c1 !== er0c1 ||
+                         gr1c0 !== er1c0 || gr1c1 !== er1c1) begin
+                $error("[FAIL] %s RUN_TILE: exp [%0d,%0d / %0d,%0d] got [%0d,%0d / %0d,%0d]",
+                       label, er0c0, er0c1, er1c0, er1c1,
+                       gr0c0, gr0c1, gr1c0, gr1c1);
+                errors++;
+            end else begin
+                $display("[PASS] %s: row0=[%0d,%0d] row1=[%0d,%0d]",
+                         label, gr0c0, gr0c1, gr1c0, gr1c1);
+            end
+        end else begin
+            collect_n(2);
+            if (rx_buf[0] !== 8'hAA || rx_buf[1] !== 8'h00) begin
+                $error("[FAIL] %s tile ACK: got [%02X,%02X]", label, rx_buf[0], rx_buf[1]);
+                errors++;
+            end else begin
+                $display("[PASS] %s: tile ACK received (no data yet)", label);
+            end
+        end
+
+        repeat (20) @(posedge clk);
+    endtask
+
     initial begin
-        clk      = 0;
-        reset    = 1;
-        rx_data  = '0;
-        rx_valid = 1'b0;
+        clk         = 0;
+        reset       = 1;
+        rx_data     = '0;
+        rx_valid    = 1'b0;
+        rx_error_in = 1'b0;
 
         repeat (4) @(posedge clk); #1;
         reset = 0;
@@ -417,6 +486,58 @@ module tpu_sequencer_tb;
                      16'sd0,16'sd0,16'sd0,16'sd0, "T7 K-tile0");
         do_tiled_run(2,0,0,2, 3,4,7,8, 1'b0, 1'b1,
                      16'sd7,16'sd10,16'sd19,16'sd22, "T7 K-tile1");
+
+        // Test 8: RUN_TILE single-shot — the exact worked example from
+        // docs/SEQUENCER_REDESIGN.md §3.1: bias=[100,200] preloaded, then
+        // one 06 09 03 ... frame returning AA 08 6C 00 D3 00 78 00 E3 00.
+        $display("[Test 8] RUN_TILE single frame (doc §3.1 worked example)");
+        host_send_byte(8'h02);   // LOAD_BIAS = [100,200]
+        host_send_byte(8'h04);
+        host_send_byte(8'h64); host_send_byte(8'h00);
+        host_send_byte(8'hC8); host_send_byte(8'h00);
+        collect_n(2);
+        if (rx_buf[0] !== 8'hAA || rx_buf[1] !== 8'h00) begin
+            $error("[FAIL] T8 BIAS ACK: got [%02X,%02X]", rx_buf[0], rx_buf[1]);
+            errors++;
+        end
+        do_run_tile(4,5,2,3, 1,2,3,4, 1'b1, 1'b1,
+                    16'sd108,16'sd211,16'sd120,16'sd227, "T8 RUN_TILE");
+
+        // Test 9: K-dim tiling via RUN_TILE — same math as Test 7, but one
+        // frame per K-tile instead of three, and natural-order weights.
+        $display("[Test 9] K-dim tiling via RUN_TILE frames");
+        host_send_byte(8'h02);   // LOAD_BIAS = [0,0]
+        host_send_byte(8'h04);
+        host_send_byte(8'h00); host_send_byte(8'h00);
+        host_send_byte(8'h00); host_send_byte(8'h00);
+        collect_n(2);
+        if (rx_buf[0] !== 8'hAA || rx_buf[1] !== 8'h00) begin
+            $error("[FAIL] T9 BIAS ACK: got [%02X,%02X]", rx_buf[0], rx_buf[1]);
+            errors++;
+        end
+        do_run_tile(1,0,0,1, 1,2,5,6, 1'b1, 1'b0,
+                    16'sd0,16'sd0,16'sd0,16'sd0, "T9 K-tile0");
+        do_run_tile(2,0,0,2, 3,4,7,8, 1'b0, 1'b1,
+                    16'sd7,16'sd10,16'sd19,16'sd22, "T9 K-tile1");
+
+        // Test 10: framing error mid-frame → explicit STATUS_ERR (not a
+        // silent drop), and the sequencer recovers for the next command.
+        $display("[Test 10] UART framing error mid-frame -> STATUS_ERR + recovery");
+        host_send_byte(8'h01);   // CMD_LOAD_WEIGHTS
+        host_send_byte(8'h04);   // LEN=4
+        host_send_byte(8'h11);   // 1 of 4 payload bytes...
+        inject_framing_error;    // ...then byte 2 arrives corrupted
+        collect_n(2);
+        if (rx_buf[0] !== 8'hFF || rx_buf[1] !== 8'h00) begin
+            $error("[FAIL] T10: expected [FF,00], got [%02X,%02X]", rx_buf[0], rx_buf[1]);
+            errors++;
+        end else begin
+            $display("[PASS] T10: STATUS_ERR on framing error");
+        end
+        repeat (10) @(posedge clk);
+
+        $display("[Test 10b] Post-framing-error compute");
+        do_compute(4,5,2,3, 16'sd100,16'sd200, 1,2,3,4, 16'sd108,16'sd211,16'sd120,16'sd227, "T10b");
 
         $display("\n=== SIMULATION COMPLETE ===");
         if (errors == 0)

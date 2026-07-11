@@ -89,7 +89,7 @@ module tpu_sequencer_4x2_tb;
         .WAIT_TIMEOUT(200)
     ) dut (
         .clk(clk), .reset(reset),
-        .rx_data(rx_data), .rx_valid(rx_valid),
+        .rx_data(rx_data), .rx_valid(rx_valid), .rx_error(1'b0),
         .tx_data(tx_data), .tx_valid(tx_valid_out), .tx_busy(tx_busy),
         .write_enable_col(seq_we_col), .write_data_col(seq_wd_col),
         .swap_banks(seq_swap_banks), .loading_phase(seq_loading_phase),
@@ -294,6 +294,30 @@ module tpu_sequencer_4x2_tb;
         check_result(label);
     endtask
 
+    // RUN_TILE (0x06): current W and A in ONE frame, weights in NATURAL
+    // row-major order (no bottom-first pre-reversal — that's RUN_TILE's wire
+    // contract, unlike legacy LOAD_WEIGHTS). last=0 expects a bare ACK;
+    // last=1 checks the accumulated result.
+    task automatic do_run_tile_pass(input logic first, input logic last, input string label);
+        host_send_byte(8'h06);
+        host_send_byte(8'(1 + W_BYTES + A_BYTES));
+        host_send_byte({6'b0, last, first});
+        for (int r = 0; r < ARRAY_ROWS; r++)
+            for (int c = 0; c < NUM_COLS; c++)
+                host_send_byte(8'(W[r][c]));
+        for (int m = 0; m < M_TILE; m++)
+            for (int k = 0; k < ARRAY_ROWS; k++)
+                host_send_byte(8'(A[m][k]));
+        accumulate_expected(first);
+        if (last) begin
+            check_result(label);
+        end else begin
+            expect_ack({label, " mid-tile"});
+            $display("[PASS] %s: tile ACK received (no data yet)", label);
+            repeat (20) @(posedge clk);
+        end
+    endtask
+
     // Tiled RUN pass (LEN=1 flags). first/last as in the protocol; when
     // last=0 expects a bare ACK, when last=1 checks the accumulated result.
     task automatic do_tiled_pass(input logic first, input logic last, input string label);
@@ -353,6 +377,27 @@ module tpu_sequencer_4x2_tb;
         W = '{'{1, -1}, '{2, -2}, '{3, -3}, '{4, -4}};
         A = '{'{2, 2, 2, 2}, '{1, 0, 1, 0}, '{0, 1, 0, 1}};
         do_tiled_pass(1'b0, 1'b1, "T3 K-tile1");
+
+        // Test 4: single-shot RUN_TILE at the non-square shape
+        // (LEN = 1 + 8 + 12 = 21 bytes in one frame).
+        $display("[Test 4] RUN_TILE single frame, 4x2 shape");
+        W = '{'{3, -2}, '{-1, 4}, '{2, 2}, '{0, -3}};
+        A = '{'{4, -3, 2, -1}, '{1, 1, 1, 1}, '{-2, 5, -4, 3}};
+        B = '{7, -7};
+        send_bias("T4");
+        do_run_tile_pass(1'b1, 1'b1, "T4 RUN_TILE");
+
+        // Test 5: K-dim tiling via RUN_TILE frames (same accumulator math
+        // as Test 3, one frame per K-tile).
+        $display("[Test 5] K-dim tiling via RUN_TILE frames, 4x2 shape");
+        B = '{-3, 3};
+        send_bias("T5");
+        W = '{'{1, 2}, '{-2, 1}, '{3, 0}, '{0, -1}};
+        A = '{'{1, 0, 2, 0}, '{0, 3, 0, 1}, '{2, -2, 1, -1}};
+        do_run_tile_pass(1'b1, 1'b0, "T5 K-tile0");
+        W = '{'{-1, 1}, '{2, 2}, '{0, 3}, '{1, 0}};
+        A = '{'{3, 1, 0, 2}, '{-1, 0, 1, 0}, '{0, 2, -2, 1}};
+        do_run_tile_pass(1'b0, 1'b1, "T5 K-tile1");
 
         $display("\n=== SIMULATION COMPLETE ===");
         if (errors == 0)

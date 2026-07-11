@@ -149,6 +149,7 @@ module tpu_top #(
         // RX
         .rx_data          (rx_byte),
         .rx_valid         (rx_valid),
+        .rx_error         (rx_error),
         // TX
         .tx_data          (tx_byte),
         .tx_valid         (tx_valid_seq),

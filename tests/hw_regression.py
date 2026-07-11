@@ -116,6 +116,31 @@ def run_tiled_stress(tpu, n, seed):
     return passed
 
 
+def run_tile_equivalence(tpu, n, seed):
+    """CMD_RUN_TILE (one frame) must produce bit-identical results to the
+    legacy LOAD_WEIGHTS/LOAD_ACT/RUN triple for the same inputs -- both
+    against each other and against the golden model. Note run_tile() sends
+    weights in natural row-major order (the sequencer reorders internally),
+    so this also catches a wire-order regression in either path."""
+    rng = np.random.default_rng(seed + 1)
+    fails = 0
+    for i in range(n):
+        a = rng.integers(-128, 128, size=(2, 2))
+        w = rng.integers(-128, 128, size=(2, 2))
+        bias = rng.integers(-1000, 1000, size=2)
+        legacy = tpu.matmul(a, w, bias)          # loads bias as a side effect...
+        via_tile = tpu.run_tile(w, a)            # ...which persists for RUN_TILE
+        expected = golden(a, w, bias)
+        if not (np.array_equal(legacy, via_tile) and np.array_equal(via_tile, expected)):
+            fails += 1
+            print(f"       [run_tile {i}] a={a.tolist()} w={w.tolist()} bias={bias.tolist()} "
+                  f"legacy={legacy.tolist()} run_tile={via_tile.tolist()} expected={expected.tolist()}")
+    passed = fails == 0
+    status = "PASS" if passed else "FAIL"
+    print(f"[{status}] run_tile equivalence: {n - fails}/{n} RUN_TILE results matched the legacy path + golden model")
+    return passed
+
+
 def run_stress(tpu, n, seed):
     rng = np.random.default_rng(seed)
     fails = 0
@@ -153,6 +178,7 @@ def main():
         results.append(run_unknown_cmd(tpu))
         results.append(run_stress(tpu, args.stress_n, args.seed))
         results.append(run_tiled_stress(tpu, min(args.stress_n, 50), args.seed))
+        results.append(run_tile_equivalence(tpu, min(args.stress_n, 50), args.seed))
 
     print("=" * 60)
     if all(results):

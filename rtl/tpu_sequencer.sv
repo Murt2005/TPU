@@ -59,6 +59,25 @@
 //
 //  0x05  RESET         LEN=0  pulses internal reset for 4 cycles; responds OK
 //
+//  0x06  RUN_TILE      LEN=1+ARRAY_ROWS*NUM_COLS+M_TILE*ARRAY_ROWS (9)
+//                             payload: [flags,
+//                                       weight bytes (ARRAY_ROWS*NUM_COLS,
+//                                         NATURAL row-major, top row first —
+//                                         unlike LOAD_WEIGHTS's bottom-first
+//                                         legacy order; the sequencer does the
+//                                         bottom-first reorder internally),
+//                                       act bytes (M_TILE*ARRAY_ROWS,
+//                                         row-major)]
+//                             flags[0]=TILE_FIRST, flags[1]=TILE_LAST — same
+//                             semantics as RUN's LEN=1 variant. Folds
+//                             LOAD_WEIGHTS+LOAD_ACT+RUN into one frame: one
+//                             round trip per K-tile instead of three
+//                             (docs/SEQUENCER_REDESIGN.md §3.1). Response is
+//                             identical to RUN's (result bytes if TILE_LAST,
+//                             else a bare STATUS_OK/LEN=0 ACK). Does not
+//                             touch reg_bias — LOAD_BIAS stays a separate,
+//                             once-per-output-block command.
+//
 //  Pipeline orchestration for RUN (counter-driven; the 2x2 special case
 //  matches the task sequencing in tpu_core_tb.sv cycle-for-cycle)
 //
@@ -109,6 +128,11 @@ module tpu_sequencer #(
 
     input  logic [7:0] rx_data,
     input  logic       rx_valid,
+    // uart_rx framing-error flag (level: latched on a bad stop bit, cleared
+    // by the next good byte). A rising edge while receiving a frame aborts
+    // it with an explicit STATUS_ERR instead of a silent drop + WAIT_TIMEOUT
+    // on the host side (docs/SEQUENCER_REDESIGN.md §3.3 / sequencer_uart_design §5.7).
+    input  logic       rx_error,
 
     output logic [7:0] tx_data,
     output logic       tx_valid,
@@ -150,6 +174,7 @@ module tpu_sequencer #(
     localparam logic [7:0] CMD_LOAD_ACT     = 8'h03;
     localparam logic [7:0] CMD_RUN          = 8'h04;
     localparam logic [7:0] CMD_RESET        = 8'h05;
+    localparam logic [7:0] CMD_RUN_TILE     = 8'h06;
 
     localparam logic [7:0] STATUS_OK  = 8'hAA;
     localparam logic [7:0] STATUS_ERR = 8'hFF;
@@ -159,14 +184,14 @@ module tpu_sequencer #(
     localparam int ROWS_GOT_W = $clog2(M_TILE + 1);
 
     // Frame payload sizes (bytes). The RX payload buffer must hold the
-    // largest fixed-shape command; floor of 8 preserves the original 2x2
-    // buffer size (and headroom for short unknown commands).
+    // largest fixed-shape command (RUN_TILE: flags + weights + acts); floor
+    // of 8 keeps headroom for short unknown commands at tiny geometries.
     localparam int W_BYTES       = ARRAY_ROWS * NUM_COLS;   // LOAD_WEIGHTS
     localparam int A_BYTES       = M_TILE * ARRAY_ROWS;     // LOAD_ACT
     localparam int B_BYTES       = 2 * NUM_COLS;            // LOAD_BIAS
-    localparam int MAX_WA        = (W_BYTES > A_BYTES) ? W_BYTES : A_BYTES;
-    localparam int MAX_WAB       = (MAX_WA > B_BYTES) ? MAX_WA : B_BYTES;
-    localparam int PAYLOAD_BYTES = (MAX_WAB > 8) ? MAX_WAB : 8;
+    localparam int RT_BYTES      = 1 + W_BYTES + A_BYTES;   // RUN_TILE
+    localparam int MAX_RTB       = (RT_BYTES > B_BYTES) ? RT_BYTES : B_BYTES;
+    localparam int PAYLOAD_BYTES = (MAX_RTB > 8) ? MAX_RTB : 8;
 
     // RUN response: STATUS + LEN + int16 LE result matrix, row-major
     localparam int RESULT_BYTES = 2 * M_TILE * NUM_COLS;
@@ -234,6 +259,12 @@ module tpu_sequencer #(
     // RESET pulse counter
     logic [2:0] reset_cnt;
 
+    // rx_error is a latched level in uart_rx (set on a bad stop bit, cleared
+    // by the next good byte) — edge-detect it so one framing error produces
+    // exactly one STATUS_ERR response.
+    logic rx_error_prev;
+    wire  rx_error_rise = rx_error && !rx_error_prev;
+
     // Drive out_bias / tile_first / tile_last to the datapath at all times
     always_comb begin
         for (int c = 0; c < NUM_COLS; c++)
@@ -283,9 +314,11 @@ module tpu_sequencer #(
             wait_cnt           <= '0;
             rows_got           <= '0;
             reset_cnt          <= '0;
+            rx_error_prev      <= 1'b0;
             tpu_reset          <= 1'b0;
             busy               <= 1'b0;
         end else begin
+            rx_error_prev      <= rx_error;
             write_enable_col   <= '0;
             swap_banks         <= 1'b0;
             loading_phase      <= 1'b0;
@@ -303,10 +336,19 @@ module tpu_sequencer #(
 
             case (state)
 
-                // IDLE: wait for the first rx byte (the CMD byte)
+                // IDLE: wait for the first rx byte (the CMD byte). A framing
+                // error here means the CMD byte itself was corrupted — the
+                // host just sent a frame and is waiting, so answer STATUS_ERR.
                 S_IDLE: begin
                     busy <= 1'b0;
-                    if (rx_valid) begin
+                    if (rx_error_rise) begin
+                        tx_payload[0] <= STATUS_ERR;
+                        tx_payload[1] <= 8'h00;
+                        tx_len_reg    <= 8'd2;
+                        tx_byte_idx   <= 8'd0;
+                        state         <= S_TX_STATUS;
+                        busy          <= 1'b1;
+                    end else if (rx_valid) begin
                         cmd_reg  <= rx_data;
                         state    <= S_RECV_LEN;
                         busy     <= 1'b1;
@@ -315,7 +357,13 @@ module tpu_sequencer #(
 
                 // RECV_LEN: latch LEN, decide whether to collect payload
                 S_RECV_LEN: begin
-                    if (rx_valid) begin
+                    if (rx_error_rise) begin
+                        tx_payload[0] <= STATUS_ERR;
+                        tx_payload[1] <= 8'h00;
+                        tx_len_reg    <= 8'd2;
+                        tx_byte_idx   <= 8'd0;
+                        state         <= S_TX_STATUS;
+                    end else if (rx_valid) begin
                         len_reg  <= rx_data;
                         byte_cnt <= '0;
                         if (rx_data == 8'h00) begin
@@ -326,9 +374,17 @@ module tpu_sequencer #(
                     end
                 end
 
-                // RECV_PAYLOAD: collect len_reg bytes
+                // RECV_PAYLOAD: collect len_reg bytes; a framing error
+                // mid-frame aborts with STATUS_ERR (the corrupted byte never
+                // pulses rx_valid, so waiting would just time out the host)
                 S_RECV_PAYLOAD: begin
-                    if (rx_valid) begin
+                    if (rx_error_rise) begin
+                        tx_payload[0] <= STATUS_ERR;
+                        tx_payload[1] <= 8'h00;
+                        tx_len_reg    <= 8'd2;
+                        tx_byte_idx   <= 8'd0;
+                        state         <= S_TX_STATUS;
+                    end else if (rx_valid) begin
                         payload[byte_cnt] <= rx_data;
                         if (byte_cnt == len_reg - 8'd1) begin
                             byte_cnt <= '0;
@@ -405,6 +461,31 @@ module tpu_sequencer #(
                         CMD_RESET: begin
                             reset_cnt <= 3'd0;
                             state     <= S_RESET_PULSE;
+                        end
+
+                        // RUN_TILE: LOAD_WEIGHTS + LOAD_ACT + RUN in one
+                        // frame. Weights arrive in NATURAL row-major order
+                        // (top row first) — no host-side pre-reversal, unlike
+                        // legacy LOAD_WEIGHTS; S_LD_WF's bottom-first
+                        // presentation reorder handles the staggered-loading
+                        // contract either way. Bias is NOT part of this
+                        // frame (LOAD_BIAS is once-per-output-block).
+                        CMD_RUN_TILE: begin
+                            reg_tile_first <= payload[0][0];
+                            reg_tile_last  <= payload[0][1];
+                            for (int r = 0; r < ARRAY_ROWS; r++)
+                                for (int c = 0; c < NUM_COLS; c++)
+                                    reg_weights[r][c]
+                                        <= signed'(payload[1 + r*NUM_COLS + c]);
+                            for (int m = 0; m < M_TILE; m++)
+                                for (int k = 0; k < ARRAY_ROWS; k++)
+                                    reg_act[m][k]
+                                        <= signed'(payload[1 + W_BYTES + m*ARRAY_ROWS + k]);
+                            rows_got  <= '0;
+                            result_ok <= 1'b0;
+                            wait_cnt  <= '0;
+                            run_cnt   <= '0;
+                            state     <= S_WR_UB;
                         end
 
                         // Unknown CMD
