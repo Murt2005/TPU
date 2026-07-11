@@ -21,8 +21,6 @@ module tpu_sequencer_tb;
     logic       tx_valid_out;
     logic       tx_busy;
 
-    logic              seq_we_col_0, seq_we_col_1;
-    logic signed [7:0] seq_wd_col_0, seq_wd_col_1;
     logic              [1:0] seq_we_col;
     logic signed [1:0][7:0]  seq_wd_col;
     logic              seq_swap_banks;
@@ -61,18 +59,13 @@ module tpu_sequencer_tb;
 
     assign ub_act_dummy[0]   = 8'sd0;
     assign ub_act_dummy[1]   = 8'sd0;
-    assign seq_we_col[0]     = seq_we_col_0;
-    assign seq_we_col[1]     = seq_we_col_1;
-    assign seq_wd_col[0]     = seq_wd_col_0;
-    assign seq_wd_col[1]     = seq_wd_col_1;
 
-    // DUT + datapath
+    // DUT + datapath (2x2 defaults: ARRAY_ROWS=NUM_COLS=M_TILE=2)
     tpu_sequencer #(.WAIT_TIMEOUT(200)) dut (
         .clk(clk), .reset(reset),
         .rx_data(rx_data), .rx_valid(rx_valid),
         .tx_data(tx_data), .tx_valid(tx_valid_out), .tx_busy(tx_busy),
-        .write_enable_col_0(seq_we_col_0), .write_data_col_0(seq_wd_col_0),
-        .write_enable_col_1(seq_we_col_1), .write_data_col_1(seq_wd_col_1),
+        .write_enable_col(seq_we_col), .write_data_col(seq_wd_col),
         .swap_banks(seq_swap_banks), .loading_phase(seq_loading_phase),
         .host_write_addr(seq_hw_addr), .host_write_data(seq_hw_data),
         .host_write_valid(seq_hw_valid),

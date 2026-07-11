@@ -26,7 +26,14 @@ module tpu_top #(
     parameter int CLK_FREQ    = 50_000_000,
     parameter int BAUD_RATE   = 115_200,
     parameter int WEIGHT_WIDTH = 8,
-    parameter int FIFO_DEPTH   = 4
+    parameter int FIFO_DEPTH   = 4,   // must be a power of 2, >= ARRAY_ROWS
+    // Array geometry (see docs/SEQUENCER_REDESIGN.md §1):
+    //   ARRAY_ROWS — systolic rows = K-tile depth
+    //   NUM_COLS   — systolic columns = N-tile width
+    //   M_TILE     — activation rows streamed per RUN (UB address depth)
+    parameter int ARRAY_ROWS   = 2,
+    parameter int NUM_COLS     = 2,
+    parameter int M_TILE       = ARRAY_ROWS
 ) (
     input  logic clk,
     input  logic reset_n,   // active-low (DE1-SoC KEY[0])
@@ -94,30 +101,34 @@ module tpu_top #(
     // =========================================================================
     // Sequencer control signals
     // =========================================================================
-    // weight_fifo
-    logic              seq_we_col_0, seq_we_col_1;
-    logic signed [7:0] seq_wd_col_0, seq_wd_col_1;
+    // unified_buffer address width (must match tpu_sequencer's derived
+    // UB_ADDR_W and unified_buffer's ADDR_WIDTH with ROWS = M_TILE)
+    localparam int UB_ADDR_W = (M_TILE > 1) ? $clog2(M_TILE) : 1;
+
+    // weight_fifo (array-port style, one lane per column)
+    logic        [NUM_COLS-1:0]      seq_we_col;
+    logic signed [NUM_COLS-1:0][7:0] seq_wd_col;
     logic              seq_swap_banks;
     logic              seq_loading_phase;
 
     // unified_buffer host-write
-    logic              seq_hw_addr;
-    logic signed [1:0][7:0] seq_hw_data;
+    logic        [UB_ADDR_W-1:0]        seq_hw_addr;
+    logic signed [ARRAY_ROWS-1:0][7:0]  seq_hw_data;
     logic              seq_hw_valid;
 
     // unified_buffer UB-read
-    logic              seq_ub_addr;
+    logic        [UB_ADDR_W-1:0] seq_ub_addr;
     logic              seq_ub_en;
 
     // bias
-    logic signed [1:0][15:0] seq_bias;
+    logic signed [NUM_COLS-1:0][15:0] seq_bias;
 
     // K-tiling control (accumulator persistent-sum passes)
     logic seq_tile_first, seq_tile_last;
     logic accum_pass_done;
 
     // pipeline final output
-    logic signed [1:0][15:0] final_row_out;
+    logic signed [NUM_COLS-1:0][15:0] final_row_out;
     logic               final_row_valid;
 
     // soft-reset from sequencer (CMD_RESET)
@@ -127,7 +138,12 @@ module tpu_top #(
     logic dp_reset;
     assign dp_reset = rst | seq_tpu_reset;
 
-    tpu_sequencer #(.WAIT_TIMEOUT(200)) u_seq (
+    tpu_sequencer #(
+        .ARRAY_ROWS   (ARRAY_ROWS),
+        .NUM_COLS     (NUM_COLS),
+        .M_TILE       (M_TILE),
+        .WAIT_TIMEOUT (200)
+    ) u_seq (
         .clk              (clk),
         .reset            (rst),
         // RX
@@ -138,10 +154,8 @@ module tpu_top #(
         .tx_valid         (tx_valid_seq),
         .tx_busy          (tx_busy),
         // weight_fifo
-        .write_enable_col_0 (seq_we_col_0),
-        .write_data_col_0   (seq_wd_col_0),
-        .write_enable_col_1 (seq_we_col_1),
-        .write_data_col_1   (seq_wd_col_1),
+        .write_enable_col   (seq_we_col),
+        .write_data_col     (seq_wd_col),
         .swap_banks         (seq_swap_banks),
         .loading_phase      (seq_loading_phase),
         // unified_buffer host-write
@@ -170,54 +184,47 @@ module tpu_top #(
     // =========================================================================
 
     // unified_buffer → systolic_data_setup
-    logic signed [1:0][7:0] ub_read_data;
+    logic signed [ARRAY_ROWS-1:0][7:0] ub_read_data;
     logic              ub_read_valid;
 
     // systolic_data_setup → MMU
-    logic signed [1:0][7:0] skewed_act;
-    logic              [1:0] skewed_valid;
-
-    // sequencer's per-column weight_fifo write port, packed into arrays
-    // for weight_fifo's generate-block column interface
-    logic              [1:0] seq_we_col;
-    logic signed [1:0][7:0]  seq_wd_col;
-    assign seq_we_col[0] = seq_we_col_0;
-    assign seq_we_col[1] = seq_we_col_1;
-    assign seq_wd_col[0] = seq_wd_col_0;
-    assign seq_wd_col[1] = seq_wd_col_1;
+    logic signed [ARRAY_ROWS-1:0][7:0] skewed_act;
+    logic        [ARRAY_ROWS-1:0]      skewed_valid;
 
     // weight_fifo → MMU
-    logic signed [1:0][7:0] wf_col;
-    logic              [1:0] wf_col_valid;
+    logic signed [NUM_COLS-1:0][7:0] wf_col;
+    logic        [NUM_COLS-1:0]      wf_col_valid;
 
     // MMU → accumulator
-    logic signed [1:0][15:0] accum_in_data;
-    logic              [1:0] accum_in_valid;
+    logic signed [NUM_COLS-1:0][15:0] accum_in_data;
+    logic        [NUM_COLS-1:0]       accum_in_valid;
 
     // accumulator → bias
-    logic signed [1:0][15:0] acc_row_out;
+    logic signed [NUM_COLS-1:0][15:0] acc_row_out;
     logic               acc_row_valid;
 
     // bias → activation
-    logic signed [1:0][15:0] biased_row;
+    logic signed [NUM_COLS-1:0][15:0] biased_row;
     logic               biased_valid;
 
     // Activation write port tied off (single-layer mode)
-    logic signed [1:0][7:0] ub_act_dummy;
-    assign ub_act_dummy[0] = 8'sd0;
-    assign ub_act_dummy[1] = 8'sd0;
+    logic signed [ARRAY_ROWS-1:0][7:0] ub_act_dummy;
+    assign ub_act_dummy = '0;
 
     // =========================================================================
     // Module instantiations
     // =========================================================================
 
-    unified_buffer #(.ROWS(2), .COLS(2), .DATA_WIDTH(8)) u_ub (
+    // UB geometry: ROWS = M_TILE addresses, each holding one ARRAY_ROWS-wide
+    // activation row (COLS must equal ARRAY_ROWS — its read port feeds
+    // systolic_data_setup's ARRAY_ROWS-wide input).
+    unified_buffer #(.ROWS(M_TILE), .COLS(ARRAY_ROWS), .DATA_WIDTH(8)) u_ub (
         .clk                (clk),
         .reset              (dp_reset),
         .host_write_addr    (seq_hw_addr),
         .host_write_data    (seq_hw_data),
         .host_write_valid   (seq_hw_valid),
-        .host_read_addr     (1'b0),
+        .host_read_addr     ({UB_ADDR_W{1'b0}}),
         .host_read_data     (),
         .host_read_en       (1'b0),
         .host_read_valid    (),
@@ -231,7 +238,7 @@ module tpu_top #(
         .bank_swap          (1'b0)
     );
 
-    weight_fifo #(.WEIGHT_WIDTH(WEIGHT_WIDTH), .FIFO_DEPTH(FIFO_DEPTH), .NUM_COLS(2)) u_wf (
+    weight_fifo #(.WEIGHT_WIDTH(WEIGHT_WIDTH), .FIFO_DEPTH(FIFO_DEPTH), .NUM_COLS(NUM_COLS)) u_wf (
         .clk                (clk),
         .reset              (dp_reset),
         .write_enable_col   (seq_we_col),
@@ -247,7 +254,7 @@ module tpu_top #(
         .any_shadow_full    ()
     );
 
-    systolic_data_setup #(.ARRAY_ROWS(2), .DATA_WIDTH(8)) u_sds (
+    systolic_data_setup #(.ARRAY_ROWS(ARRAY_ROWS), .DATA_WIDTH(8)) u_sds (
         .clk            (clk),
         .reset          (dp_reset),
         .ub_read_data   (ub_read_data),
@@ -256,7 +263,7 @@ module tpu_top #(
         .mmu_in_valid   (skewed_valid)
     );
 
-    mmu #(.ARRAY_ROWS(2), .NUM_COLS(2)) u_mmu (
+    mmu #(.ARRAY_ROWS(ARRAY_ROWS), .NUM_COLS(NUM_COLS)) u_mmu (
         .clk                   (clk),
         .reset                 (dp_reset),
         .loading_phase         (seq_loading_phase),
@@ -269,7 +276,10 @@ module tpu_top #(
         .out_partial_sum_valid (accum_in_valid)
     );
 
-    accumulator #(.NUM_COLS(2), .PSUM_WIDTH(16), .FIFO_DEPTH(FIFO_DEPTH)) u_accum (
+    // accumulator's ARRAY_ROWS parameter counts output rows per pass — that
+    // is M_TILE (one output row per streamed activation row), not the
+    // systolic row count.
+    accumulator #(.NUM_COLS(NUM_COLS), .PSUM_WIDTH(16), .FIFO_DEPTH(FIFO_DEPTH), .ARRAY_ROWS(M_TILE)) u_accum (
         .clk                  (clk),
         .reset                (dp_reset),
         .in_partial_sum       (accum_in_data),
@@ -282,7 +292,7 @@ module tpu_top #(
         .any_fifo_full        ()
     );
 
-    bias #(.NUM_COLS(2), .PSUM_WIDTH(16)) u_bias (
+    bias #(.NUM_COLS(NUM_COLS), .PSUM_WIDTH(16)) u_bias (
         .clk          (clk),
         .reset        (dp_reset),
         .in_row       (acc_row_out),
@@ -292,7 +302,7 @@ module tpu_top #(
         .out_row_valid(biased_valid)
     );
 
-    activation #(.NUM_COLS(2), .PSUM_WIDTH(16)) u_act (
+    activation #(.NUM_COLS(NUM_COLS), .PSUM_WIDTH(16)) u_act (
         .clk          (clk),
         .reset        (dp_reset),
         .in_row       (biased_row),

@@ -8,7 +8,7 @@
 //
 //  Host → FPGA packet:
 //    [0]  CMD   byte
-//    [1]  LEN   byte  (number of payload bytes that follow; 0..8)
+//    [1]  LEN   byte  (number of payload bytes that follow)
 //    [2…] payload[LEN]
 //
 //  FPGA → Host response (sent after CMD is fully executed):
@@ -16,21 +16,31 @@
 //    [1]  LEN     number of response payload bytes
 //    [2…] payload[LEN]
 //
-//  Command table
+//  Command table (byte counts below are for the generic ARRAY_ROWS x NUM_COLS
+//  array with M_TILE activation rows; the historical 2x2 values in parens)
 //
-//  0x01  LOAD_WEIGHTS  LEN=4  payload: [w10, w11, w00, w01]  (int8, signed)
-//                             w10/w11 = bottom row first (sequencer writes them
-//                             into the weight_fifo in the order the MMU expects)
+//  0x01  LOAD_WEIGHTS  LEN=ARRAY_ROWS*NUM_COLS (4)
+//                             payload: weight rows BOTTOM-FIRST, each row
+//                             NUM_COLS bytes (int8, signed) — i.e. for 2x2:
+//                             [w10, w11, w00, w01]. The bottom-first wire
+//                             order matches the order the sequencer presents
+//                             rows to the weight_fifo (see the staggered
+//                             loading contract in weight_fifo.sv).
 //
-//  0x02  LOAD_BIAS     LEN=4  payload: [b0_lo, b0_hi, b1_lo, b1_hi] (int16 LE)
+//  0x02  LOAD_BIAS     LEN=2*NUM_COLS (4)
+//                             payload: NUM_COLS int16 LE values:
+//                             [b0_lo, b0_hi, b1_lo, b1_hi, ...]
 //
-//  0x03  LOAD_ACT      LEN=4  payload: [a00, a01, a10, a11]  (int8, signed)
+//  0x03  LOAD_ACT      LEN=M_TILE*ARRAY_ROWS (4)
+//                             payload: activation rows in natural row-major
+//                             order, each row ARRAY_ROWS bytes (int8, signed)
+//                             — i.e. for 2x2: [a00, a01, a10, a11]
 //
 //  0x04  RUN           LEN=0  orchestrates the full pipeline; blocks until
-//                             both output rows are collected, then sends back:
-//                             STATUS=0xAA, LEN=8,
-//                             [r0c0_lo, r0c0_hi, r0c1_lo, r0c1_hi,
-//                              r1c0_lo, r1c0_hi, r1c1_lo, r1c1_hi]
+//                             all M_TILE output rows are collected, then sends:
+//                             STATUS=0xAA, LEN=2*M_TILE*NUM_COLS (8),
+//                             row-major int16 LE results:
+//                             [r0c0_lo, r0c0_hi, r0c1_lo, r0c1_hi, ...]
 //                      LEN=1  payload: [flags]  -- K-tiling variant:
 //                             flags[0] = TILE_FIRST (1 = overwrite the
 //                               accumulator's running sum with this pass;
@@ -38,47 +48,61 @@
 //                               started by an earlier RUN)
 //                             flags[1] = TILE_LAST (1 = forward the
 //                               now-final running sum through bias/ReLU and
-//                               return the usual 8-byte result; 0 = update
+//                               return the usual result bytes; 0 = update
 //                               the running sum only -- bias/activation
 //                               never fire, response is STATUS=0xAA, LEN=0)
 //                             LEN=0 is equivalent to flags=TILE_FIRST|TILE_LAST
-//                             (today's single-shot behavior, unchanged for
-//                             existing hosts that never send the byte).
+//                             (single-shot behavior, unchanged for existing
+//                             hosts that never send the byte).
 //                             See rtl/accumulator.sv for the accumulation
 //                             semantics this threads into.
 //
 //  0x05  RESET         LEN=0  pulses internal reset for 4 cycles; responds OK
 //
-//  Pipeline orchestration for RUN
+//  Pipeline orchestration for RUN (counter-driven; the 2x2 special case
+//  matches the task sequencing in tpu_core_tb.sv cycle-for-cycle)
 //
-//  Steps driven cycle-accurately (matches tpu_core_tb.sv task sequencing):
-//
-//   1. Write act row 0 → unified_buffer (host_write_addr=0, host_write_valid)
-//   2. Write act row 1 → unified_buffer (host_write_addr=1, host_write_valid)
-//   3. Write weight bottom row (w10,w11) → weight_fifo shadow bank
-//   4. Write weight top row    (w00,w01) → weight_fifo shadow bank
-//   5. swap_banks = 1 for 1 cycle
-//   6. loading_phase = 1 for 3 cycles  (drains 2-row weight FIFO + 1 guard)
-//   7. ub_read_en = 1, addr=0  (row 0 → SDS → MMU)
-//   8. ub_read_en = 1, addr=1  (row 1 → SDS → MMU)
-//   9. Wait for final_row_valid × 2 (collect both output rows, 50-cycle timeout)
-//  10. Pack and transmit 8-byte result via UART TX
+//   1. S_WR_UB   : write act row m → unified_buffer, m = 0 .. M_TILE-1
+//   2. S_LD_WF   : write weight row (ARRAY_ROWS-1-i) → weight_fifo shadow
+//                  bank, i = 0 .. ARRAY_ROWS-1 (bottom row FIRST — row index
+//                  counts down while the loop counter counts up; getting this
+//                  direction wrong silently transposes every weight matrix)
+//   3. S_LD_WF_GAP: one idle cycle after WF writes
+//   4. S_SWAP    : swap_banks = 1 for 1 cycle
+//   5. S_LOADING : loading_phase = 1 for ARRAY_ROWS+1 cycles (drains the
+//                  ARRAY_ROWS-row weight FIFO + 1 guard cycle)
+//   6. S_STREAM  : ub_read_en, addr = 0 .. M_TILE-1 (rows → SDS → MMU)
+//   7. S_WAIT    : wait for final_row_valid × M_TILE (or accum_pass_done for
+//                  a mid-K-reduction pass), timeout-guarded
+//   8. Pack and transmit the result via UART TX
 //
 //  Timing notes
 //
 //  All internal control signals follow the one-cycle registered latency
 //  convention used throughout the rest of the RTL (pe.sv, accumulator.sv …).
-//  Steps 3–8 replicate the exact task ordering in tpu_core_tb.sv:
-//    load_weights  → trigger_weight_load → stream_activations_from_ub
 //
 //  Parameters
 //
-//  WAIT_TIMEOUT — max cycles to wait for two final_row_valid pulses in EXEC_WAIT
-//                 before flagging an error.  Default 200 is very conservative;
-//                 the real latency is ~15 cycles from stream_activations start.
+//  ARRAY_ROWS   — systolic rows = K-tile depth (weight rows; also the width
+//                 of one activation row streamed into the array)
+//  NUM_COLS     — systolic columns = N-tile width (weight columns)
+//  M_TILE       — unified_buffer address depth = activation rows streamed per
+//                 RUN. Defaults to ARRAY_ROWS (the historical square case).
+//                 Must equal unified_buffer's ROWS and accumulator's
+//                 rows-per-pass parameter.
+//  WAIT_TIMEOUT — max cycles to wait in S_WAIT before flagging an error.
+//                 Default 200 is very conservative; the real latency is
+//                 ~15 cycles from stream_activations start at 2x2.
 
 module tpu_sequencer #(
-    parameter int WAIT_TIMEOUT = 200
+    parameter int ARRAY_ROWS   = 2,
+    parameter int NUM_COLS     = 2,
+    parameter int M_TILE       = ARRAY_ROWS,
+    parameter int WAIT_TIMEOUT = 200,
+    // Derived; do not override. Address width of the unified_buffer
+    // host-write / UB-read ports (matches unified_buffer's
+    // ADDR_WIDTH = $clog2(ROWS) with ROWS = M_TILE).
+    parameter int UB_ADDR_W    = (M_TILE > 1) ? $clog2(M_TILE) : 1
 ) (
     input  logic clk,
     input  logic reset,
@@ -90,21 +114,22 @@ module tpu_sequencer #(
     output logic       tx_valid,
     input  logic       tx_busy,
 
-    output logic              write_enable_col_0,
-    output logic signed [7:0] write_data_col_0,
-    output logic              write_enable_col_1,
-    output logic signed [7:0] write_data_col_1,
-    output logic              swap_banks,
-    output logic              loading_phase,
+    // weight_fifo (one write enable/data lane per column, array-port style)
+    output logic        [NUM_COLS-1:0]      write_enable_col,
+    output logic signed [NUM_COLS-1:0][7:0] write_data_col,
+    output logic                            swap_banks,
+    output logic                            loading_phase,
 
-    output logic              host_write_addr,
-    output logic signed [1:0][7:0] host_write_data,
-    output logic              host_write_valid,
+    // unified_buffer host-write port
+    output logic        [UB_ADDR_W-1:0]        host_write_addr,
+    output logic signed [ARRAY_ROWS-1:0][7:0]  host_write_data,
+    output logic                               host_write_valid,
 
-    output logic              ub_read_addr,
-    output logic              ub_read_en,
+    // unified_buffer UB-read port
+    output logic        [UB_ADDR_W-1:0]        ub_read_addr,
+    output logic                               ub_read_en,
 
-    output logic signed [1:0][15:0] out_bias,
+    output logic signed [NUM_COLS-1:0][15:0]   out_bias,
 
     // K-tiling control -- see CMD_RUN above and rtl/accumulator.sv. Held
     // stable for the full RUN orchestration sequence.
@@ -112,7 +137,7 @@ module tpu_sequencer #(
     output logic               tile_last,
     input  logic               accum_pass_done,
 
-    input  logic signed [1:0][15:0] final_row_out,
+    input  logic signed [NUM_COLS-1:0][15:0] final_row_out,
     input  logic               final_row_valid,
 
     output logic               tpu_reset,
@@ -131,18 +156,36 @@ module tpu_sequencer #(
 
     localparam int TIMEOUT_W = $clog2(WAIT_TIMEOUT + 1);
 
+    localparam int ROWS_GOT_W = $clog2(M_TILE + 1);
+
+    // Frame payload sizes (bytes). The RX payload buffer must hold the
+    // largest fixed-shape command; floor of 8 preserves the original 2x2
+    // buffer size (and headroom for short unknown commands).
+    localparam int W_BYTES       = ARRAY_ROWS * NUM_COLS;   // LOAD_WEIGHTS
+    localparam int A_BYTES       = M_TILE * ARRAY_ROWS;     // LOAD_ACT
+    localparam int B_BYTES       = 2 * NUM_COLS;            // LOAD_BIAS
+    localparam int MAX_WA        = (W_BYTES > A_BYTES) ? W_BYTES : A_BYTES;
+    localparam int MAX_WAB       = (MAX_WA > B_BYTES) ? MAX_WA : B_BYTES;
+    localparam int PAYLOAD_BYTES = (MAX_WAB > 8) ? MAX_WAB : 8;
+
+    // RUN response: STATUS + LEN + int16 LE result matrix, row-major
+    localparam int RESULT_BYTES = 2 * M_TILE * NUM_COLS;
+    localparam int TX_BYTES     = 2 + RESULT_BYTES;
+
     // Persistent register file (survives across commands)
-    // Weights are stored as received: [0]=w10,[1]=w11,[2]=w00,[3]=w01
-    logic signed [7:0]  reg_weights [4];
-    logic signed [7:0]  reg_act     [4];   // [a00,a01,a10,a11]
-    logic signed [15:0] reg_bias    [2];
+    // reg_weights is stored in NATURAL row-major order (row 0 = top row);
+    // the bottom-first wire order of LOAD_WEIGHTS is undone at unpack time,
+    // and S_LD_WF re-derives it at presentation time (see §2.3 of
+    // docs/SEQUENCER_REDESIGN.md).
+    logic signed [7:0]  reg_weights [ARRAY_ROWS][NUM_COLS];
+    logic signed [7:0]  reg_act     [M_TILE][ARRAY_ROWS];
+    logic signed [15:0] reg_bias    [NUM_COLS];
     logic               reg_tile_first;
     logic               reg_tile_last;
 
-    // Results captured from pipeline
-    logic signed [15:0] result_row0 [2];
-    logic signed [15:0] result_row1 [2];
-    logic                result_ok;
+    // Results captured from pipeline, one row per final_row_valid pulse
+    logic signed [15:0] result_rows [M_TILE][NUM_COLS];
+    logic               result_ok;
 
     // FSM states
     typedef enum logic [4:0] {
@@ -151,27 +194,21 @@ module tpu_sequencer #(
         S_RECV_PAYLOAD  = 5'd2,
         S_EXEC_DISPATCH = 5'd3,
 
-        // RUN substates — match task sequence in tpu_core_tb.sv
-        S_WR_UB_0       = 5'd4,
-        S_WR_UB_1       = 5'd5,
-        S_LD_WF_0       = 5'd6,
-        S_LD_WF_1       = 5'd7,
-        S_LD_WF_GAP     = 5'd8,   // 1-cycle gap after WF writes
-        S_SWAP          = 5'd9,
-        S_LOADING_0     = 5'd10,
-        S_LOADING_1     = 5'd11,
-        S_LOADING_2     = 5'd12,
-        S_STREAM_0      = 5'd13,
-        S_STREAM_1      = 5'd14,
-        S_WAIT          = 5'd15,
+        // RUN substates — counter-driven loops (run_cnt), one state per phase
+        S_WR_UB         = 5'd4,
+        S_LD_WF         = 5'd5,
+        S_LD_WF_GAP     = 5'd6,   // 1-cycle gap after WF writes
+        S_SWAP          = 5'd7,
+        S_LOADING       = 5'd8,
+        S_STREAM        = 5'd9,
+        S_WAIT          = 5'd10,
 
         // RESET substate
-        S_RESET_PULSE   = 5'd16,
+        S_RESET_PULSE   = 5'd11,
 
         // TX substates
-        S_TX_STATUS     = 5'd17,
-        S_TX_LEN        = 5'd18,
-        S_TX_DATA       = 5'd19
+        S_TX_STATUS     = 5'd12,
+        S_TX_DATA       = 5'd13
     } state_t;
 
     state_t state;
@@ -180,26 +217,29 @@ module tpu_sequencer #(
     logic [7:0] cmd_reg;
     logic [7:0] len_reg;
     logic [7:0] byte_cnt;
-    logic [7:0] payload [8];
+    logic [7:0] payload [PAYLOAD_BYTES];
 
     // TX bookkeeping
     logic [7:0] tx_len_reg;
     logic [7:0] tx_byte_idx;
-    logic [7:0] tx_payload [10];
+    logic [7:0] tx_payload [TX_BYTES];
+
+    // Shared loop counter for the RUN substates (each phase resets it on exit)
+    logic [7:0] run_cnt;
 
     // WAIT timeout
-    logic [TIMEOUT_W-1:0] wait_cnt;
-    logic [1:0]            rows_got;
+    logic [TIMEOUT_W-1:0]  wait_cnt;
+    logic [ROWS_GOT_W-1:0] rows_got;
 
     // RESET pulse counter
     logic [2:0] reset_cnt;
 
     // Drive out_bias / tile_first / tile_last to the datapath at all times
     always_comb begin
-        out_bias[0] = reg_bias[0];
-        out_bias[1] = reg_bias[1];
-        tile_first  = reg_tile_first;
-        tile_last   = reg_tile_last;
+        for (int c = 0; c < NUM_COLS; c++)
+            out_bias[c] = reg_bias[c];
+        tile_first = reg_tile_first;
+        tile_last  = reg_tile_last;
     end
 
     always_ff @(posedge clk) begin
@@ -208,41 +248,45 @@ module tpu_sequencer #(
             cmd_reg           <= '0;
             len_reg           <= '0;
             byte_cnt          <= '0;
-            for (int i = 0; i < 4; i++) payload[i]     <= '0;
-            for (int i = 0; i < 4; i++) reg_weights[i] <= '0;
-            for (int i = 0; i < 4; i++) reg_act[i]     <= '0;
-            reg_bias[0]       <= '0;
-            reg_bias[1]       <= '0;
+            for (int i = 0; i < PAYLOAD_BYTES; i++) payload[i] <= '0;
+            for (int r = 0; r < ARRAY_ROWS; r++)
+                for (int c = 0; c < NUM_COLS; c++)
+                    reg_weights[r][c] <= '0;
+            for (int m = 0; m < M_TILE; m++)
+                for (int k = 0; k < ARRAY_ROWS; k++)
+                    reg_act[m][k] <= '0;
+            for (int c = 0; c < NUM_COLS; c++)
+                reg_bias[c] <= '0;
             reg_tile_first    <= 1'b1;
             reg_tile_last     <= 1'b1;
-            result_row0[0]    <= '0; result_row0[1] <= '0;
-            result_row1[0]    <= '0; result_row1[1] <= '0;
+            for (int m = 0; m < M_TILE; m++)
+                for (int c = 0; c < NUM_COLS; c++)
+                    result_rows[m][c] <= '0;
             result_ok         <= 1'b0;
 
-            write_enable_col_0 <= 1'b0;
-            write_data_col_0   <= '0;
-            write_enable_col_1 <= 1'b0;
-            write_data_col_1   <= '0;
+            write_enable_col   <= '0;
+            for (int c = 0; c < NUM_COLS; c++)
+                write_data_col[c] <= '0;
             swap_banks         <= 1'b0;
             loading_phase      <= 1'b0;
-            host_write_addr    <= 1'b0;
-            host_write_data[0] <= '0;
-            host_write_data[1] <= '0;
+            host_write_addr    <= '0;
+            for (int k = 0; k < ARRAY_ROWS; k++)
+                host_write_data[k] <= '0;
             host_write_valid   <= 1'b0;
-            ub_read_addr       <= 1'b0;
+            ub_read_addr       <= '0;
             ub_read_en         <= 1'b0;
             tx_data            <= '0;
             tx_valid           <= 1'b0;
             tx_len_reg         <= '0;
             tx_byte_idx        <= '0;
+            run_cnt            <= '0;
             wait_cnt           <= '0;
             rows_got           <= '0;
             reset_cnt          <= '0;
             tpu_reset          <= 1'b0;
             busy               <= 1'b0;
         end else begin
-            write_enable_col_0 <= 1'b0;
-            write_enable_col_1 <= 1'b0;
+            write_enable_col   <= '0;
             swap_banks         <= 1'b0;
             loading_phase      <= 1'b0;
             host_write_valid   <= 1'b0;
@@ -251,16 +295,10 @@ module tpu_sequencer #(
             tpu_reset          <= 1'b0;
 
             // Always capture result rows when the pipeline fires
-            if (final_row_valid) begin
-                if (rows_got == 2'd0) begin
-                    result_row0[0] <= final_row_out[0];
-                    result_row0[1] <= final_row_out[1];
-                    rows_got       <= 2'd1;
-                end else if (rows_got == 2'd1) begin
-                    result_row1[0] <= final_row_out[0];
-                    result_row1[1] <= final_row_out[1];
-                    rows_got       <= 2'd2;
-                end
+            if (final_row_valid && rows_got < ROWS_GOT_W'(M_TILE)) begin
+                for (int c = 0; c < NUM_COLS; c++)
+                    result_rows[rows_got][c] <= final_row_out[c];
+                rows_got <= rows_got + 1'b1;
             end
 
             case (state)
@@ -305,10 +343,14 @@ module tpu_sequencer #(
                 S_EXEC_DISPATCH: begin
                     case (cmd_reg)
 
-                        // LOAD_WEIGHTS: store into reg_weights, ACK immediately
+                        // LOAD_WEIGHTS: wire order is bottom row first, so
+                        // payload row-chunk i is array row ARRAY_ROWS-1-i.
+                        // Stored in natural order; ACK immediately.
                         CMD_LOAD_WEIGHTS: begin
-                            for (int i = 0; i < 4; i++)
-                                reg_weights[i] <= signed'(payload[i]);
+                            for (int i = 0; i < ARRAY_ROWS; i++)
+                                for (int c = 0; c < NUM_COLS; c++)
+                                    reg_weights[ARRAY_ROWS-1-i][c]
+                                        <= signed'(payload[i*NUM_COLS + c]);
                             // Build ACK: STATUS_OK, LEN=0
                             tx_payload[0] <= STATUS_OK;
                             tx_payload[1] <= 8'h00;
@@ -317,10 +359,10 @@ module tpu_sequencer #(
                             state         <= S_TX_STATUS;
                         end
 
-                        // LOAD_BIAS: unpack two signed 16-bit LE values
+                        // LOAD_BIAS: unpack NUM_COLS signed 16-bit LE values
                         CMD_LOAD_BIAS: begin
-                            reg_bias[0] <= signed'({payload[1], payload[0]});
-                            reg_bias[1] <= signed'({payload[3], payload[2]});
+                            for (int c = 0; c < NUM_COLS; c++)
+                                reg_bias[c] <= signed'({payload[2*c+1], payload[2*c]});
                             tx_payload[0] <= STATUS_OK;
                             tx_payload[1] <= 8'h00;
                             tx_len_reg    <= 8'd2;
@@ -328,10 +370,12 @@ module tpu_sequencer #(
                             state         <= S_TX_STATUS;
                         end
 
-                        // LOAD_ACT: store into reg_act
+                        // LOAD_ACT: natural row-major, M_TILE rows of
+                        // ARRAY_ROWS bytes each
                         CMD_LOAD_ACT: begin
-                            for (int i = 0; i < 4; i++)
-                                reg_act[i] <= signed'(payload[i]);
+                            for (int m = 0; m < M_TILE; m++)
+                                for (int k = 0; k < ARRAY_ROWS; k++)
+                                    reg_act[m][k] <= signed'(payload[m*ARRAY_ROWS + k]);
                             tx_payload[0] <= STATUS_OK;
                             tx_payload[1] <= 8'h00;
                             tx_len_reg    <= 8'd2;
@@ -343,9 +387,10 @@ module tpu_sequencer #(
                         // LEN=0 -> first=last=1 (single-shot, back-compat).
                         // LEN=1 -> payload[0][0]=TILE_FIRST, [1]=TILE_LAST.
                         CMD_RUN: begin
-                            rows_got  <= 2'd0;
+                            rows_got  <= '0;
                             result_ok <= 1'b0;
                             wait_cnt  <= '0;
+                            run_cnt   <= '0;
                             if (len_reg == 8'd1) begin
                                 reg_tile_first <= payload[0][0];
                                 reg_tile_last  <= payload[0][1];
@@ -353,7 +398,7 @@ module tpu_sequencer #(
                                 reg_tile_first <= 1'b1;
                                 reg_tile_last  <= 1'b1;
                             end
-                            state     <= S_WR_UB_0;
+                            state     <= S_WR_UB;
                         end
 
                         // RESET: pulse tpu_reset
@@ -374,105 +419,92 @@ module tpu_sequencer #(
                 end
 
                 // RUN substates
-                // Step 1: write_activations_to_ub — row 0
-                S_WR_UB_0: begin
-                    host_write_addr    <= 1'b0;
-                    host_write_data[0] <= reg_act[0];   // a00
-                    host_write_data[1] <= reg_act[1];   // a01
+                // Step 1: write activation row run_cnt → unified_buffer
+                S_WR_UB: begin
+                    host_write_addr    <= UB_ADDR_W'(run_cnt);
+                    for (int k = 0; k < ARRAY_ROWS; k++)
+                        host_write_data[k] <= reg_act[run_cnt][k];
                     host_write_valid   <= 1'b1;
-                    state              <= S_WR_UB_1;
+                    if (run_cnt == 8'(M_TILE - 1)) begin
+                        run_cnt <= '0;
+                        state   <= S_LD_WF;
+                    end else begin
+                        run_cnt <= run_cnt + 8'd1;
+                    end
                 end
 
-                // Step 2: write_activations_to_ub — row 1
-                S_WR_UB_1: begin
-                    host_write_addr    <= 1'b1;
-                    host_write_data[0] <= reg_act[2];   // a10
-                    host_write_data[1] <= reg_act[3];   // a11
-                    host_write_valid   <= 1'b1;
-                    state              <= S_LD_WF_0;
+                // Step 2: load weights, bottom row FIRST (staggered loading
+                // contract, weight_fifo.sv): row index counts DOWN from
+                // ARRAY_ROWS-1 while run_cnt counts up.
+                S_LD_WF: begin
+                    for (int c = 0; c < NUM_COLS; c++) begin
+                        write_enable_col[c] <= 1'b1;
+                        write_data_col[c]   <= reg_weights[ARRAY_ROWS-1-run_cnt][c];
+                    end
+                    if (run_cnt == 8'(ARRAY_ROWS - 1)) begin
+                        run_cnt <= '0;
+                        state   <= S_LD_WF_GAP;
+                    end else begin
+                        run_cnt <= run_cnt + 8'd1;
+                    end
                 end
 
-                // Step 3: load_weights — bottom row first (w10, w11)
-                S_LD_WF_0: begin
-                    write_enable_col_0 <= 1'b1;
-                    write_data_col_0   <= reg_weights[0];   // w10
-                    write_enable_col_1 <= 1'b1;
-                    write_data_col_1   <= reg_weights[1];   // w11
-                    state              <= S_LD_WF_1;
-                end
-
-                // Step 4: load_weights — top row (w00, w01)
-                S_LD_WF_1: begin
-                    write_enable_col_0 <= 1'b1;
-                    write_data_col_0   <= reg_weights[2];   // w00
-                    write_enable_col_1 <= 1'b1;
-                    write_data_col_1   <= reg_weights[3];   // w01
-                    state              <= S_LD_WF_GAP;
-                end
-
-                // Step 4b: one idle cycle after WF writes, before swap
+                // Step 2b: one idle cycle after WF writes, before swap
                 // (matches: @(posedge clk); #1; in load_weights task)
                 S_LD_WF_GAP: begin
                     state <= S_SWAP;
                 end
 
-                // Step 5: swap_banks = 1 for 1 cycle
+                // Step 3: swap_banks = 1 for 1 cycle
                 S_SWAP: begin
                     swap_banks <= 1'b1;
-                    state      <= S_LOADING_0;
+                    state      <= S_LOADING;
                 end
 
-                // Step 6: loading_phase = 1 for 3 cycles
-                S_LOADING_0: begin
+                // Step 4: loading_phase = 1 for ARRAY_ROWS+1 cycles
+                // (ARRAY_ROWS drain cycles + 1 guard)
+                S_LOADING: begin
                     loading_phase <= 1'b1;
-                    state         <= S_LOADING_1;
-                end
-                S_LOADING_1: begin
-                    loading_phase <= 1'b1;
-                    state         <= S_LOADING_2;
-                end
-                S_LOADING_2: begin
-                    loading_phase <= 1'b1;
-                    state         <= S_STREAM_0;
+                    if (run_cnt == 8'(ARRAY_ROWS)) begin
+                        run_cnt <= '0;
+                        state   <= S_STREAM;
+                    end else begin
+                        run_cnt <= run_cnt + 8'd1;
+                    end
                 end
 
-                // Step 7: ub_read_en addr=0 (row 0 → SDS → MMU)
-                S_STREAM_0: begin
-                    ub_read_addr <= 1'b0;
+                // Step 5: stream UB rows 0 .. M_TILE-1 (→ SDS → MMU)
+                S_STREAM: begin
+                    ub_read_addr <= UB_ADDR_W'(run_cnt);
                     ub_read_en   <= 1'b1;
-                    state        <= S_STREAM_1;
+                    if (run_cnt == 8'(M_TILE - 1)) begin
+                        run_cnt <= '0;
+                        state   <= S_WAIT;
+                    end else begin
+                        run_cnt <= run_cnt + 8'd1;
+                    end
                 end
 
-                // Step 8: ub_read_en addr=1 (row 1 → SDS → MMU)
-                S_STREAM_1: begin
-                    ub_read_addr <= 1'b1;
-                    ub_read_en   <= 1'b1;
-                    state        <= S_WAIT;
-                end
-
-                // Step 9: wait for completion, then respond.
-                //   tile_last=1: wait for both final_row_valid pulses (as
-                //     before) and return the full 8-byte result.
+                // Step 6: wait for completion, then respond.
+                //   tile_last=1: wait for all M_TILE final_row_valid pulses
+                //     and return the full result matrix.
                 //   tile_last=0: wait for accum_pass_done instead (bias/
                 //     activation never fire this pass) and return a bare
                 //     ACK -- no result exists yet for a mid-K-reduction pass.
                 S_WAIT: begin
                     wait_cnt <= wait_cnt + 1'b1;
                     if (reg_tile_last) begin
-                        if (rows_got == 2'd2) begin
+                        if (rows_got == ROWS_GOT_W'(M_TILE)) begin
                             result_ok <= 1'b1;
-                            // Pack response: STATUS_OK, LEN=8, 8 payload bytes
+                            // Pack response: STATUS_OK, LEN, row-major int16 LE
                             tx_payload[0] <= STATUS_OK;
-                            tx_payload[1] <= 8'd8;
-                            tx_payload[2] <= result_row0[0][7:0];
-                            tx_payload[3] <= result_row0[0][15:8];
-                            tx_payload[4] <= result_row0[1][7:0];
-                            tx_payload[5] <= result_row0[1][15:8];
-                            tx_payload[6] <= result_row1[0][7:0];
-                            tx_payload[7] <= result_row1[0][15:8];
-                            tx_payload[8] <= result_row1[1][7:0];
-                            tx_payload[9] <= result_row1[1][15:8];
-                            tx_len_reg    <= 8'd10;   // 2 header + 8 data
+                            tx_payload[1] <= 8'(RESULT_BYTES);
+                            for (int m = 0; m < M_TILE; m++)
+                                for (int c = 0; c < NUM_COLS; c++) begin
+                                    tx_payload[2 + 2*(m*NUM_COLS + c)]     <= result_rows[m][c][7:0];
+                                    tx_payload[2 + 2*(m*NUM_COLS + c) + 1] <= result_rows[m][c][15:8];
+                                end
+                            tx_len_reg    <= 8'(TX_BYTES);
                             tx_byte_idx   <= 8'd0;
                             state         <= S_TX_STATUS;
                         end else if (wait_cnt == WAIT_TIMEOUT[TIMEOUT_W-1:0]) begin
@@ -517,9 +549,9 @@ module tpu_sequencer #(
                 end
 
                 // TX substates: serialize tx_payload via uart_tx
-                // All bytes go through S_TX_DATA; S_TX_STATUS / S_TX_LEN are
-                // aliases pointing at index 0 and 1 for readability, but the
-                // real logic is the generic byte-loop in S_TX_DATA.
+                // All bytes go through S_TX_DATA; S_TX_STATUS kicks off the
+                // loop by loading byte 0 (STATUS), but the real logic is the
+                // generic byte-loop in S_TX_DATA.
 
                 // Kick off by loading byte 0 (STATUS)
                 S_TX_STATUS: begin

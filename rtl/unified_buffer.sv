@@ -36,7 +36,7 @@ module unified_buffer #(
     // Systolic data setup read port, 2-cycle latency
     input  logic [ADDR_WIDTH-1:0]         ub_read_addr,
     input  logic                          ub_read_en,
-    output logic signed [ROWS-1:0][DATA_WIDTH-1:0] ub_read_data,
+    output logic signed [COLS-1:0][DATA_WIDTH-1:0] ub_read_data,
     output logic                          ub_read_valid,
 
     // Activation write port: address auto-increments on each valid pulse
@@ -115,7 +115,7 @@ module unified_buffer #(
             // Stage 2: read memory, register output
             ub_read_valid <= ub_en_r;
             if (ub_en_r)
-                for (int c = 0; c < ROWS; c++)
+                for (int c = 0; c < COLS; c++)
                     ub_read_data[c] <= mem[ub_bank_r][ub_addr_r][c];
         end
     end

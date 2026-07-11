@@ -78,11 +78,12 @@ DEPS_tpu_core             := $(RTL_tpu_datapath)
 DEPS_uart_rx              := $(RTL_uart_rx)
 DEPS_uart_tx              := $(RTL_uart_tx)
 DEPS_tpu_sequencer        := $(RTL_tpu_sequencer) $(RTL_tpu_datapath)
+DEPS_tpu_sequencer_4x2    := $(RTL_tpu_sequencer) $(RTL_tpu_datapath)
 
 TESTS := fifo pe mmu accumulator systolic_data_setup weight_fifo bias activation \
          unified_buffer \
          mmu_accum accum_bias bias_activation weight_fifo_mmu tpu_core \
-         uart_rx uart_tx tpu_sequencer
+         uart_rx uart_tx tpu_sequencer tpu_sequencer_4x2
 
 # de-duplicate dep lists (modules shared via multiple paths, e.g. tpu_core -> fifo.sv)
 dedup = $(if $1,$(firstword $1) $(call dedup,$(filter-out $(firstword $1),$1)))
@@ -114,6 +115,7 @@ build-tpu_core:             $(SIM_DIR)/tpu_core.vvp
 build-uart_rx:              $(SIM_DIR)/uart_rx.vvp
 build-uart_tx:              $(SIM_DIR)/uart_tx.vvp
 build-tpu_sequencer:        $(SIM_DIR)/tpu_sequencer.vvp
+build-tpu_sequencer_4x2:    $(SIM_DIR)/tpu_sequencer_4x2.vvp
 
 $(SIM_DIR)/unified_buffer.vvp: $(TEST_DIR)/unified_buffer_tb.sv $(call dedup,$(DEPS_unified_buffer)) | $(SIM_DIR)
 	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_unified_buffer)) $<
@@ -165,6 +167,9 @@ $(SIM_DIR)/uart_tx.vvp: $(TEST_DIR)/uart_tx_tb.sv $(call dedup,$(DEPS_uart_tx)) 
 
 $(SIM_DIR)/tpu_sequencer.vvp: $(TEST_DIR)/tpu_sequencer_tb.sv $(call dedup,$(DEPS_tpu_sequencer)) | $(SIM_DIR)
 	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_tpu_sequencer)) $<
+
+$(SIM_DIR)/tpu_sequencer_4x2.vvp: $(TEST_DIR)/tpu_sequencer_4x2_tb.sv $(call dedup,$(DEPS_tpu_sequencer_4x2)) | $(SIM_DIR)
+	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_tpu_sequencer_4x2)) $<
 
 # `make test-<name>` builds (if stale) and runs a single testbench, dumping
 # its VCD (if any) and console log into sim/
