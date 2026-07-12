@@ -44,6 +44,15 @@ CLK_FREQ ?= 12000000
 # (TICKS_PER_BIT = 13, +0.16% error, still within the mid-bit sample margin).
 BAUD_RATE ?= 1000000
 
+# Array geometry (see docs/SEQUENCER_REDESIGN.md §1): ARRAY_ROWS = K-tile
+# depth, NUM_COLS = N-tile width, M_TILE = activation rows per RUN. The RTL
+# is fully parameterized; these must match what tpu_host.py is invoked with
+# (--rows/--cols/--m-tile). FIFO_DEPTH in tpu_top.sv must stay a power of 2
+# >= ARRAY_ROWS (its default 4 covers up to 4 rows).
+ARRAY_ROWS ?= 2
+NUM_COLS   ?= 2
+M_TILE     ?= $(ARRAY_ROWS)
+
 # DFU alt-setting the FPGA bitstream (flash) lives on for this board's
 # default firmware -- matches pico-ice-sdk's own example Makefiles.
 DFU_ALT_FLASH := 0
@@ -78,6 +87,9 @@ $(TOP).json: $(RTL)
 		read_verilog -sv $(RTL); \
 		chparam -set CLK_FREQ $(CLK_FREQ) $(TOP); \
 		chparam -set BAUD_RATE $(BAUD_RATE) $(TOP); \
+		chparam -set ARRAY_ROWS $(ARRAY_ROWS) $(TOP); \
+		chparam -set NUM_COLS $(NUM_COLS) $(TOP); \
+		chparam -set M_TILE $(M_TILE) $(TOP); \
 		synth_ice40 -top $(TOP) -dsp -json $@"
 
 $(TOP).asc: $(TOP).json $(PCF)
@@ -92,6 +104,9 @@ stat: $(RTL)
 		read_verilog -sv $(RTL); \
 		chparam -set CLK_FREQ $(CLK_FREQ) $(TOP); \
 		chparam -set BAUD_RATE $(BAUD_RATE) $(TOP); \
+		chparam -set ARRAY_ROWS $(ARRAY_ROWS) $(TOP); \
+		chparam -set NUM_COLS $(NUM_COLS) $(TOP); \
+		chparam -set M_TILE $(M_TILE) $(TOP); \
 		synth_ice40 -top $(TOP) -dsp" 2>&1 \
 		| awk '/^=== design hierarchy ===/{exit} /^=== $(TOP) ===/{p=1} p'
 

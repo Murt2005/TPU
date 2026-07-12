@@ -79,11 +79,12 @@ DEPS_uart_rx              := $(RTL_uart_rx)
 DEPS_uart_tx              := $(RTL_uart_tx)
 DEPS_tpu_sequencer        := $(RTL_tpu_sequencer) $(RTL_tpu_datapath)
 DEPS_tpu_sequencer_4x2    := $(RTL_tpu_sequencer) $(RTL_tpu_datapath)
+DEPS_tpu_sequencer_2x4    := $(RTL_tpu_sequencer) $(RTL_tpu_datapath)
 
 TESTS := fifo pe mmu accumulator systolic_data_setup weight_fifo bias activation \
          unified_buffer \
          mmu_accum accum_bias bias_activation weight_fifo_mmu tpu_core \
-         uart_rx uart_tx tpu_sequencer tpu_sequencer_4x2
+         uart_rx uart_tx tpu_sequencer tpu_sequencer_4x2 tpu_sequencer_2x4
 
 # de-duplicate dep lists (modules shared via multiple paths, e.g. tpu_core -> fifo.sv)
 dedup = $(if $1,$(firstword $1) $(call dedup,$(filter-out $(firstword $1),$1)))
@@ -116,6 +117,7 @@ build-uart_rx:              $(SIM_DIR)/uart_rx.vvp
 build-uart_tx:              $(SIM_DIR)/uart_tx.vvp
 build-tpu_sequencer:        $(SIM_DIR)/tpu_sequencer.vvp
 build-tpu_sequencer_4x2:    $(SIM_DIR)/tpu_sequencer_4x2.vvp
+build-tpu_sequencer_2x4:    $(SIM_DIR)/tpu_sequencer_2x4.vvp
 
 $(SIM_DIR)/unified_buffer.vvp: $(TEST_DIR)/unified_buffer_tb.sv $(call dedup,$(DEPS_unified_buffer)) | $(SIM_DIR)
 	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_unified_buffer)) $<
@@ -171,6 +173,9 @@ $(SIM_DIR)/tpu_sequencer.vvp: $(TEST_DIR)/tpu_sequencer_tb.sv $(call dedup,$(DEP
 $(SIM_DIR)/tpu_sequencer_4x2.vvp: $(TEST_DIR)/tpu_sequencer_4x2_tb.sv $(call dedup,$(DEPS_tpu_sequencer_4x2)) | $(SIM_DIR)
 	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_tpu_sequencer_4x2)) $<
 
+$(SIM_DIR)/tpu_sequencer_2x4.vvp: $(TEST_DIR)/tpu_sequencer_2x4_tb.sv $(call dedup,$(DEPS_tpu_sequencer_2x4)) | $(SIM_DIR)
+	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_tpu_sequencer_2x4)) $<
+
 # `make test-<name>` builds (if stale) and runs a single testbench, dumping
 # its VCD (if any) and console log into sim/
 define RUN_RULE
@@ -200,8 +205,15 @@ clean:
 # ----------------------------------------------------------------------------
 # Real-hardware regression suite (pico2-ice) -- see tests/hw_regression.py
 # ----------------------------------------------------------------------------
+# ARRAY_ROWS/NUM_COLS/M_TILE must match the flashed bitstream's shape
+# (fpga/Makefile's knobs of the same names); defaults match both.
+ARRAY_ROWS ?= 2
+NUM_COLS   ?= 2
+M_TILE     ?= $(ARRAY_ROWS)
+
 hw-test:
 	@if [ -z "$(PORT)" ]; then \
-		echo "Usage: make hw-test PORT=/dev/cu.usbmodemXXXX"; exit 1; \
+		echo "Usage: make hw-test PORT=/dev/cu.usbmodemXXXX [ARRAY_ROWS=2 NUM_COLS=2 M_TILE=2]"; exit 1; \
 	fi
-	python3 tests/hw_regression.py --port $(PORT)
+	python3 tests/hw_regression.py --port $(PORT) \
+		--rows $(ARRAY_ROWS) --cols $(NUM_COLS) --m-tile $(M_TILE)

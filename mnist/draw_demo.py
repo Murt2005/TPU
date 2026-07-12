@@ -142,6 +142,12 @@ def main():
     p.add_argument("--led-port", help="serial device for the board's 'RP2040 logs' CDC port "
                                        "(optional -- LED feedback is skipped if not given)")
     p.add_argument("--offline", action="store_true", help="use the pure-numpy backend instead of real hardware")
+    p.add_argument("--rows", type=int, default=2,
+                    help="ARRAY_ROWS the flashed bitstream was built with (default 2)")
+    p.add_argument("--cols", type=int, default=2,
+                    help="NUM_COLS the flashed bitstream was built with (default 2)")
+    p.add_argument("--m-tile", type=int, default=None,
+                    help="M_TILE the flashed bitstream was built with (default: --rows)")
     args = p.parse_args()
 
     if not args.offline and not args.port:
@@ -158,7 +164,7 @@ def main():
         root.mainloop()
         return
 
-    with TPU(args.port) as tpu:
+    with TPU(args.port, rows=args.rows, cols=args.cols, m_tile=args.m_tile) as tpu:
         inference = MNISTInference(HardwareBackend(tpu), model)
         DrawApp(root, inference, led_serial)
         root.mainloop()

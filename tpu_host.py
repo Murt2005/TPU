@@ -1,36 +1,40 @@
 #!/usr/bin/env python3
 """Host-side driver for the UART command protocol implemented by
-rtl/tpu_sequencer.sv. Talks to a single 2x2 systolic array: load an int8
-weight matrix and an int8 activation matrix, optionally a per-column int16
-bias, then RUN to get back Y = ReLU(A @ W + bias) as a 2x2 int16 matrix.
+rtl/tpu_sequencer.sv. Talks to one ARRAY_ROWS x NUM_COLS systolic array
+(rows/cols/m_tile below, matching what the bitstream was built with --
+fpga/Makefile's ARRAY_ROWS/NUM_COLS/M_TILE): load an int8 weight matrix and
+an int8 activation matrix, optionally a per-column int16 bias, then RUN to
+get back Y = ReLU(A @ W + bias) as an (m_tile x cols) int16 matrix.
 
-Protocol (8-N-1, host-initiates everything -- see rtl/tpu_sequencer.sv):
+Protocol (8-N-1, host-initiates everything -- see rtl/tpu_sequencer.sv).
+All payload sizes derive from the array shape: W_BYTES = rows*cols,
+A_BYTES = m_tile*rows, B_BYTES = 2*cols, RESULT_BYTES = 2*m_tile*cols
+(the LEN values shown are for the default 2x2/M_TILE=2 shape):
 
     Host -> FPGA:  [CMD][LEN][payload[LEN]]
     FPGA -> Host:  [STATUS][LEN][payload[LEN]]   (STATUS: 0xAA=OK, 0xFF=ERR)
 
-    0x01 LOAD_WEIGHTS  LEN=4  [w10,w11,w00,w01]  int8, bottom row first
-    0x02 LOAD_BIAS     LEN=4  [b0_lo,b0_hi,b1_lo,b1_hi]  int16 LE
-    0x03 LOAD_ACT      LEN=4  [a00,a01,a10,a11]  int8, row-major
-    0x04 RUN           LEN=0  -> [r0c0,r0c1,r1c0,r1c1] int16 LE (8 bytes)
+    0x01 LOAD_WEIGHTS  LEN=W_BYTES(4)  int8, rows bottom-first, row-major within
+    0x02 LOAD_BIAS     LEN=B_BYTES(4)  per-column int16 LE
+    0x03 LOAD_ACT      LEN=A_BYTES(4)  int8, row-major
+    0x04 RUN           LEN=0  -> RESULT_BYTES(8) int16 LE, row-major
                or       LEN=1  [flags] -- K-tiling variant, see TPU.run()
     0x05 RESET         LEN=0
-    0x06 RUN_TILE      LEN=9  [flags, w00,w01,w10,w11, a00,a01,a10,a11] --
+    0x06 RUN_TILE      LEN=1+W_BYTES+A_BYTES(9)  [flags, w bytes, a bytes] --
                               LOAD_WEIGHTS+LOAD_ACT+RUN folded into one
                               round trip; weights in NATURAL row-major order
                               (no bottom-first reorder on the wire), response
                               identical to RUN's. See TPU.run_tile().
-    0x07 STREAM_RUN    LEN=2+8*K  [flags, K_TILES, tile_0 w+a bytes, ...] --
-                              a whole K-run (up to 31 tiles) in ONE round
-                              trip, accumulated tile-by-tile in the datapath.
-                              flags[0]=TILE_FIRST applies to the frame's
-                              first tile, flags[1]=TILE_LAST to its last, so
-                              longer K-runs span multiple frames. Response:
-                              result bytes on a TILE_LAST frame, else a bare
-                              ACK. See TPU.stream_run().
+    0x07 STREAM_RUN    LEN=2+(W_BYTES+A_BYTES)*K  [flags, K_TILES, tiles...]
+                              -- a whole K-run (up to max_stream_tiles) in
+                              ONE round trip, accumulated tile-by-tile in
+                              the datapath. flags[0]=TILE_FIRST applies to
+                              the frame's first tile, flags[1]=TILE_LAST to
+                              its last, so longer K-runs span multiple
+                              frames. Response: result bytes on a TILE_LAST
+                              frame, else a bare ACK. See TPU.stream_run().
 """
 import argparse
-import struct
 import sys
 import time
 
@@ -45,10 +49,11 @@ CMD_RESET = 0x05
 CMD_RUN_TILE = 0x06
 CMD_STREAM_RUN = 0x07
 
-# One STREAM_RUN tile = 2x2 weights + 2x2 acts = 8 payload bytes; the 1-byte
-# LEN caps a frame at 255 payload bytes, minus 2 header bytes (flags, K_TILES).
-STREAM_TILE_BYTES = 8
-MAX_STREAM_TILES = (255 - 2) // STREAM_TILE_BYTES  # 31
+# One STREAM_RUN tile = rows*cols weight + m_tile*rows act payload bytes; the
+# 1-byte LEN caps a frame at 255 payload bytes, minus 2 header bytes (flags,
+# K_TILES). Both are shape-dependent, computed per TPU instance in __init__
+# (self.stream_tile_bytes / self.max_stream_tiles: 8 and 31 at 2x2/M_TILE=2,
+# 12 and 21 at the 2x4/M_TILE=2 hardware shape).
 
 # The pico2-ice firmware's stock USB->UART bridge (pico-ice-sdk
 # ice_usb_cdc_to_uart0) silently DROPS bytes once the RP2350's 32-deep UART
@@ -82,9 +87,22 @@ class TPUError(RuntimeError):
 
 
 class TPU:
-    """One 2x2 systolic-array TPU core, reachable over a UART link."""
+    """One systolic-array TPU core, reachable over a UART link.
 
-    def __init__(self, port, baud=DEFAULT_BAUD, timeout=2.0):
+    rows/cols/m_tile must match the ARRAY_ROWS/NUM_COLS/M_TILE the bitstream
+    was built with (fpga/Makefile) -- the wire protocol's payload sizes are
+    synthesis-time constants on the FPGA side, so a shape mismatch shows up
+    as STATUS_ERR or a UART timeout, not a wrong answer.
+    """
+
+    def __init__(self, port, baud=DEFAULT_BAUD, timeout=2.0,
+                 rows=2, cols=2, m_tile=None):
+        self.rows = rows            # ARRAY_ROWS: K-tile depth
+        self.cols = cols            # NUM_COLS:   N-tile width
+        self.m_tile = rows if m_tile is None else m_tile  # M rows per RUN
+        self.result_bytes = 2 * self.m_tile * self.cols
+        self.stream_tile_bytes = self.rows * self.cols + self.m_tile * self.rows
+        self.max_stream_tiles = (255 - 2) // self.stream_tile_bytes
         self.ser = serial.Serial(port, baud, timeout=timeout)
         # cmd byte -> [call count, wire bytes tx (incl. CMD/LEN header), wire bytes rx]
         # Lets a caller measure exactly how many bytes crossed the wire per command
@@ -162,9 +180,9 @@ class TPU:
         # dispatch cycle RUN's flags do, then runs the identical pipeline
         run_calls = sum(self.stats.get(cmd, (0, 0, 0))[0] for cmd in run_like)
         # A STREAM_RUN frame runs one ~21-cycle pass per tile; recover the
-        # tile count from the wire bytes (4 header bytes per frame, 8/tile).
+        # tile count from the wire bytes (4 header bytes per frame).
         n_sr, tx_sr, _ = self.stats.get(CMD_STREAM_RUN, (0, 0, 0))
-        stream_tiles = max(0, tx_sr - 4 * n_sr) // STREAM_TILE_BYTES
+        stream_tiles = max(0, tx_sr - 4 * n_sr) // self.stream_tile_bytes
         other_calls = sum(n for cmd, (n, _, _) in self.stats.items()
                           if cmd not in run_like + (CMD_STREAM_RUN,))
         cycles = (run_calls + stream_tiles) * 21 + other_calls * 2
@@ -172,34 +190,46 @@ class TPU:
 
     # -- protocol commands ------------------------------------------------
 
-    def load_weights(self, w):
-        """w: 2x2 array-like, standard row-major [[w00,w01],[w10,w11]],
-        int8 signed. Reordered on the wire to bottom-row-first as
-        tpu_sequencer.sv expects."""
+    def _check_w(self, w):
         w = np.asarray(w, dtype=np.int8)
-        if w.shape != (2, 2):
-            raise ValueError("weights must be a 2x2 matrix")
-        wire = np.array([w[1, 0], w[1, 1], w[0, 0], w[0, 1]], dtype=np.int8)
-        self._send_cmd(CMD_LOAD_WEIGHTS, wire.tobytes())
+        if w.shape != (self.rows, self.cols):
+            raise ValueError(f"weights must be {self.rows}x{self.cols}, got {w.shape}")
+        return w
+
+    def _check_a(self, a):
+        a = np.asarray(a, dtype=np.int8)
+        if a.shape != (self.m_tile, self.rows):
+            raise ValueError(f"activations must be {self.m_tile}x{self.rows}, got {a.shape}")
+        return a
+
+    def _parse_result(self, resp, what):
+        if len(resp) != self.result_bytes:
+            raise TPUError(f"{what} response had {len(resp)} data bytes, "
+                           f"expected {self.result_bytes}")
+        return np.frombuffer(resp, dtype="<i2").reshape(self.m_tile, self.cols)
+
+    def load_weights(self, w):
+        """w: (rows x cols) array-like, standard row-major, int8 signed.
+        Reordered on the wire to bottom-row-first as tpu_sequencer.sv
+        expects."""
+        w = self._check_w(w)
+        self._send_cmd(CMD_LOAD_WEIGHTS, np.ascontiguousarray(w[::-1]).tobytes())
 
     def load_bias(self, b):
-        """b: length-2 array-like, per-output-column int16 bias."""
+        """b: length-cols array-like, per-output-column int16 bias."""
         b = np.asarray(b, dtype=np.int16)
-        if b.shape != (2,):
-            raise ValueError("bias must have shape (2,)")
-        payload = struct.pack("<hh", int(b[0]), int(b[1]))
-        self._send_cmd(CMD_LOAD_BIAS, payload)
+        if b.shape != (self.cols,):
+            raise ValueError(f"bias must have shape ({self.cols},), got {b.shape}")
+        self._send_cmd(CMD_LOAD_BIAS, b.astype("<i2").tobytes())
 
     def load_activations(self, a):
-        """a: 2x2 array-like, standard row-major [[a00,a01],[a10,a11]],
-        int8 signed."""
-        a = np.asarray(a, dtype=np.int8)
-        if a.shape != (2, 2):
-            raise ValueError("activations must be a 2x2 matrix")
+        """a: (m_tile x rows) array-like, standard row-major, int8 signed."""
+        a = self._check_a(a)
         self._send_cmd(CMD_LOAD_ACT, a.tobytes())
 
     def run(self, first=True, last=True):
-        """Executes one RUN pass; returns a 2x2 int16 matrix, or None.
+        """Executes one RUN pass; returns an (m_tile x cols) int16 matrix,
+        or None.
 
         first/last drive the accumulator's K-dim tiling (rtl/accumulator.sv):
         first=True overwrites its persistent running sum with this pass's
@@ -209,7 +239,7 @@ class TPU:
         in the accumulator for a later pass to add to -- bias/activation
         never fire for that pass, so this returns None rather than a
         result (there isn't one yet). first=last=True (the defaults) is
-        the original single-shot 2x2 matmul, sent as LEN=0 for wire
+        the original single-shot matmul, sent as LEN=0 for wire
         compatibility with hosts that never send the flags byte.
         """
         if first and last:
@@ -220,88 +250,78 @@ class TPU:
         resp = self._send_cmd(CMD_RUN, payload)
         if not last:
             return None
-        if len(resp) != 8:
-            raise TPUError(f"RUN response had {len(resp)} data bytes, expected 8")
-        r0c0, r0c1, r1c0, r1c1 = struct.unpack("<hhhh", resp)
-        return np.array([[r0c0, r0c1], [r1c0, r1c1]], dtype=np.int16)
+        return self._parse_result(resp, "RUN")
 
     def run_tile(self, w, a, first=True, last=True):
         """One K-tile pass -- LOAD_WEIGHTS + LOAD_ACT + RUN folded into a
         single CMD_RUN_TILE round trip (3x fewer transactions per tile; see
-        docs/SEQUENCER_REDESIGN.md §3.1). w and a are 2x2 int8 row-major;
-        unlike load_weights(), the weights go over the wire in natural
-        row-major order -- the sequencer does the bottom-first reorder
-        internally. first/last have exactly run()'s K-tiling semantics;
-        returns the 2x2 int16 result when last=True, else None. Bias is not
-        part of the frame -- call load_bias() once per output block."""
-        w = np.asarray(w, dtype=np.int8)
-        a = np.asarray(a, dtype=np.int8)
-        if w.shape != (2, 2):
-            raise ValueError("weights must be a 2x2 matrix")
-        if a.shape != (2, 2):
-            raise ValueError("activations must be a 2x2 matrix")
+        docs/SEQUENCER_REDESIGN.md §3.1). w is (rows x cols), a is
+        (m_tile x rows), both int8 row-major; unlike load_weights(), the
+        weights go over the wire in natural row-major order -- the sequencer
+        does the bottom-first reorder internally. first/last have exactly
+        run()'s K-tiling semantics; returns the (m_tile x cols) int16 result
+        when last=True, else None. Bias is not part of the frame -- call
+        load_bias() once per output block."""
+        w = self._check_w(w)
+        a = self._check_a(a)
         flags = (0x01 if first else 0) | (0x02 if last else 0)
         resp = self._send_cmd(CMD_RUN_TILE, bytes([flags]) + w.tobytes() + a.tobytes())
         if not last:
             return None
-        if len(resp) != 8:
-            raise TPUError(f"RUN_TILE response had {len(resp)} data bytes, expected 8")
-        r0c0, r0c1, r1c0, r1c1 = struct.unpack("<hhhh", resp)
-        return np.array([[r0c0, r0c1], [r1c0, r1c1]], dtype=np.int16)
+        return self._parse_result(resp, "RUN_TILE")
 
     def stream_run(self, w_tiles, a_tiles, first=True, last=True):
         """A whole K-run (or a chunk of one) in a single CMD_STREAM_RUN
-        round trip: up to MAX_STREAM_TILES (w, a) tile pairs, accumulated
-        tile-by-tile in the datapath (docs/SEQUENCER_REDESIGN.md §3.2).
-        Weights go in natural row-major order, like run_tile(). first/last
-        apply to the frame's first/last tile respectively, so a K-run longer
-        than one frame chains: first=True,last=False / False,False / ... /
-        False,last=True. Returns the 2x2 int16 result when last=True, else
-        None. Bias is not part of the frame -- load_bias() once per block."""
+        round trip: up to self.max_stream_tiles (w, a) tile pairs,
+        accumulated tile-by-tile in the datapath
+        (docs/SEQUENCER_REDESIGN.md §3.2). Weights go in natural row-major
+        order, like run_tile(). first/last apply to the frame's first/last
+        tile respectively, so a K-run longer than one frame chains:
+        first=True,last=False / False,False / ... / False,last=True.
+        Returns the (m_tile x cols) int16 result when last=True, else None.
+        Bias is not part of the frame -- load_bias() once per block."""
         if len(w_tiles) != len(a_tiles):
             raise ValueError("need one activation tile per weight tile")
         k_tiles = len(w_tiles)
-        if not 1 <= k_tiles <= MAX_STREAM_TILES:
-            raise ValueError(f"K_TILES must be 1..{MAX_STREAM_TILES}, got {k_tiles}")
+        if not 1 <= k_tiles <= self.max_stream_tiles:
+            raise ValueError(f"K_TILES must be 1..{self.max_stream_tiles}, got {k_tiles}")
         flags = (0x01 if first else 0) | (0x02 if last else 0)
         payload = bytearray([flags, k_tiles])
         for w, a in zip(w_tiles, a_tiles):
-            w = np.asarray(w, dtype=np.int8)
-            a = np.asarray(a, dtype=np.int8)
-            if w.shape != (2, 2) or a.shape != (2, 2):
-                raise ValueError("each tile must be a 2x2 matrix")
-            payload += w.tobytes() + a.tobytes()
+            payload += self._check_w(w).tobytes() + self._check_a(a).tobytes()
         resp = self._send_cmd(CMD_STREAM_RUN, bytes(payload))
         if not last:
             return None
-        if len(resp) != 8:
-            raise TPUError(f"STREAM_RUN response had {len(resp)} data bytes, expected 8")
-        r0c0, r0c1, r1c0, r1c1 = struct.unpack("<hhhh", resp)
-        return np.array([[r0c0, r0c1], [r1c0, r1c1]], dtype=np.int16)
+        return self._parse_result(resp, "STREAM_RUN")
 
     def reset(self):
         self._send_cmd(CMD_RESET)
 
-    def matmul(self, a, w, bias=(0, 0)):
+    def matmul(self, a, w, bias=None):
         """Convenience wrapper: load activations/weights/bias, then RUN."""
         self.load_activations(a)
         self.load_weights(w)
-        self.load_bias(bias)
+        self.load_bias(np.zeros(self.cols, dtype=np.int16) if bias is None else bias)
         return self.run()
 
     def matmul_tiled(self, a, w, bias=None):
-        """Y = ReLU(A @ W + bias) for shapes beyond the raw 2x2 hardware
-        tile. a: (M,K) int8 array-like, w: (K,N) int8 array-like, bias:
-        (N,) int16 array-like (defaults to zero); M, K, N must all be even.
+        """Y = ReLU(A @ W + bias) for shapes beyond the raw hardware tile.
+        a: (M,K) int8 array-like, w: (K,N) int8 array-like, bias: (N,)
+        int16 array-like (defaults to zero). Any M, K, N -- dimensions that
+        don't divide the tile shape are zero-padded on the wire and the
+        padding is sliced back off the result (zero K-columns add nothing
+        to the products; padded N-columns get bias 0 and are discarded, so
+        the answer is exactly the un-padded matmul's).
 
-        Tiles the K dimension into 2-wide weight-reload passes accumulated
-        in hardware (rtl/accumulator.sv's persistent PSUM), and the M/N
-        dimensions into 2x2 blocks run one at a time. Each (M,N) block's
-        whole K-run goes over the wire as CMD_STREAM_RUN frames
-        (stream_run()) of up to MAX_STREAM_TILES tiles each -- one round
-        trip per frame instead of one (RUN_TILE) or three (legacy) per
-        K-tile. Bias/ReLU are applied once per (M,N) block, on that block's
-        final K-tile pass, exactly matching a single un-tiled matmul.
+        Tiles the K dimension into rows-deep weight-reload passes
+        accumulated in hardware (rtl/accumulator.sv's persistent PSUM), and
+        the M/N dimensions into (m_tile x cols) blocks run one at a time.
+        Each (M,N) block's whole K-run goes over the wire as CMD_STREAM_RUN
+        frames (stream_run()) of up to self.max_stream_tiles tiles each --
+        one round trip per frame instead of one (RUN_TILE) or three
+        (legacy) per K-tile. Bias/ReLU are applied once per (M,N) block, on
+        that block's final K-tile pass, exactly matching a single un-tiled
+        matmul.
         """
         a = np.asarray(a, dtype=np.int8)
         w = np.asarray(w, dtype=np.int8)
@@ -311,27 +331,36 @@ class TPU:
         k2, n = w.shape
         if k != k2:
             raise ValueError(f"inner dimensions must match: a is {a.shape}, w is {w.shape}")
-        if m % 2 or k % 2 or n % 2:
-            raise ValueError(f"matmul_tiled requires even M, K, N; got M={m}, K={k}, N={n}")
         bias = np.zeros(n, dtype=np.int16) if bias is None else np.asarray(bias, dtype=np.int16)
         if bias.shape != (n,):
             raise ValueError(f"bias must have shape ({n},), got {bias.shape}")
 
-        out = np.zeros((m, n), dtype=np.int16)
-        num_k_tiles = k // 2
-        for m0 in range(0, m, 2):
-            for n0 in range(0, n, 2):
-                self.load_bias(bias[n0:n0 + 2])
-                w_tiles = [w[k0:k0 + 2, n0:n0 + 2] for k0 in range(0, k, 2)]
-                a_tiles = [a[m0:m0 + 2, k0:k0 + 2] for k0 in range(0, k, 2)]
+        def _round_up(x, q):
+            return -(-x // q) * q
+
+        mp, kp, np_ = _round_up(m, self.m_tile), _round_up(k, self.rows), _round_up(n, self.cols)
+        if (mp, kp, np_) != (m, k, n):
+            a = np.pad(a, ((0, mp - m), (0, kp - k)))
+            w = np.pad(w, ((0, kp - k), (0, np_ - n)))
+            bias = np.pad(bias, (0, np_ - n))
+
+        out = np.zeros((mp, np_), dtype=np.int16)
+        num_k_tiles = kp // self.rows
+        for m0 in range(0, mp, self.m_tile):
+            for n0 in range(0, np_, self.cols):
+                self.load_bias(bias[n0:n0 + self.cols])
+                w_tiles = [w[k0:k0 + self.rows, n0:n0 + self.cols]
+                           for k0 in range(0, kp, self.rows)]
+                a_tiles = [a[m0:m0 + self.m_tile, k0:k0 + self.rows]
+                           for k0 in range(0, kp, self.rows)]
                 result = None
-                for c0 in range(0, num_k_tiles, MAX_STREAM_TILES):
-                    c1 = min(c0 + MAX_STREAM_TILES, num_k_tiles)
+                for c0 in range(0, num_k_tiles, self.max_stream_tiles):
+                    c1 = min(c0 + self.max_stream_tiles, num_k_tiles)
                     result = self.stream_run(w_tiles[c0:c1], a_tiles[c0:c1],
                                              first=(c0 == 0),
                                              last=(c1 == num_k_tiles))
-                out[m0:m0 + 2, n0:n0 + 2] = result
-        return out
+                out[m0:m0 + self.m_tile, n0:n0 + self.cols] = result
+        return out[:m, :n]
 
 
 # -- golden self-test -----------------------------------------------------
@@ -346,31 +375,36 @@ SELFTEST_EXPECTED = np.array([[108, 211], [120, 227]], dtype=np.int16)
 
 
 def selftest(tpu):
-    print(f"Sending W={SELFTEST_W.tolist()} A={SELFTEST_A.tolist()} "
-          f"bias={SELFTEST_BIAS.tolist()}")
-    got = tpu.matmul(SELFTEST_A, SELFTEST_W, SELFTEST_BIAS)
+    if (tpu.rows, tpu.cols, tpu.m_tile) == (2, 2, 2):
+        w, a, b, expected = SELFTEST_W, SELFTEST_A, SELFTEST_BIAS, SELFTEST_EXPECTED
+    else:
+        # Non-default shape: no hand-verified simulation goldens, so use
+        # seeded-random vectors checked against the same numpy math the
+        # RTL testbenches compute their expectations with.
+        rng = np.random.default_rng(0)
+        w = rng.integers(-9, 10, size=(tpu.rows, tpu.cols), dtype=np.int8)
+        a = rng.integers(-9, 10, size=(tpu.m_tile, tpu.rows), dtype=np.int8)
+        b = rng.integers(-50, 51, size=tpu.cols).astype(np.int16)
+        expected = np.maximum(
+            a.astype(np.int32) @ w.astype(np.int32) + b, 0).astype(np.int16)
+    print(f"Sending W={w.tolist()} A={a.tolist()} bias={b.tolist()}")
+    got = tpu.matmul(a, w, b)
     print(f"Got:      {got.tolist()}")
-    print(f"Expected: {SELFTEST_EXPECTED.tolist()}")
-    if np.array_equal(got, SELFTEST_EXPECTED):
-        print("PASS -- hardware datapath matches simulation golden values")
+    print(f"Expected: {expected.tolist()}")
+    if np.array_equal(got, expected):
+        print("PASS -- hardware datapath matches expected values")
         return True
-    print("FAIL -- hardware result does not match simulation golden values")
+    print("FAIL -- hardware result does not match expected values")
     return False
 
 
-def parse_matrix(s):
-    """Parse '1,2,3,4' -> [[1,2],[3,4]] for --activations / --weights."""
-    vals = [int(x) for x in s.split(",")]
-    if len(vals) != 4:
-        raise argparse.ArgumentTypeError("expected 4 comma-separated ints, e.g. 1,2,3,4")
-    return [[vals[0], vals[1]], [vals[2], vals[3]]]
-
-
-def parse_bias(s):
-    vals = [int(x) for x in s.split(",")]
-    if len(vals) != 2:
-        raise argparse.ArgumentTypeError("expected 2 comma-separated ints, e.g. 100,200")
-    return vals
+def parse_ints(s):
+    """Parse '1,2,3,4' into a flat int list; reshaped against the array
+    shape (--rows/--cols/--m-tile) in main()."""
+    try:
+        return [int(x) for x in s.split(",")]
+    except ValueError:
+        raise argparse.ArgumentTypeError("expected comma-separated ints, e.g. 1,2,3,4")
 
 
 def main():
@@ -384,20 +418,27 @@ def main():
     p.add_argument("--baud", type=int, default=DEFAULT_BAUD,
                     help=f"must match CLK_FREQ/BAUD_RATE the bitstream was built with "
                          f"(default {DEFAULT_BAUD})")
+    p.add_argument("--rows", type=int, default=2,
+                    help="ARRAY_ROWS the bitstream was built with (default 2)")
+    p.add_argument("--cols", type=int, default=2,
+                    help="NUM_COLS the bitstream was built with (default 2)")
+    p.add_argument("--m-tile", type=int, default=None,
+                    help="M_TILE the bitstream was built with (default: same as --rows)")
     p.add_argument("--selftest", action="store_true",
-                    help="run the known-good W/A/bias combo and check against the "
-                         "simulated golden result")
-    p.add_argument("--weights", type=parse_matrix, metavar="w00,w01,w10,w11",
-                    help="int8 2x2 weight matrix, row-major")
-    p.add_argument("--activations", type=parse_matrix, metavar="a00,a01,a10,a11",
-                    help="int8 2x2 activation matrix, row-major")
-    p.add_argument("--bias", type=parse_bias, metavar="b0,b1", default=[0, 0],
-                    help="int16 per-column bias (default 0,0)")
+                    help="run a known-good W/A/bias combo and check against the "
+                         "expected result")
+    p.add_argument("--weights", type=parse_ints, metavar="w00,w01,...",
+                    help="int8 (rows x cols) weight matrix, flat row-major")
+    p.add_argument("--activations", type=parse_ints, metavar="a00,a01,...",
+                    help="int8 (m_tile x rows) activation matrix, flat row-major")
+    p.add_argument("--bias", type=parse_ints, metavar="b0,b1,...", default=None,
+                    help="int16 per-column bias, cols values (default all zero)")
     p.add_argument("--reset", action="store_true",
                     help="pulse the on-chip reset before doing anything else")
     args = p.parse_args()
 
-    with TPU(args.port, args.baud) as tpu:
+    with TPU(args.port, args.baud, rows=args.rows, cols=args.cols,
+             m_tile=args.m_tile) as tpu:
         if args.reset:
             tpu.reset()
             print("Reset OK")
@@ -408,8 +449,23 @@ def main():
         if args.weights is None or args.activations is None:
             p.error("--weights and --activations are required unless --selftest is given")
 
-        result = tpu.matmul(args.activations, args.weights, args.bias)
-        print(f"W={args.weights} A={args.activations} bias={args.bias}")
+        if len(args.weights) != tpu.rows * tpu.cols:
+            p.error(f"--weights needs {tpu.rows * tpu.cols} values for a "
+                    f"{tpu.rows}x{tpu.cols} array")
+        if len(args.activations) != tpu.m_tile * tpu.rows:
+            p.error(f"--activations needs {tpu.m_tile * tpu.rows} values for "
+                    f"m_tile={tpu.m_tile}, rows={tpu.rows}")
+        w = np.array(args.weights, dtype=np.int8).reshape(tpu.rows, tpu.cols)
+        a = np.array(args.activations, dtype=np.int8).reshape(tpu.m_tile, tpu.rows)
+        b = None
+        if args.bias is not None:
+            if len(args.bias) != tpu.cols:
+                p.error(f"--bias needs {tpu.cols} values")
+            b = np.array(args.bias, dtype=np.int16)
+
+        result = tpu.matmul(a, w, b)
+        print(f"W={w.tolist()} A={a.tolist()} "
+              f"bias={(b.tolist() if b is not None else [0] * tpu.cols)}")
         print(f"Y = ReLU(A @ W + bias) =\n{result}")
 
 

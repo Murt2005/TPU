@@ -155,6 +155,12 @@ def main():
                     help="run both the real hardware (--port) and the local pure-numpy backend "
                          "on the exact same sampled images, and print a side-by-side comparison")
     p.add_argument("--test-n", type=int, default=20, help="number of random MNIST test images to classify")
+    p.add_argument("--rows", type=int, default=2,
+                    help="ARRAY_ROWS the flashed bitstream was built with (default 2)")
+    p.add_argument("--cols", type=int, default=2,
+                    help="NUM_COLS the flashed bitstream was built with (default 2)")
+    p.add_argument("--m-tile", type=int, default=None,
+                    help="M_TILE the flashed bitstream was built with (default: --rows)")
     args = p.parse_args()
 
     if args.compare and not args.port:
@@ -174,8 +180,10 @@ def main():
         print(f"[{label}] {correct}/{n} correct ({100 * correct / n:.2f}%), "
               f"{elapsed / n * 1000:.2f} ms/image")
 
+    tpu_shape = dict(rows=args.rows, cols=args.cols, m_tile=args.m_tile)
+
     if args.compare:
-        with TPU(args.port) as tpu:
+        with TPU(args.port, **tpu_shape) as tpu:
             tpu.reset_stats()
             hw_inference = MNISTInference(HardwareBackend(tpu), model)
             hw_result = run_test_set(hw_inference, x_test, y_test, idx)
@@ -217,7 +225,7 @@ def main():
         report("offline (batched/vectorized)", *run_test_set_batched(model, x_test, y_test, idx))
         return
 
-    with TPU(args.port) as tpu:
+    with TPU(args.port, **tpu_shape) as tpu:
         inference = MNISTInference(HardwareBackend(tpu), model)
         report("hardware", *run_test_set(inference, x_test, y_test, idx))
 
