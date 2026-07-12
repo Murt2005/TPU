@@ -63,11 +63,14 @@ json: $(TOP).json
 asc: $(TOP).asc
 bin: $(TOP).bin
 
+# -dsp maps pe.sv's int8 multiplies onto the UP5K's 8 hard SB_MAC16 blocks
+# instead of building them from LUTs (~251 -> ~36 LUTs per PE, see
+# docs/PERFORMANCE_ANALYSIS.md §2); bit-exact, validated by tests/hw_regression.py.
 $(TOP).json: $(RTL)
 	$(YOSYS) -q -p "\
 		read_verilog -sv $(RTL); \
 		chparam -set CLK_FREQ $(CLK_FREQ) $(TOP); \
-		synth_ice40 -top $(TOP) -json $@"
+		synth_ice40 -top $(TOP) -dsp -json $@"
 
 $(TOP).asc: $(TOP).json $(PCF)
 	$(NEXTPNR) -q --up5k --package sg48 --pcf $(PCF) --json $(TOP).json --asc $@
@@ -80,7 +83,7 @@ stat: $(RTL)
 	@$(YOSYS) -p "\
 		read_verilog -sv $(RTL); \
 		chparam -set CLK_FREQ $(CLK_FREQ) $(TOP); \
-		synth_ice40 -top $(TOP)" 2>&1 \
+		synth_ice40 -top $(TOP) -dsp" 2>&1 \
 		| awk '/^=== design hierarchy ===/{exit} /^=== $(TOP) ===/{p=1} p'
 
 # make util: nextpnr's post-PnR device utilisation table (LCs, BRAM,
