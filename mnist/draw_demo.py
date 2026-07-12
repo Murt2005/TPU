@@ -5,9 +5,14 @@ green to blue when the on-chip inference completes.
 
 Draws directly into a numpy array in parallel with the visible Tkinter
 canvas strokes (no PIL/screen-capture dependency -- matches this repo's
-pyserial+numpy-only footprint), downsamples 280x280 -> 28x28 -> IN_SIDExIN_SIDE
-(the same train_mnist.downsample() used for real MNIST images during training),
-and feeds that through mnist.infer.MNISTInference.
+pyserial+numpy-only footprint), then normalizes the drawing the same way
+the MNIST dataset itself was prepared (crop to the digit's bounding box,
+scale the longest side to 20 px, paste into a 28x28 frame centered by
+center of mass) before the usual 28x28 -> IN_SIDExIN_SIDE downsample and
+mnist.infer.MNISTInference. Without that normalization the MLP -- which
+has no translation invariance -- sees off-center/full-frame drawings as
+pixel patterns it never trained on (a 3 px shift alone drops MNIST test
+accuracy from 97% to 23%).
 
 LED control rides the board's *second* USB-CDC port ("RP2040 logs",
 otherwise idle -- see firmware/main.c) as a one-byte 'g'/'b' command,
@@ -28,7 +33,6 @@ import serial
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from train_mnist import downsample  # noqa: E402
 from infer import HardwareBackend, MNISTInference, OfflineBackend, load_model  # noqa: E402
 from tpu_host import TPU  # noqa: E402
 
@@ -45,6 +49,51 @@ def _stamp_circle(img, cx, cy, r, value=255):
     yy, xx = np.ogrid[y0:y1, x0:x1]
     mask = (xx - cx) ** 2 + (yy - cy) ** 2 <= r * r
     img[y0:y1, x0:x1][mask] = value
+
+
+def _resize_block_mean(img, out_h, out_w):
+    """Block-average a uint8 image to (out_h, out_w) float32 in [0,1] --
+    train_mnist.downsample()'s pooling, generalized to rectangular shapes.
+    Strokes come out antialiased like real MNIST rather than hard-edged."""
+    h, w = img.shape
+    edges_r = np.round(np.linspace(0, h, out_h + 1)).astype(int)
+    edges_c = np.round(np.linspace(0, w, out_w + 1)).astype(int)
+    imgf = img.astype(np.float32) / 255.0
+    out = np.zeros((out_h, out_w), dtype=np.float32)
+    for i in range(out_h):
+        r0, r1 = edges_r[i], max(edges_r[i + 1], edges_r[i] + 1)
+        for j in range(out_w):
+            c0, c1 = edges_c[j], max(edges_c[j + 1], edges_c[j] + 1)
+            out[i, j] = imgf[r0:r1, c0:c1].mean()
+    return out
+
+
+def normalize_drawing(img, box=20, side=28):
+    """MNIST-style normalization of a drawing (any resolution, 0=background):
+    crop to the ink's bounding box, scale the longest side to `box` px, paste
+    into a side x side frame positioned so the center of mass lands at the
+    frame's center -- the same preprocessing the MNIST digits were prepared
+    with, which the model therefore expects. Returns (side, side) uint8.
+
+    The caller guarantees img has at least one nonzero pixel.
+    """
+    ys, xs = np.nonzero(img)
+    crop = img[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+    h, w = crop.shape
+    scale = box / max(h, w)
+    nh = max(1, int(round(h * scale)))
+    nw = max(1, int(round(w * scale)))
+    small = _resize_block_mean(crop, nh, nw)
+
+    total = small.sum()
+    cy = (small * np.arange(nh)[:, None]).sum() / total
+    cx = (small * np.arange(nw)[None, :]).sum() / total
+    y0 = int(np.clip(round(side / 2 - cy), 0, side - nh))
+    x0 = int(np.clip(round(side / 2 - cx), 0, side - nw))
+
+    frame = np.zeros((side, side), dtype=np.float32)
+    frame[y0:y0 + nh, x0:x0 + nw] = small
+    return np.clip(frame * 255.0, 0, 255).astype(np.uint8)
 
 
 def _stamp_line(img, x0, y0, x1, y1, r, value=255):
@@ -119,8 +168,7 @@ class DrawApp:
         self.result_var.set("Running on TPU...")
         self.canvas.update_idletasks()
 
-        img28 = downsample(self.img[np.newaxis, :, :], out_side=28)[0].reshape(28, 28)
-        img28_u8 = np.clip(img28 * 255.0, 0, 255).astype(np.uint8)
+        img28_u8 = normalize_drawing(self.img)
         digit, scores = self.inference.predict_image(img28_u8)
 
         ranked = np.argsort(scores)[::-1]
