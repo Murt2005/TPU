@@ -30,4 +30,15 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
 target_include_directories(${CMAKE_PROJECT_NAME} PUBLIC
     ${CMAKE_CURRENT_LIST_DIR}
     )
+
+# Host-link PHY selection. OFF (default): bridge the TPU CDC port to uart0,
+# matching a USE_SPI=0 gateware build. ON: bridge it to spi0 on the shared
+# RP2350<->iCE40 config bus instead, matching `make USE_SPI=1` gateware
+# (see rtl/spi_slave.sv and main.c's TPU_LINK_SPI section):
+#   cmake -DTPU_LINK_SPI=ON ..
+option(TPU_LINK_SPI "Bridge the TPU CDC port to SPI instead of uart0" OFF)
+if (TPU_LINK_SPI)
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE TPU_LINK_SPI=1)
+endif()
+
 pico_add_extra_outputs(${CMAKE_PROJECT_NAME})

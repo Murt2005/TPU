@@ -28,6 +28,9 @@
 #include "hardware/irq.h"
 #include "hardware/gpio.h"
 #include "hardware/uart.h"
+#if TPU_LINK_SPI
+#include "hardware/spi.h"
+#endif
 
 // pico-ice-sdk
 #include "ice_usb.h"
@@ -37,6 +40,152 @@
 #define UART_TX_PIN 28
 #define UART_RX_PIN 29
 
+#if TPU_LINK_SPI
+/*
+ * ---- SPI bridge (TPU_LINK_SPI=1 builds; pairs with USE_SPI=1 gateware) ----
+ *
+ * Bridges the "iCE40 UART" CDC port to spi0 on the shared RP2350<->iCE40
+ * config bus instead of uart0 (GPIO numbers from pico-ice-sdk
+ * src/ice_fpga_data.c's pico2_spibus; the iCE40-side pins are in
+ * fpga/tpu_top.pcf). SPI is master-driven, so responses are READ by
+ * polling: after a complete command frame has been forwarded, the bridge
+ * clocks 0xFF filler (CMD_NOP, ignored by the sequencer) and watches MISO
+ * for the first non-0x00 byte = STATUS, then forwards LEN and the payload
+ * (rtl/spi_slave.sv's write-then-poll protocol).
+ *
+ * Two invariants keep this correct:
+ *  - Never poll mid-command-frame: a poll's 0xFF would land in the middle
+ *    of the frame's payload bytes. The bridge tracks [CMD][LEN][payload]
+ *    framing of the host stream (frame_phase below) and polls only
+ *    between frames.
+ *  - The SPI flash shares this bus AND the same chip-select net as the
+ *    FPGA's SSN, so every asserted CS selects both. The flash is put into
+ *    deep power-down once at startup (0xB9; it then ignores everything
+ *    until a release command, and 0xAB never appears as a first-in-frame
+ *    byte in this protocol), and the stale STATUS_ERR the FPGA queues in
+ *    response to that 0xB9 frame is drained before the main loop starts.
+ *
+ * Clock caps (both scale with the FPGA core clock, 12 MHz today):
+ *  - write <= FPGA_CLK/6: the sequencer drops RX bytes during its
+ *    inter-tile STREAM_RUN processing window (~35 clk) — same timing
+ *    assumption its header documents for UART.
+ *  - read  <= FPGA_CLK/8: spi_slave's TX engine samples SCK through a
+ *    2FF synchronizer in the FPGA core-clock domain.
+ */
+#define TPU_SPI          spi0
+#define TPU_SPI_RX_PIN   4   /* RP2350 MISO <- net ICE_SI (iCE40 pin 17) */
+#define TPU_SPI_CS_PIN   5   /* shared FPGA SSN + flash CS               */
+#define TPU_SPI_SCK_PIN  6
+#define TPU_SPI_TX_PIN   7   /* RP2350 MOSI -> net ICE_SO (iCE40 pin 14) */
+
+#define TPU_SPI_WRITE_HZ 2000000
+#define TPU_SPI_READ_HZ  1500000
+
+static void tpu_cs(bool active) {
+    gpio_put(TPU_SPI_CS_PIN, !active);
+    sleep_us(1);   /* CS lead/lag: spi_slave needs >= 5 FPGA clk (~420 ns) */
+}
+
+static void tpu_spi_init(void) {
+    spi_init(TPU_SPI, TPU_SPI_WRITE_HZ);
+    gpio_set_function(TPU_SPI_RX_PIN, GPIO_FUNC_SPI);
+    gpio_set_function(TPU_SPI_SCK_PIN, GPIO_FUNC_SPI);
+    gpio_set_function(TPU_SPI_TX_PIN, GPIO_FUNC_SPI);
+    gpio_init(TPU_SPI_CS_PIN);
+    gpio_set_dir(TPU_SPI_CS_PIN, GPIO_OUT);
+    gpio_put(TPU_SPI_CS_PIN, 1);
+}
+
+static uint8_t tpu_spi_xfer_byte(uint8_t out) {
+    uint8_t in;
+    spi_write_read_blocking(TPU_SPI, &out, &in, 1);
+    return in;
+}
+
+// Flash deep power-down + drain of the FPGA's resulting error response
+// (the FPGA slave also sees the 0xB9 frame: 0xB9 parses as an unknown CMD
+// and the trailing 0x00 as its LEN, so it queues one STATUS_ERR).
+static void tpu_spi_quiesce_flash(void) {
+    uint8_t dpd[2] = { 0xB9, 0x00 };
+    tpu_cs(true);
+    spi_write_blocking(TPU_SPI, dpd, 2);
+    tpu_cs(false);
+
+    spi_set_baudrate(TPU_SPI, TPU_SPI_READ_HZ);
+    for (int i = 0, idle = 0; i < 64 && idle < 4; i++) {
+        tpu_cs(true);
+        uint8_t b = tpu_spi_xfer_byte(0xFF);
+        tpu_cs(false);
+        idle = (b == 0x00) ? idle + 1 : 0;
+    }
+}
+
+// Host-stream frame tracker: 0 = expecting CMD, 1 = expecting LEN,
+// >1 = (frame_remaining) payload bytes still owed. Polling is only safe
+// in phase 0 — see the header comment.
+static uint32_t frame_remaining = 0;
+static uint8_t  frame_phase = 0;
+
+static void tpu_track_host_byte(uint8_t b) {
+    switch (frame_phase) {
+        case 0: if (b != 0xFF) frame_phase = 1; break;  /* 0xFF = NOP filler */
+        case 1:
+            frame_remaining = b;
+            frame_phase = frame_remaining ? 2 : 0;
+            break;
+        default:
+            if (--frame_remaining == 0) frame_phase = 0;
+            break;
+    }
+}
+
+// One main-loop service step: forward pending host bytes, else (between
+// frames only) poll for a queued response and forward it to CDC.
+static void tpu_spi_service(void) {
+    if (!tud_cdc_n_connected(ICE_USB_UART0_CDC)) {
+        return;   /* no host session: leave the bus alone (DFU may use it) */
+    }
+
+    uint8_t buf[64];
+    uint32_t n = tud_cdc_n_read(ICE_USB_UART0_CDC, buf, sizeof buf);
+    if (n > 0) {
+        spi_set_baudrate(TPU_SPI, TPU_SPI_WRITE_HZ);
+        tpu_cs(true);
+        spi_write_blocking(TPU_SPI, buf, n);
+        tpu_cs(false);
+        for (uint32_t i = 0; i < n; i++) tpu_track_host_byte(buf[i]);
+        return;   /* service tud_task() again before considering a poll */
+    }
+
+    if (frame_phase != 0) {
+        return;   /* mid-frame: never inject poll filler */
+    }
+
+    spi_set_baudrate(TPU_SPI, TPU_SPI_READ_HZ);
+    tpu_cs(true);
+    uint8_t status = tpu_spi_xfer_byte(0xFF);
+    if (status != 0x00) {
+        // Response started: LEN and payload bytes are already queued (the
+        // sequencer pushes ~30x faster than this read clock drains).
+        uint8_t len = tpu_spi_xfer_byte(0xFF);
+        uint8_t resp[2 + 255];
+        resp[0] = status;
+        resp[1] = len;
+        for (uint32_t i = 0; i < len; i++) resp[2 + i] = tpu_spi_xfer_byte(0xFF);
+        tpu_cs(false);
+        for (uint32_t off = 0; off < 2u + len;) {
+            uint32_t wrote = tud_cdc_n_write(ICE_USB_UART0_CDC, resp + off,
+                                             2u + len - off);
+            off += wrote;
+            if (wrote == 0) tud_task();   /* CDC FIFO full: let USB drain */
+        }
+        tud_cdc_n_write_flush(ICE_USB_UART0_CDC);
+    } else {
+        tpu_cs(false);
+    }
+}
+#endif  /* TPU_LINK_SPI */
+
 // Implemented in pico-ice-sdk/src/ice_fpga.c but not declared in ice_fpga.h.
 extern int ice_fpga_configured(const ice_fpga fpga);
 
@@ -44,6 +193,7 @@ extern int ice_fpga_configured(const ice_fpga fpga);
 // pico-ice-sdk/src/ice_usb.c so they can be replaced here.
 extern void (*tud_cdc_rx_cb_table[])(uint8_t);
 
+#if !TPU_LINK_SPI
 // Replacement for the SDK's ice_usb_cdc_to_uart0(), which does
 //     if (uart_is_writable(uart0)) { uart_putc(uart0, byte); }
 // i.e. SILENTLY DROPS bytes once the RP2350's 32-deep UART TX FIFO is
@@ -99,16 +249,25 @@ static void drain_ring_to_cdc(void) {
         tud_cdc_n_write_flush(ICE_USB_UART0_CDC);
     }
 }
+#endif  /* !TPU_LINK_SPI */
 
 int main(void) {
+#if !TPU_LINK_SPI
     // Enable the UART
     uart_init(uart0, 115200);
     gpio_set_function(UART_TX_PIN, GPIO_FUNC_UART);
     gpio_set_function(UART_RX_PIN, GPIO_FUNC_UART);
+#endif
 
     // Configure the piping as configured in <tusb_config.h>
     ice_usb_init();
 
+#if TPU_LINK_SPI
+    // SPI bridge: the TPU CDC port is serviced by polling in the main loop
+    // (tpu_spi_service), not by the SDK's per-byte RX callback -- a NULL
+    // table entry leaves incoming bytes in the CDC FIFO for tud_cdc_n_read.
+    tud_cdc_rx_cb_table[ICE_USB_UART0_CDC] = NULL;
+#else
     // Swap in the non-dropping CDC->UART bridge (see comment above).
     tud_cdc_rx_cb_table[ICE_USB_UART0_CDC] = &cdc_to_uart0_blocking;
 
@@ -120,6 +279,7 @@ int main(void) {
     irq_remove_handler(UART0_IRQ, irq_get_exclusive_handler(UART0_IRQ));
     irq_set_exclusive_handler(UART0_IRQ, uart0_rx_to_ring);
     irq_set_enabled(UART0_IRQ, true);
+#endif
 
     // Initialize the FPGA -- 12 MHz, not ICE_FPGA_DEFAULT_FREQUENCY (48 MHz):
     // must match fpga/pico2_ice/Makefile's CLK_FREQ.
@@ -127,6 +287,15 @@ int main(void) {
 
     // Let the FPGA start
     ice_fpga_start(FPGA_DATA);
+
+#if TPU_LINK_SPI
+    // The FPGA just self-configured from flash over this same bus; now take
+    // it over for the TPU link: claim the pins, park the flash in deep
+    // power-down (it shares the CS net), and drain the FPGA's error
+    // response to the power-down frame.
+    tpu_spi_init();
+    tpu_spi_quiesce_flash();
+#endif
 
     // Independent CDONE check: ice_usb.c's DFU manifest callback reports
     // ok = ice_fpga_start(...), but ice_fpga_start() unconditionally
@@ -153,7 +322,11 @@ int main(void) {
     // datapath at all.
     while (true) {
         tud_task();
+#if TPU_LINK_SPI
+        tpu_spi_service();
+#else
         drain_ring_to_cdc();
+#endif
 
         int32_t ch = tud_cdc_n_read_char(0);
         if (ch == 'b' || ch == 'B') {
