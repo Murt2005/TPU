@@ -12,10 +12,11 @@
 ##    make hw-test PORT=/dev/cu.usbmodemXXXX   Run tests/hw_regression.py against real hardware
 ## ============================================================================
 
-IVERILOG := iverilog
-VVP      := vvp
-GTKWAVE  := gtkwave
-IFLAGS   := -g2012 -Wall
+IVERILOG  := iverilog
+VVP       := vvp
+GTKWAVE   := gtkwave
+VERILATOR := verilator
+IFLAGS    := -g2012 -Wall
 
 RTL_DIR  := rtl
 TEST_DIR := tests
@@ -89,7 +90,7 @@ TESTS := fifo pe mmu accumulator systolic_data_setup weight_fifo bias activation
 # de-duplicate dep lists (modules shared via multiple paths, e.g. tpu_core -> fifo.sv)
 dedup = $(if $1,$(firstword $1) $(call dedup,$(filter-out $(firstword $1),$1)))
 
-.PHONY: all test list clean hw-test $(foreach t,$(TESTS),test-$(t) build-$(t) wave-$(t))
+.PHONY: all test lint verilate-test list clean hw-test $(foreach t,$(TESTS),test-$(t) build-$(t) wave-$(t))
 
 all: test
 
@@ -192,6 +193,41 @@ $(foreach t,$(TESTS),$(eval $(call RUN_RULE,$(t))))
 # ----------------------------------------------------------------------------
 test: | $(LOG_DIR)
 	@./run_tests.sh
+
+# Static lint over the whole synthesizable RTL tree (no simulation).
+# Waivers live in verilator.vlt -- every entry there is an audited
+# don't-care with a comment saying why.
+lint:
+	$(VERILATOR) --lint-only -Wall --timing -sv verilator.vlt \
+		$(RTL_DIR)/*.sv --top-module tpu_top
+	@echo "lint: clean"
+
+# ----------------------------------------------------------------------------
+# Verilator C++ full-chip testbench (tests/verilator/tb_tpu_top.cpp): drives
+# tpu_top through its real UART pins at the hardware's 12 MHz / 1 Mbaud
+# ratio, at three array shapes (incl. one with all three axes distinct).
+# Each shape gets its own obj dir under sim/verilator/.
+# ----------------------------------------------------------------------------
+VERILATE_SHAPES := 2_2_2 2_4_2 4_2_3   # ARRAY_ROWS_NUM-COLS_M-TILE
+
+verilate-test: | $(SIM_DIR)
+	@set -e; for shape in $(VERILATE_SHAPES); do \
+		rows=$${shape%%_*}; rest=$${shape#*_}; \
+		cols=$${rest%%_*}; mt=$${rest#*_}; \
+		objdir=$(SIM_DIR)/verilator/$${rows}x$${cols}m$${mt}; \
+		mkdir -p $$objdir; \
+		echo "=== verilate $${rows}x$${cols} M_TILE=$${mt} ==="; \
+		$(VERILATOR) --cc --exe --build -j 0 -Wall \
+			--Mdir $$objdir verilator.vlt \
+			--top-module tpu_top \
+			-GCLK_FREQ=12000000 -GBAUD_RATE=1000000 \
+			-GARRAY_ROWS=$$rows -GNUM_COLS=$$cols -GM_TILE=$$mt \
+			-CFLAGS "-std=c++17 -DTB_ROWS=$$rows -DTB_COLS=$$cols -DTB_MTILE=$$mt" \
+			$(RTL_DIR)/*.sv $(TEST_DIR)/verilator/tb_tpu_top.cpp \
+			-o tb_tpu_top > /dev/null; \
+		$$objdir/tb_tpu_top; \
+	done
+	@echo "verilate-test: all shapes passed"
 
 list:
 	@echo "Available tests (tests/<name>_tb.sv):"

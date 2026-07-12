@@ -66,9 +66,11 @@ TPU/
 │   ├── uart_tx.sv
 │   ├── tpu_sequencer.sv         # UART command protocol + pipeline orchestration
 │   └── tpu_top.sv               # top-level: wires the datapath + sequencer together
+├── verilator.vlt                # audited lint waivers for `make lint`
 ├── tests/                       # SystemVerilog testbenches (simulation)
 │   ├── *_tb.sv                  # unit + integration tbs, incl. tpu_sequencer_{4x2,2x4}_tb.sv
 │   │                            #   proving the parameterized sequencer at non-2x2 shapes
+│   ├── verilator/               # C++ full-chip testbench (`make verilate-test`)
 │   └── hw_regression.py         # real-hardware regression suite (see §3.1)
 ├── sim/                         # simulation build output (gitignored)
 │   ├── *.vvp
@@ -119,6 +121,14 @@ make wave-<name>     # run it, then open its VCD in gtkwave
 
 **Other targets:**
 ```bash
+make lint      # verilator --lint-only -Wall over all of rtl/ (audited waivers
+               #   live in verilator.vlt, each with a comment saying why)
+make verilate-test
+               # Verilator C++ full-chip testbench (tests/verilator/): drives
+               #   tpu_top through its real UART pins at the hardware's
+               #   12 MHz / 1 Mbaud ratio, at three array shapes (2x2, 2x4,
+               #   and 4x2/M_TILE=3), replaying the hw_regression.py vector
+               #   set plus a UART framing-error injection only sim can do
 make list      # print every registered test name and its available targets
 make clean     # remove sim/ (compiled binaries, logs, waveform dumps)
 make hw-test PORT=/dev/cu.usbmodemXXXX [ARRAY_ROWS=2] [NUM_COLS=2] [M_TILE=2]
