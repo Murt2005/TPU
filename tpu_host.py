@@ -96,7 +96,7 @@ class TPU:
     """
 
     def __init__(self, port, baud=DEFAULT_BAUD, timeout=2.0,
-                 rows=2, cols=2, m_tile=None):
+                 rows=2, cols=2, m_tile=None, probe=True):
         self.rows = rows            # ARRAY_ROWS: K-tile depth
         self.cols = cols            # NUM_COLS:   N-tile width
         self.m_tile = rows if m_tile is None else m_tile  # M rows per RUN
@@ -109,6 +109,46 @@ class TPU:
         # type, to separate UART transmission time from actual RTL execution time
         # (see mnist/infer.py's --timing-breakdown and docs/PERFORMANCE_ANALYSIS.md).
         self.stats = {}
+        if probe:
+            self._resync_and_probe_shape()
+
+    def _resync_and_probe_shape(self):
+        """Recover a possibly-desynced sequencer, then verify this driver's
+        shape matches the flashed bitstream's -- turning the two ways a shape
+        mismatch otherwise surfaces (an opaque STATUS_ERR, or a desynced
+        sequencer that silently eats the *next* session's bytes as leftover
+        payload and times out) into one immediate, explicit error.
+
+        Resync: a crashed/mismatched previous session can leave the
+        sequencer mid-frame in S_RECV_PAYLOAD, waiting on up to 255 payload
+        bytes. Feeding it 258 zero bytes completes any such frame (the
+        remainder parse as CMD=0x00/LEN=0 pairs, each answered with a
+        harmless STATUS_ERR), after which it is guaranteed back in S_IDLE;
+        the error chatter is then discarded and a RESET restores a clean
+        datapath.
+
+        Shape probe: a LEN=0 RUN's response LEN is the device's
+        2*M_TILE*NUM_COLS -- a synthesis-time constant -- so comparing it
+        against this driver's expectation catches a mismatched bitstream
+        before any real traffic is sent."""
+        filler = bytes(258)  # max LEN(255) + CMD/LEN header margin
+        byte_s = 10 / self.ser.baudrate
+        for i in range(0, len(filler), BRIDGE_CHUNK_BYTES):
+            self.ser.write(filler[i:i + BRIDGE_CHUNK_BYTES])
+            time.sleep(BRIDGE_CHUNK_BYTES * byte_s * 1.1)
+        time.sleep(0.1)                   # let the error-response chatter land
+        self.ser.reset_input_buffer()     # ...and throw it away
+        self.reset()
+        resp = self._send_cmd(CMD_RUN)    # zeroed regs post-reset: result is junk,
+        if len(resp) != self.result_bytes:  # only its LENGTH matters here
+            raise TPUError(
+                f"array-shape mismatch: the flashed bitstream returns "
+                f"{len(resp)}-byte results (2*M_TILE*NUM_COLS), but "
+                f"rows={self.rows}/cols={self.cols}/m_tile={self.m_tile} "
+                f"expects {self.result_bytes}. Pass --rows/--cols/--m-tile "
+                f"matching the fpga/Makefile ARRAY_ROWS/NUM_COLS/M_TILE the "
+                f"bitstream was built with."
+            )
 
     def close(self):
         self.ser.close()
