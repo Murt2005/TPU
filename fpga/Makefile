@@ -37,6 +37,13 @@ PCF     := tpu_top.pcf
 
 CLK_FREQ ?= 12000000
 
+# UART baud rate between the RP2350 bridge and the FPGA. 1M divides 12 MHz
+# exactly (TICKS_PER_BIT = 12, zero baud error); the RP2350 side follows the
+# host's CDC line coding automatically (pico-ice-sdk tud_cdc_line_coding_cb),
+# so only tpu_host.py's DEFAULT_BAUD needs to match this. Fallback: 921600
+# (TICKS_PER_BIT = 13, +0.16% error, still within the mid-bit sample margin).
+BAUD_RATE ?= 1000000
+
 # DFU alt-setting the FPGA bitstream (flash) lives on for this board's
 # default firmware -- matches pico-ice-sdk's own example Makefiles.
 DFU_ALT_FLASH := 0
@@ -70,6 +77,7 @@ $(TOP).json: $(RTL)
 	$(YOSYS) -q -p "\
 		read_verilog -sv $(RTL); \
 		chparam -set CLK_FREQ $(CLK_FREQ) $(TOP); \
+		chparam -set BAUD_RATE $(BAUD_RATE) $(TOP); \
 		synth_ice40 -top $(TOP) -dsp -json $@"
 
 $(TOP).asc: $(TOP).json $(PCF)
@@ -83,6 +91,7 @@ stat: $(RTL)
 	@$(YOSYS) -p "\
 		read_verilog -sv $(RTL); \
 		chparam -set CLK_FREQ $(CLK_FREQ) $(TOP); \
+		chparam -set BAUD_RATE $(BAUD_RATE) $(TOP); \
 		synth_ice40 -top $(TOP) -dsp" 2>&1 \
 		| awk '/^=== design hierarchy ===/{exit} /^=== $(TOP) ===/{p=1} p'
 

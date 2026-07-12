@@ -18,7 +18,7 @@ import sys
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from tpu_host import TPU  # noqa: E402
+from tpu_host import TPU, DEFAULT_BAUD  # noqa: E402
 
 PSUM_WIDTH = 16  # rtl/tpu_top.sv: accumulator + bias adder width (no saturation)
 
@@ -189,7 +189,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--port", required=True, help="serial device for the iCE40 UART CDC port")
-    p.add_argument("--baud", type=int, default=115200)
+    p.add_argument("--baud", type=int, default=DEFAULT_BAUD)
     p.add_argument("--stress-n", type=int, default=200,
                     help="number of randomized matmuls to run (default 200)")
     p.add_argument("--seed", type=int, default=0, help="RNG seed for the stress test")

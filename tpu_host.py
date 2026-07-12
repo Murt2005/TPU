@@ -64,7 +64,12 @@ BRIDGE_CHUNK_BYTES = 28  # a little margin under the FIFO depth
 STATUS_OK = 0xAA
 STATUS_ERR = 0xFF
 
-DEFAULT_BAUD = 115200
+# Must match fpga/Makefile's BAUD_RATE (the divider is baked into the
+# bitstream at synthesis time). The RP2350 bridge needs no matching change:
+# pico-ice-sdk's tud_cdc_line_coding_cb sets uart0's baud to whatever rate
+# the host opens the CDC port with. 1M divides the 12 MHz FPGA clock exactly
+# (TICKS_PER_BIT = 12, zero baud error).
+DEFAULT_BAUD = 1_000_000
 
 # Must match fpga/Makefile's CLK_FREQ (default 12 MHz) and firmware/main.c's
 # ice_fpga_init() request -- the clock the RP2350 actually exports to the
@@ -137,7 +142,7 @@ class TPU:
         self.stats = {}
 
     def uart_wire_seconds(self):
-        """Real seconds spent shifting bits across the 115200-baud link itself
+        """Real seconds spent shifting bits across the UART link itself
         (8N1 = 10 bits/byte), computed from every byte actually seen on the
         wire since the last reset_stats(). Independent of CLK_FREQ -- baud
         rate sets real bit time directly, see docs/sequencer_uart_design.md §1/§2."""
