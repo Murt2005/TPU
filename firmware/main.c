@@ -61,6 +61,45 @@ static void cdc_to_uart0_blocking(uint8_t byte) {
     uart_putc_raw(uart0, byte);
 }
 
+// ---- uart0 -> CDC bridging, moved OUT of interrupt context ----
+// ice_usb_init() installs the SDK's ice_usb_uart0_to_cdc() as the UART0 RX
+// interrupt handler, and that handler calls tud_cdc_n_write_char() +
+// tud_cdc_n_write_flush() directly from the ISR. TinyUSB's device API has
+// no locking under CFG_TUSB_OS == OPT_OS_NONE, so an RX interrupt landing
+// while the main loop is inside tud_task() races the CDC endpoint state.
+// At 115200 that window was rarely hit; at 1 Mbaud a response byte arrives
+// every ~10 us and the race is routine -- observed on real hardware as a
+// response truncated after its first byte followed by the ENTIRE USB stack
+// (CDC and DFU alike) hanging until power cycle. Standard fix: the ISR only
+// moves bytes into a ring buffer, and the main loop -- the one and only
+// TinyUSB caller -- forwards them to the CDC FIFO.
+#define UART_RING_BITS 12   // 4096 bytes: outlasts any protocol response burst
+static uint8_t  uart_ring[1u << UART_RING_BITS];
+static volatile uint32_t ring_w, ring_r;   // SPSC: ISR produces, main consumes
+
+static void uart0_rx_to_ring(void) {
+    while (uart_is_readable(uart0)) {
+        uint8_t byte = uart_getc(uart0);
+        uint32_t next = (ring_w + 1) & ((1u << UART_RING_BITS) - 1);
+        if (next != ring_r) {           // on overflow, drop (never in practice:
+            uart_ring[ring_w] = byte;   // the ring dwarfs the largest response)
+            ring_w = next;
+        }
+    }
+}
+
+static void drain_ring_to_cdc(void) {
+    bool wrote = false;
+    while (ring_r != ring_w && tud_cdc_n_write_available(ICE_USB_UART0_CDC) > 0) {
+        tud_cdc_n_write_char(ICE_USB_UART0_CDC, uart_ring[ring_r]);
+        ring_r = (ring_r + 1) & ((1u << UART_RING_BITS) - 1);
+        wrote = true;
+    }
+    if (wrote) {
+        tud_cdc_n_write_flush(ICE_USB_UART0_CDC);
+    }
+}
+
 int main(void) {
     // Enable the UART
     uart_init(uart0, 115200);
@@ -72,6 +111,15 @@ int main(void) {
 
     // Swap in the non-dropping CDC->UART bridge (see comment above).
     tud_cdc_rx_cb_table[ICE_USB_UART0_CDC] = &cdc_to_uart0_blocking;
+
+    // Swap the SDK's ISR-context CDC writer for the ring-buffer producer
+    // (see the uart0_rx_to_ring comment above). ice_usb_init() claimed
+    // UART0_IRQ exclusively, so release its handler before installing ours;
+    // the SDK's uart_set_irq_enables(uart0, true, false) stays in effect.
+    irq_set_enabled(UART0_IRQ, false);
+    irq_remove_handler(UART0_IRQ, irq_get_exclusive_handler(UART0_IRQ));
+    irq_set_exclusive_handler(UART0_IRQ, uart0_rx_to_ring);
+    irq_set_enabled(UART0_IRQ, true);
 
     // Initialize the FPGA -- 12 MHz, not ICE_FPGA_DEFAULT_FREQUENCY (48 MHz):
     // must match fpga/pico2_ice/Makefile's CLK_FREQ.
@@ -105,6 +153,7 @@ int main(void) {
     // datapath at all.
     while (true) {
         tud_task();
+        drain_ring_to_cdc();
 
         int32_t ch = tud_cdc_n_read_char(0);
         if (ch == 'b' || ch == 'B') {
