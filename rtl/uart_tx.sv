@@ -27,6 +27,7 @@ module uart_tx #(
 
     localparam int TICKS_PER_BIT = CLK_FREQ / BAUD_RATE;
     localparam int CTR_WIDTH     = $clog2(TICKS_PER_BIT + 1);
+    localparam logic [CTR_WIDTH-1:0] LAST_TICK = CTR_WIDTH'(TICKS_PER_BIT - 1);
 
     typedef enum logic [1:0] {
         S_IDLE  = 2'd0,
@@ -65,7 +66,7 @@ module uart_tx #(
                 // START: drive line low for one full bit period
                 S_START: begin
                     tx_serial <= 1'b0;
-                    if (baud_ctr == (TICKS_PER_BIT - 1)) begin
+                    if (baud_ctr == LAST_TICK) begin
                         baud_ctr <= '0;
                         bit_idx  <= '0;
                         state    <= S_DATA;
@@ -77,7 +78,7 @@ module uart_tx #(
                 // DATA: shift out 8 bits LSB-first
                 S_DATA: begin
                     tx_serial <= shift_reg[bit_idx];
-                    if (baud_ctr == (TICKS_PER_BIT - 1)) begin
+                    if (baud_ctr == LAST_TICK) begin
                         baud_ctr <= '0;
                         if (bit_idx == 3'd7) begin
                             state <= S_STOP;
@@ -92,7 +93,7 @@ module uart_tx #(
                 // STOP: drive line high for one full bit period
                 S_STOP: begin
                     tx_serial <= 1'b1;
-                    if (baud_ctr == (TICKS_PER_BIT - 1)) begin
+                    if (baud_ctr == LAST_TICK) begin
                         baud_ctr <= '0;
                         tx_busy  <= 1'b0;
                         state    <= S_IDLE;

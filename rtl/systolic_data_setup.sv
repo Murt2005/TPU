@@ -20,11 +20,11 @@ module systolic_data_setup #(
     genvar i, j;
     generate
         for (i = 0; i < ARRAY_ROWS; i++) begin : row_skew
-            if (i == 0) begin
+            if (i == 0) begin : gen_passthrough
                 // Row 0 has zero delay: wire straight through
                 assign mmu_in_row[i]   = ub_read_data[i];
                 assign mmu_in_valid[i] = ub_read_valid;
-            end else begin
+            end else begin : gen_delay_line
                 // Row i > 0 requires i pipeline registers
                 logic signed [DATA_WIDTH-1:0] shift_data  [i:0];
                 logic                         shift_valid [i:0];

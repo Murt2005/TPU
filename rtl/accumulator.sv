@@ -103,21 +103,21 @@ module accumulator #(
         end
     end
 
-    genvar c;
+    genvar gc;
     generate
-        for (c = 0; c < NUM_COLS; c++) begin : col_fifo
+        for (gc = 0; gc < NUM_COLS; gc++) begin : col_fifo
             fifo #(
                 .WIDTH(PSUM_WIDTH),
                 .DEPTH(FIFO_DEPTH)
             ) u_fifo (
                 .clk     (clk),
                 .reset   (reset),
-                .write_enable   (in_partial_sum_valid[c]),
-                .write_data (in_partial_sum[c]),
+                .write_enable   (in_partial_sum_valid[gc]),
+                .write_data (in_partial_sum[gc]),
                 .read_enable   (pop_row),
-                .read_data (fifo_rd_data[c]),
-                .full    (fifo_full[c]),
-                .empty   (fifo_empty[c])
+                .read_data (fifo_rd_data[gc]),
+                .full    (fifo_full[gc]),
+                .empty   (fifo_empty[gc])
             );
         end
     endgenerate

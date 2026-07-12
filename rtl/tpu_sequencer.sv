@@ -247,7 +247,6 @@ module tpu_sequencer #(
 
     // Results captured from pipeline, one row per final_row_valid pulse
     logic signed [15:0] result_rows [M_TILE][NUM_COLS];
-    logic               result_ok;
 
     // FSM states
     typedef enum logic [4:0] {
@@ -348,7 +347,6 @@ module tpu_sequencer #(
             for (int m = 0; m < M_TILE; m++)
                 for (int c = 0; c < NUM_COLS; c++)
                     result_rows[m][c] <= '0;
-            result_ok         <= 1'b0;
 
             write_enable_col   <= '0;
             for (int c = 0; c < NUM_COLS; c++)
@@ -514,7 +512,6 @@ module tpu_sequencer #(
                         // LEN=1 -> payload[0][0]=TILE_FIRST, [1]=TILE_LAST.
                         CMD_RUN: begin
                             rows_got  <= '0;
-                            result_ok <= 1'b0;
                             wait_cnt  <= '0;
                             run_cnt   <= '0;
                             if (len_reg == 8'd1) begin
@@ -552,7 +549,6 @@ module tpu_sequencer #(
                                     reg_act[m][k]
                                         <= signed'(payload[1 + W_BYTES + m*ARRAY_ROWS + k]);
                             rows_got  <= '0;
-                            result_ok <= 1'b0;
                             wait_cnt  <= '0;
                             run_cnt   <= '0;
                             state     <= S_WR_UB;
@@ -653,7 +649,6 @@ module tpu_sequencer #(
                     wait_cnt <= wait_cnt + 1'b1;
                     if (reg_tile_last) begin
                         if (rows_got == ROWS_GOT_W'(M_TILE)) begin
-                            result_ok     <= 1'b1;
                             stream_active <= 1'b0;
                             // Pack response: STATUS_OK, LEN, row-major int16 LE
                             tx_payload[0] <= STATUS_OK;
@@ -677,7 +672,6 @@ module tpu_sequencer #(
                         end
                     end else begin
                         if (accum_pass_done) begin
-                            result_ok <= 1'b1;
                             if (stream_active && tile_idx != k_tiles_reg - 8'd1) begin
                                 // More tiles in this frame — no response,
                                 // straight back to the byte deserializer.
@@ -795,7 +789,6 @@ module tpu_sequencer #(
                                     reg_tile_first <= (tile_idx == 8'd0) && stream_first;
                                     reg_tile_last  <= (tile_idx == k_tiles_reg - 8'd1) && stream_last;
                                     rows_got       <= '0;
-                                    result_ok      <= 1'b0;
                                     wait_cnt       <= '0;
                                     run_cnt        <= '0;
                                     state          <= S_WR_UB;

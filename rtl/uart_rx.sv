@@ -29,12 +29,12 @@ module uart_rx #(
     output logic       rx_error
 );
 
-    // Baud timing: 16x oversampling means one bit period = OVERSAMPLE ticks
-    // We sample at tick 8 (mid-bit) for maximum noise margin
-    localparam int OVERSAMPLE   = 16;
+    // Baud timing: one bit period = TICKS_PER_BIT clock ticks.
+    // We sample at the mid-bit tick for maximum noise margin.
     localparam int TICKS_PER_BIT = CLK_FREQ / BAUD_RATE;
     localparam int SAMPLE_TICK   = TICKS_PER_BIT / 2;   // mid-bit sample point
     localparam int CTR_WIDTH     = $clog2(TICKS_PER_BIT + 1);
+    localparam logic [CTR_WIDTH-1:0] LAST_TICK = CTR_WIDTH'(TICKS_PER_BIT - 1);
 
     // Double-flop synchroniser
     logic rx_sync_0, rx_sync;
@@ -100,7 +100,7 @@ module uart_rx #(
 
                 // DATA: sample 8 data bits (LSB first)
                 S_DATA: begin
-                    if (baud_ctr == (TICKS_PER_BIT - 1)) begin
+                    if (baud_ctr == LAST_TICK) begin
                         baud_ctr              <= '0;
                         shift_reg[bit_idx]    <= rx_sync;
                         if (bit_idx == 3'd7) begin

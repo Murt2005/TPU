@@ -38,7 +38,7 @@ module fifo #(
     logic [PTR_WIDTH-1:0] read_ptr;
     logic [PTR_WIDTH:0]   data_count;
 
-    assign full  = (data_count == DEPTH);
+    assign full  = (data_count == (PTR_WIDTH+1)'(DEPTH));
     assign empty = (data_count == 0);
 
     // check later if this should be changed to memory[read_ptr] && read_enable
