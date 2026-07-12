@@ -38,3 +38,19 @@ set_io -nowarn -pullup yes reset_n 10
 # cable used to flash the RP2350 can also carry the TPU's host<->UART link.
 set_io -nowarn rx_pin   9
 set_io -nowarn tx_pin   11
+
+# spi_*: the RP2350<->iCE40 shared SPI/config bus, used by USE_SPI=1 builds
+# (rtl/spi_slave.sv). Pin numbers from pico-ice-sdk/rtl/pico2_ice.pcf; the
+# RP2350 side is spi0 on GPIO 4/5/6/7 (pico-ice-sdk src/ice_fpga_data.c's
+# pico2_spibus). Direction note: the board nets are named from the flash's
+# perspective, so they read crossed -- RP2350 GPIO7 (spi0 MOSI/TX) drives net
+# ICE_SO = iCE40 pin 14 (our INPUT), and RP2350 GPIO4 (spi0 MISO/RX) listens
+# on net ICE_SI = iCE40 pin 17 (our OUTPUT). This is the same electrical path
+# the RP2350 uses to load the CRAM bitstream, which is what confirms the
+# mapping. The onboard SPI flash also sits on this bus -- the firmware must
+# keep it deselected (or in deep power-down) while the TPU link is active,
+# and the FPGA releases these pins during (re)configuration anyway.
+set_io -nowarn spi_mosi 14
+set_io -nowarn spi_sck  15
+set_io -nowarn spi_csn  16
+set_io -nowarn spi_miso 17

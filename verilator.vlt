@@ -7,6 +7,17 @@
 // connection is the documentation that this is intentional.
 lint_off -rule PINCONNECTEMPTY -file "*rtl/tpu_top.sv"
 
+// tpu_top's host-PHY pins are config-dependent by design (USE_SPI selects
+// UART or SPI); the deselected PHY's input pins are intentionally unused.
+lint_off -rule UNUSEDSIGNAL -file "*rtl/tpu_top.sv" -match "*'spi_*"
+lint_off -rule UNUSEDSIGNAL -file "*rtl/tpu_top.sv" -match "*'rx_pin'*"
+
+// spi_slave deliberately uses csn BOTH as an async clear (SCK-domain bit
+// counter: a torn byte must not leave alignment off for the next burst,
+// and SCK stops ticking when CS deasserts, so a synchronous clear in that
+// domain can't work) AND 2FF-synchronized into clk for the TX engine.
+lint_off -rule SYNCASYNCNET -file "*rtl/tpu_top.sv" -match "*'spi_csn'*"
+
 // tpu_sequencer uses shared 8-bit counters (run_cnt, byte_cnt, sr_row/sr_col,
 // tx_byte_idx) across loop phases whose bounds are small, shape-dependent
 // parameters (ARRAY_ROWS/NUM_COLS/M_TILE); indexing per-shape-sized arrays

@@ -125,12 +125,14 @@ def run_reset_roundtrip(tpu, cases):
 
 
 def run_unknown_cmd(tpu):
+    # 0xEE, not 0xFF: 0xFF is CMD_NOP (the SPI read-poll filler), which the
+    # sequencer silently ignores in S_IDLE rather than answering STATUS_ERR.
     try:
-        tpu._send_cmd(0xFF)
+        tpu._send_cmd(0xEE)
     except Exception:
-        print("[PASS] T4 unknown CMD 0xFF -> STATUS_ERR")
+        print("[PASS] T4 unknown CMD 0xEE -> STATUS_ERR")
         return True
-    print("[FAIL] T4 unknown CMD 0xFF -- expected an error response, got none")
+    print("[FAIL] T4 unknown CMD 0xEE -- expected an error response, got none")
     return False
 
 

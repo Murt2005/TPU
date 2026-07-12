@@ -49,6 +49,7 @@ RTL_activation           := $(RTL_DIR)/activation.sv
 RTL_unified_buffer       := $(RTL_DIR)/unified_buffer.sv
 RTL_uart_rx              := $(RTL_DIR)/uart_rx.sv
 RTL_uart_tx              := $(RTL_DIR)/uart_tx.sv
+RTL_spi_slave            := $(RTL_DIR)/spi_slave.sv $(RTL_fifo)
 RTL_tpu_sequencer        := $(RTL_DIR)/tpu_sequencer.sv
 
 # Full datapath (everything tpu_sequencer_tb needs to instantiate)
@@ -78,6 +79,7 @@ DEPS_unified_buffer       := $(RTL_unified_buffer)
 DEPS_tpu_core             := $(RTL_tpu_datapath)
 DEPS_uart_rx              := $(RTL_uart_rx)
 DEPS_uart_tx              := $(RTL_uart_tx)
+DEPS_spi_slave            := $(RTL_spi_slave)
 DEPS_tpu_sequencer        := $(RTL_tpu_sequencer) $(RTL_tpu_datapath)
 DEPS_tpu_sequencer_4x2    := $(RTL_tpu_sequencer) $(RTL_tpu_datapath)
 DEPS_tpu_sequencer_2x4    := $(RTL_tpu_sequencer) $(RTL_tpu_datapath)
@@ -85,7 +87,7 @@ DEPS_tpu_sequencer_2x4    := $(RTL_tpu_sequencer) $(RTL_tpu_datapath)
 TESTS := fifo pe mmu accumulator systolic_data_setup weight_fifo bias activation \
          unified_buffer \
          mmu_accum accum_bias bias_activation weight_fifo_mmu tpu_core \
-         uart_rx uart_tx tpu_sequencer tpu_sequencer_4x2 tpu_sequencer_2x4
+         uart_rx uart_tx spi_slave tpu_sequencer tpu_sequencer_4x2 tpu_sequencer_2x4
 
 # de-duplicate dep lists (modules shared via multiple paths, e.g. tpu_core -> fifo.sv)
 dedup = $(if $1,$(firstword $1) $(call dedup,$(filter-out $(firstword $1),$1)))
@@ -116,6 +118,7 @@ build-weight_fifo_mmu:      $(SIM_DIR)/weight_fifo_mmu.vvp
 build-tpu_core:             $(SIM_DIR)/tpu_core.vvp
 build-uart_rx:              $(SIM_DIR)/uart_rx.vvp
 build-uart_tx:              $(SIM_DIR)/uart_tx.vvp
+build-spi_slave:            $(SIM_DIR)/spi_slave.vvp
 build-tpu_sequencer:        $(SIM_DIR)/tpu_sequencer.vvp
 build-tpu_sequencer_4x2:    $(SIM_DIR)/tpu_sequencer_4x2.vvp
 build-tpu_sequencer_2x4:    $(SIM_DIR)/tpu_sequencer_2x4.vvp
@@ -168,6 +171,9 @@ $(SIM_DIR)/uart_rx.vvp: $(TEST_DIR)/uart_rx_tb.sv $(call dedup,$(DEPS_uart_rx)) 
 $(SIM_DIR)/uart_tx.vvp: $(TEST_DIR)/uart_tx_tb.sv $(call dedup,$(DEPS_uart_tx)) | $(SIM_DIR)
 	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_uart_tx)) $<
 
+$(SIM_DIR)/spi_slave.vvp: $(TEST_DIR)/spi_slave_tb.sv $(call dedup,$(DEPS_spi_slave)) | $(SIM_DIR)
+	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_spi_slave)) $<
+
 $(SIM_DIR)/tpu_sequencer.vvp: $(TEST_DIR)/tpu_sequencer_tb.sv $(call dedup,$(DEPS_tpu_sequencer)) | $(SIM_DIR)
 	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_tpu_sequencer)) $<
 
@@ -200,29 +206,37 @@ test: | $(LOG_DIR)
 lint:
 	$(VERILATOR) --lint-only -Wall --timing -sv verilator.vlt \
 		$(RTL_DIR)/*.sv --top-module tpu_top
-	@echo "lint: clean"
+	$(VERILATOR) --lint-only -Wall --timing -sv verilator.vlt \
+		-GUSE_SPI=1 $(RTL_DIR)/*.sv --top-module tpu_top
+	@echo "lint: clean (UART + SPI configs)"
 
 # ----------------------------------------------------------------------------
 # Verilator C++ full-chip testbench (tests/verilator/tb_tpu_top.cpp): drives
-# tpu_top through its real UART pins at the hardware's 12 MHz / 1 Mbaud
-# ratio, at three array shapes (incl. one with all three axes distinct).
-# Each shape gets its own obj dir under sim/verilator/.
+# tpu_top through its real host pins — UART at the hardware's 12 MHz/1 Mbaud
+# ratio at three array shapes (incl. one with all three axes distinct), plus
+# an SPI-PHY build (USE_SPI=1, spi_slave.sv) at the hardware 2x4 shape.
+# Each variant gets its own obj dir under sim/verilator/.
 # ----------------------------------------------------------------------------
-VERILATE_SHAPES := 2_2_2 2_4_2 4_2_3   # ARRAY_ROWS_NUM-COLS_M-TILE
+VERILATE_SHAPES := 2_2_2_uart 2_4_2_uart 4_2_3_uart 2_4_2_spi  # ROWS_COLS_MTILE_PHY
 
 verilate-test: | $(SIM_DIR)
 	@set -e; for shape in $(VERILATE_SHAPES); do \
 		rows=$${shape%%_*}; rest=$${shape#*_}; \
-		cols=$${rest%%_*}; mt=$${rest#*_}; \
-		objdir=$(SIM_DIR)/verilator/$${rows}x$${cols}m$${mt}; \
+		cols=$${rest%%_*}; rest=$${rest#*_}; \
+		mt=$${rest%%_*}; phy=$${rest#*_}; \
+		objdir=$(SIM_DIR)/verilator/$${rows}x$${cols}m$${mt}_$${phy}; \
 		mkdir -p $$objdir; \
-		echo "=== verilate $${rows}x$${cols} M_TILE=$${mt} ==="; \
+		phyflags=""; phycflags=""; \
+		if [ "$$phy" = "spi" ]; then \
+			phyflags="-GUSE_SPI=1"; phycflags="-DTB_SPI"; \
+		fi; \
+		echo "=== verilate $${rows}x$${cols} M_TILE=$${mt} ($${phy}) ==="; \
 		$(VERILATOR) --cc --exe --build -j 0 -Wall \
 			--Mdir $$objdir verilator.vlt \
 			--top-module tpu_top \
 			-GCLK_FREQ=12000000 -GBAUD_RATE=1000000 \
-			-GARRAY_ROWS=$$rows -GNUM_COLS=$$cols -GM_TILE=$$mt \
-			-CFLAGS "-std=c++17 -DTB_ROWS=$$rows -DTB_COLS=$$cols -DTB_MTILE=$$mt" \
+			-GARRAY_ROWS=$$rows -GNUM_COLS=$$cols -GM_TILE=$$mt $$phyflags \
+			-CFLAGS "-std=c++17 -DTB_ROWS=$$rows -DTB_COLS=$$cols -DTB_MTILE=$$mt $$phycflags" \
 			$(RTL_DIR)/*.sv $(TEST_DIR)/verilator/tb_tpu_top.cpp \
 			-o tb_tpu_top > /dev/null; \
 		$$objdir/tb_tpu_top; \

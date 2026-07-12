@@ -53,12 +53,19 @@ ARRAY_ROWS ?= 2
 NUM_COLS   ?= 2
 M_TILE     ?= $(ARRAY_ROWS)
 
+# Host PHY: 0 = UART on the CDC-bridged pins (default, validated), 1 = SPI
+# slave on the RP2350<->iCE40 config bus pins (rtl/spi_slave.sv; needs the
+# matching SPI-bridge firmware). See docs/FPGA.md and tpu_top.pcf's SPI
+# pin-mapping comment.
+USE_SPI ?= 0
+
 # DFU alt-setting the FPGA bitstream (flash) lives on for this board's
 # default firmware -- matches pico-ice-sdk's own example Makefiles.
 DFU_ALT_FLASH := 0
 
 RTL := $(RTL_DIR)/uart_rx.sv \
        $(RTL_DIR)/uart_tx.sv \
+       $(RTL_DIR)/spi_slave.sv \
        $(RTL_DIR)/tpu_sequencer.sv \
        $(RTL_DIR)/unified_buffer.sv \
        $(RTL_DIR)/weight_fifo.sv \
@@ -90,6 +97,7 @@ $(TOP).json: $(RTL)
 		chparam -set ARRAY_ROWS $(ARRAY_ROWS) $(TOP); \
 		chparam -set NUM_COLS $(NUM_COLS) $(TOP); \
 		chparam -set M_TILE $(M_TILE) $(TOP); \
+		chparam -set USE_SPI $(USE_SPI) $(TOP); \
 		synth_ice40 -top $(TOP) -dsp -json $@"
 
 $(TOP).asc: $(TOP).json $(PCF)
@@ -107,6 +115,7 @@ stat: $(RTL)
 		chparam -set ARRAY_ROWS $(ARRAY_ROWS) $(TOP); \
 		chparam -set NUM_COLS $(NUM_COLS) $(TOP); \
 		chparam -set M_TILE $(M_TILE) $(TOP); \
+		chparam -set USE_SPI $(USE_SPI) $(TOP); \
 		synth_ice40 -top $(TOP) -dsp" 2>&1 \
 		| awk '/^=== design hierarchy ===/{exit} /^=== $(TOP) ===/{p=1} p'
 

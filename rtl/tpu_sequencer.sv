@@ -59,6 +59,10 @@
 //
 //  0x05  RESET         LEN=0  pulses internal reset for 4 cycles; responds OK
 //
+//  0xFF  NOP            (no LEN byte) ignored in S_IDLE, no response — the
+//                             SPI host interface's read-poll filler byte
+//                             (see CMD_NOP's comment below and spi_slave.sv)
+//
 //  0x07  STREAM_RUN    LEN=2+K_TILES*(ARRAY_ROWS*NUM_COLS+M_TILE*ARRAY_ROWS)
 //                             payload: [flags, K_TILES,
 //                                       tile_0: weight bytes (natural
@@ -211,6 +215,13 @@ module tpu_sequencer #(
     localparam logic [7:0] CMD_RESET        = 8'h05;
     localparam logic [7:0] CMD_RUN_TILE     = 8'h06;
     localparam logic [7:0] CMD_STREAM_RUN   = 8'h07;
+    // 0xFF in S_IDLE is a NOP, silently ignored (no response). The SPI host
+    // interface (rtl/spi_slave.sv) needs this: reading a response over SPI
+    // means the master clocks dummy filler bytes, and those arrive here as
+    // rx_valid bytes exactly like command bytes do. 0xFF filler + this rule
+    // keeps read-polling invisible to the protocol. (UART hosts simply never
+    // send 0xFF as a command; unknown-command tests use other bytes.)
+    localparam logic [7:0] CMD_NOP          = 8'hFF;
 
     localparam logic [7:0] STATUS_OK  = 8'hAA;
     localparam logic [7:0] STATUS_ERR = 8'hFF;
@@ -409,7 +420,7 @@ module tpu_sequencer #(
                         tx_byte_idx   <= 8'd0;
                         state         <= S_TX_STATUS;
                         busy          <= 1'b1;
-                    end else if (rx_valid) begin
+                    end else if (rx_valid && rx_data != CMD_NOP) begin
                         cmd_reg  <= rx_data;
                         state    <= S_RECV_LEN;
                         busy     <= 1'b1;

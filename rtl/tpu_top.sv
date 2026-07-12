@@ -33,13 +33,25 @@ module tpu_top #(
     //   M_TILE     — activation rows streamed per RUN (UB address depth)
     parameter int ARRAY_ROWS   = 2,
     parameter int NUM_COLS     = 2,
-    parameter int M_TILE       = ARRAY_ROWS
+    parameter int M_TILE       = ARRAY_ROWS,
+    // Host PHY select: 0 = UART on rx_pin/tx_pin (default, the validated
+    // bring-up path), 1 = SPI slave on spi_* (rtl/spi_slave.sv; the RP2350
+    // drives it as mode-0 master over the shared config bus). Only the
+    // selected PHY is instantiated; the other side's pins idle.
+    parameter int USE_SPI      = 0
 ) (
     input  logic clk,
     input  logic reset_n,   // active-low (DE1-SoC KEY[0])
 
     input  logic rx_pin,    // UART RX from host
-    output logic tx_pin     // UART TX to host
+    output logic tx_pin,    // UART TX to host
+
+    // SPI slave pins (USE_SPI=1 builds; see fpga/tpu_top.pcf for the
+    // pico2-ice config-bus pin mapping)
+    input  logic spi_sck,
+    input  logic spi_csn,
+    input  logic spi_mosi,
+    output logic spi_miso
 );
 
     // =========================================================================
@@ -80,23 +92,46 @@ module tpu_top #(
     logic        tx_valid_seq;
     logic        tx_busy;
 
-    uart_rx #(.CLK_FREQ(CLK_FREQ), .BAUD_RATE(BAUD_RATE)) u_rx (
-        .clk       (clk),
-        .reset     (rst),
-        .rx_serial (rx_pin),
-        .rx_data   (rx_byte),
-        .rx_valid  (rx_valid),
-        .rx_error  (rx_error)
-    );
+    generate
+        if (USE_SPI != 0) begin : gen_spi_phy
+            spi_slave u_spi (
+                .clk      (clk),
+                .reset    (rst),
+                .sck      (spi_sck),
+                .csn      (spi_csn),
+                .mosi     (spi_mosi),
+                .miso     (spi_miso),
+                .rx_data  (rx_byte),
+                .rx_valid (rx_valid),
+                .tx_data  (tx_byte),
+                .tx_valid (tx_valid_seq),
+                .tx_busy  (tx_busy)
+            );
+            // SPI has no start/stop framing, so no framing-error source
+            assign rx_error = 1'b0;
+            assign tx_pin   = 1'b1;   // UART line idles high
+        end else begin : gen_uart_phy
+            uart_rx #(.CLK_FREQ(CLK_FREQ), .BAUD_RATE(BAUD_RATE)) u_rx (
+                .clk       (clk),
+                .reset     (rst),
+                .rx_serial (rx_pin),
+                .rx_data   (rx_byte),
+                .rx_valid  (rx_valid),
+                .rx_error  (rx_error)
+            );
 
-    uart_tx #(.CLK_FREQ(CLK_FREQ), .BAUD_RATE(BAUD_RATE)) u_tx (
-        .clk       (clk),
-        .reset     (rst),
-        .tx_data   (tx_byte),
-        .tx_valid  (tx_valid_seq),
-        .tx_busy   (tx_busy),
-        .tx_serial (tx_pin)
-    );
+            uart_tx #(.CLK_FREQ(CLK_FREQ), .BAUD_RATE(BAUD_RATE)) u_tx (
+                .clk       (clk),
+                .reset     (rst),
+                .tx_data   (tx_byte),
+                .tx_valid  (tx_valid_seq),
+                .tx_busy   (tx_busy),
+                .tx_serial (tx_pin)
+            );
+
+            assign spi_miso = 1'b0;
+        end
+    endgenerate
 
     // =========================================================================
     // Sequencer control signals

@@ -460,9 +460,10 @@ module tpu_sequencer_tb;
         $display("[Test 3b] Post-reset compute");
         do_compute(4,5,2,3, 16'sd100,16'sd200, 1,2,3,4, 16'sd108,16'sd211,16'sd120,16'sd227, "T3b");
 
-        // Test 4: unknown CMD → STATUS_ERR
-        $display("[Test 4] Unknown CMD 0xFF → STATUS_ERR");
-        host_send_byte(8'hFF);
+        // Test 4: unknown CMD → STATUS_ERR. 0xEE, not 0xFF: 0xFF is CMD_NOP,
+        // the SPI read-poll filler, silently ignored in S_IDLE (see below).
+        $display("[Test 4] Unknown CMD 0xEE → STATUS_ERR");
+        host_send_byte(8'hEE);
         host_send_byte(8'h00);
         collect_n(2);
         if (rx_buf[0] !== 8'hFF) begin
@@ -472,6 +473,23 @@ module tpu_sequencer_tb;
             $display("[PASS] T4: STATUS_ERR received");
         end
         repeat (10) @(posedge clk);
+
+        // Test 4b: CMD_NOP (0xFF) in S_IDLE is ignored — no response, and the
+        // next real command still parses correctly (its first byte must be
+        // taken as CMD, not as a stale LEN).
+        $display("[Test 4b] CMD_NOP 0xFF ignored in S_IDLE");
+        host_send_byte(8'hFF);
+        host_send_byte(8'hFF);
+        host_send_byte(8'hFF);
+        repeat (200) @(posedge clk);
+        if (cap_idx != 0) begin
+            $error("[FAIL] T4b: NOP produced %0d response byte(s), expected none", cap_idx);
+            errors++;
+            cap_idx = 0;
+        end else begin
+            $display("[PASS] T4b: NOP filler ignored");
+        end
+        do_compute(4,5,2,3, 16'sd100,16'sd200, 1,2,3,4, 16'sd108,16'sd211,16'sd120,16'sd227, "T4b post-NOP");
 
         // Test 5: negative arithmetic + ReLU
         // W=[[-1,-2],[-3,-4]], A=[[-1,1],[2,-2]], bias=[0,0]

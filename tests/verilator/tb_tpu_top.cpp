@@ -14,6 +14,13 @@
 // Build/run at any shape via `make verilate-test` (root Makefile): the array
 // shape is chparam'd with -GARRAY_ROWS/-GNUM_COLS/-GM_TILE and mirrored to
 // this file with -DTB_ROWS/-DTB_COLS/-DTB_MTILE.
+//
+// With -DTB_SPI (paired with -GUSE_SPI=1), the UART BFM is replaced by an
+// SPI mode-0 master BFM (rtl/spi_slave.sv's write-then-poll protocol:
+// command frame in one CS burst, then 0xFF filler polls reading MISO until
+// the first non-0x00 byte, which is STATUS). Write SCK runs at CLK/6 —
+// the sequencer's inter-tile STREAM_RUN processing window caps uniform
+// write pacing (see spi_slave.sv's header); reads poll at CLK/10.
 
 #include <cstdint>
 #include <cstdio>
@@ -92,6 +99,11 @@ struct Tb {
         dut->clk = 0;
         dut->reset_n = 1;
         dut->rx_pin = 1;  // UART idle high
+#ifdef TB_SPI
+        dut->spi_sck = 0;
+        dut->spi_csn = 1;
+        dut->spi_mosi = 0;
+#endif
         dut->eval();
         // tpu_top's power-on-reset generator holds internal reset for the
         // first 256 cycles; give it slack before talking.
@@ -106,6 +118,8 @@ struct Tb {
         }
     }
 
+#ifndef TB_SPI
+    // ---------------- UART master BFM ----------------
     void send_bit(int b) { dut->rx_pin = b; cycle(TICKS_PER_BIT); }
 
     void send_byte(uint8_t v, bool good_stop = true) {
@@ -152,6 +166,53 @@ struct Tb {
         }
         return status;
     }
+#else
+    // ---------------- SPI mode-0 master BFM ----------------
+    // Write SCK = CLK/6 (uniform pacing under the sequencer's STREAM_RUN
+    // inter-tile window); read-poll SCK = CLK/10 (under spi_slave's CLK/8
+    // TX-engine cap). Halves are in core-clock cycles.
+    static constexpr int WR_HALF = 3;
+    static constexpr int RD_HALF = 5;
+
+    void cs(bool active) {
+        dut->spi_csn = active ? 0 : 1;
+        cycle(8);                    // CS lead/lag (module needs >= 5 clk)
+    }
+
+    uint8_t spi_xfer(uint8_t w, int half) {
+        uint8_t r = 0;
+        for (int i = 7; i >= 0; i--) {
+            dut->spi_mosi = (w >> i) & 1;
+            cycle(half);             // low phase: slave's MISO bit settles
+            r |= (uint8_t)(dut->spi_miso & 1) << i;  // master samples at rising
+            dut->spi_sck = 1;
+            cycle(half);
+            dut->spi_sck = 0;
+        }
+        return r;
+    }
+
+    int send_cmd(uint8_t cmd, const Bytes& payload, Bytes& resp) {
+        cs(true);                    // command frame: one CS burst
+        spi_xfer(cmd, WR_HALF);
+        spi_xfer((uint8_t)payload.size(), WR_HALF);
+        for (uint8_t b : payload) spi_xfer(b, WR_HALF);
+        cs(false);
+
+        cs(true);                    // response: poll 0xFF filler until STATUS
+        int status = -1;
+        for (int polls = 0; polls < 20000; polls++) {
+            uint8_t b = spi_xfer(0xFF, RD_HALF);
+            if (b != 0x00) { status = b; break; }
+        }
+        if (status < 0) { cs(false); return -1; }
+        int len = spi_xfer(0xFF, RD_HALF);
+        resp.clear();
+        for (int i = 0; i < len; i++) resp.push_back(spi_xfer(0xFF, RD_HALF));
+        cs(false);
+        return status;
+    }
+#endif
 
     // -- protocol commands, mirroring tpu_host.py's TPU class --------------
 
@@ -409,8 +470,13 @@ static std::vector<std::tuple<const char*, Mat, Mat, Vec>> build_cases() {
 
 int main(int argc, char** argv) {
     Verilated::commandArgs(argc, argv);
-    printf("=== tb_tpu_top: %dx%d array, M_TILE=%d (TICKS_PER_BIT=%d) ===\n",
+#ifdef TB_SPI
+    printf("=== tb_tpu_top: %dx%d array, M_TILE=%d (SPI PHY) ===\n",
+           ROWS, COLS, MTILE);
+#else
+    printf("=== tb_tpu_top: %dx%d array, M_TILE=%d (UART PHY, TICKS_PER_BIT=%d) ===\n",
            ROWS, COLS, MTILE, TICKS_PER_BIT);
+#endif
     Tb tb;
 
     // 1) Fixed pattern cases (the hw_regression.py seven)
@@ -426,16 +492,32 @@ int main(int argc, char** argv) {
         report(ok, "T3b post-reset compute");
     }
 
-    // 3) Unknown CMD 0xFF -> STATUS_ERR
+    // 3) Unknown CMD 0xEE -> STATUS_ERR (0xFF is CMD_NOP, tested next)
     {
         Bytes resp;
-        int status = tb.send_cmd(0xFF, {}, resp);
-        report(status == STATUS_ERR && resp.empty(), "T4 unknown CMD 0xFF -> STATUS_ERR");
+        int status = tb.send_cmd(0xEE, {}, resp);
+        report(status == STATUS_ERR && resp.empty(), "T4 unknown CMD 0xEE -> STATUS_ERR");
+    }
+
+#ifndef TB_SPI
+    // 3b) CMD_NOP 0xFF filler bytes are silently ignored in S_IDLE (the SPI
+    //     read-poll convention), and the next real command still parses.
+    //     (UART build only as a direct test -- under TB_SPI every response
+    //     poll exercises exactly this path implicitly.)
+    {
+        tb.send_byte(0xFF);
+        tb.send_byte(0xFF);
+        tb.send_byte(0xFF);
+        bool ok = (tb.recv_byte(3000) == -1);   // no response expected
+        auto& [name, a, w, b] = cases[0];
+        Mat expected = golden(a, w, b), got;
+        ok = ok && tb.matmul(a, w, b, got) && eq(got, expected);
+        report(ok, "T4c NOP 0xFF filler ignored + next command parses");
     }
 
     // 4) UART framing error (bad stop bit) -> STATUS_ERR, then full recovery.
     //    Only possible in simulation -- the BFM breaks the stop bit on what
-    //    the sequencer expects to be a CMD byte.
+    //    the sequencer expects to be a CMD byte. (No framing on SPI.)
     {
         tb.send_byte(CMD_RUN, /*good_stop=*/false);
         int status = tb.recv_byte();
@@ -446,6 +528,7 @@ int main(int argc, char** argv) {
         ok = ok && tb.matmul(a, w, b, got) && eq(got, expected);
         report(ok, "T4b framing error -> STATUS_ERR + recovery");
     }
+#endif
 
     // 5) Randomized single-tile stress vs golden (legacy command path)
     {
