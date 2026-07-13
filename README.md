@@ -4,10 +4,11 @@ Reimplementing the core datapath of Google's first-generation Tensor Processing 
 (as described in *In-Datacenter Performance Analysis of a Tensor Processing Unit*)
 as synthesizable SystemVerilog with a fully parameterized array shape: verified in
 simulation (19 testbenches), and validated end-to-end on real hardware on a
-[pico2-ice](https://pico2-ice.tinyvision.ai/) (iCE40UP5K) board over a 1 Mbaud UART —
-including hardware-side K-dim matmul tiling, a batched wire protocol, DSP-backed PEs,
-and a real-time MNIST digit classification demo at ~240 ms/image on-silicon
-(33x down from the first working bring-up) — see §3.2 and §4.
+[pico2-ice](https://pico2-ice.tinyvision.ai/) (iCE40UP5K) board over a UART or SPI
+host link — including hardware-side K-dim matmul tiling, a batched wire protocol,
+DSP-backed PEs, an RP2350-offloaded tiling loop, and a real-time MNIST digit
+classification demo at ~64 ms/image on-silicon (125x down from the first working
+bring-up) — see §3.2 and §4.
 
 ## 1. TPU Design
 
@@ -181,6 +182,11 @@ bitstream at synthesis time — the matching host-side flags must agree, see
 make CLK_FREQ=12000000        # must match firmware/main.c's ice_fpga_init() request
 make BAUD_RATE=1000000        # must match tpu_host.py's --baud (default 1M, exact /12 of 12 MHz)
 make ARRAY_ROWS=2 NUM_COLS=4 M_TILE=2   # array shape; hosts then need --rows/--cols/--m-tile
+make USE_SPI=1 CLK_FREQ=24000000        # SPI host link (rtl/spi_slave.sv) on the RP2350<->iCE40
+                                        #   config bus instead of the UART; pair with the
+                                        #   TPU_LINK_SPI=ON firmware build and hosts' --link spi.
+                                        #   24 MHz works because the SPI slave, unlike the UART,
+                                        #   has no synthesis-baked baud divider (fMax ~32 MHz)
 ```
 If `make time` fails with "Can't find chipdb file" (some Homebrew icestorm
 installs), point it at the file directly:
@@ -220,8 +226,9 @@ hardware or, with `--offline`, in pure numpy with no board at all.
    used only for the demo's LED feedback in step 5).
 
 4. **Sanity-check accuracy on real hardware** — classifies N random real
-   MNIST test images end-to-end over UART (~240 ms/image measured at the
-   2×4/1 Mbaud build, ~316 ms at the default 2×2 — see §4's latency note and
+   MNIST test images end-to-end (~64 ms/image at the 2×4 SPI build with
+   firmware offload; ~240 ms over 1 Mbaud UART at the same shape, ~316 ms
+   at the default 2×2 — see §4's latency note and
    `docs/PERFORMANCE_ANALYSIS.md` for where the time goes):
    ```bash
    python3 mnist/infer.py --port /dev/cu.usbmodemXXXX --test-n 20
@@ -267,20 +274,26 @@ hardware or, with `--offline`, in pure numpy with no board at all.
   `LEN=1` flags byte). Verified in sim (`accumulator_tb`, `tpu_core_tb` Test 8,
   `tpu_sequencer_tb` Test 7) and on real pico2-ice hardware (`tpu_host.py`'s
   `TPU.matmul_tiled()`, `tests/hw_regression.py`'s randomized multi-tile stress case).
-- **Inference latency: 8.0 s → 0.24 s/image (33x)** — measured on real hardware, in
-  four stacked steps: batched wire commands (`CMD_RUN_TILE`, then `CMD_STREAM_RUN`
+- **Inference latency: 8.0 s → 64 ms/image (125x)** — measured on real hardware, in
+  six stacked steps: batched wire commands (`CMD_RUN_TILE`, then `CMD_STREAM_RUN`
   streaming a whole K-run per round trip, 3.3x), `-dsp` synthesis (PE multiplies onto
   hard `SB_MAC16` blocks, ~7x fewer LUTs/PE), the UART at 1 Mbaud instead of 115200
-  (7.8x), and the 2×4 array (1.3x). Remaining budget is ~66% UART wire time / ~33%
-  USB+Python overhead / ~1% actual RTL compute — full measurement trail in
+  (7.8x), the 2×4 array (1.3x), replacing the UART with an SPI host link
+  (`rtl/spi_slave.sv` + `TPU_LINK_SPI` firmware bridge) at a 24 MHz core clock
+  (2.7x), and offloading the whole matmul tiling loop onto the RP2350
+  (`firmware/tpu_tile.c`'s `FW_MATMUL` bulk command: one USB round trip per
+  network layer instead of one per tile frame, 1.5x — bit-identical to the
+  host-tiled path, A/B-verified in `tests/hw_regression.py`). The remaining
+  budget is genuinely wire-bound: mostly SPI tile traffic at the CLK/6-capped
+  4 MHz write clock, ~3% actual RTL compute; full measurement trail in
   `docs/PERFORMANCE_ANALYSIS.md` and `docs/SEQUENCER_REDESIGN.md`.
 - **MNIST** — `mnist/train_mnist.py` trains and quantizes a 144→64→10 MLP (12×12
   downsampled input, int8 weights/activations, int16 bias) sized and empirically
   verified against the accumulator's non-saturating int16 width (5% calibration
   safety margin, zero overflow across the full 10k-image test set); 97.50%
   quantized test accuracy in sim, 95.00% (19/20) on a real-hardware sample
-  (`mnist/infer.py --port ... --test-n 20`), at ~240 ms/image end-to-end over UART
-  (see the latency bullet above).
+  (`mnist/infer.py --port ... --test-n 20`), at ~64 ms/image end-to-end over the
+  SPI link with firmware offload (see the latency bullet above).
 - **Interactive demo** — `mnist/draw_demo.py`: draw a digit, classify it end-to-end on
   real pico2-ice silicon via `mnist/infer.py`'s multi-layer `matmul_tiled()` driver, with
   the board's LED flipping green→blue on completion (`firmware/main.c`'s LED command
