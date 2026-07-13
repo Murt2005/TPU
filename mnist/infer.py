@@ -163,6 +163,9 @@ def main():
                     help="M_TILE the flashed bitstream was built with (default: --rows)")
     p.add_argument("--link", choices=("uart", "spi"), default="uart",
                     help="host-link PHY the board is running (see tpu_host.py --help)")
+    p.add_argument("--no-offload", action="store_true",
+                    help="force the host-tiled path even when the firmware "
+                         "advertises the FW_MATMUL offload (A/B comparisons)")
     args = p.parse_args()
 
     if args.compare and not args.port:
@@ -183,10 +186,12 @@ def main():
               f"{elapsed / n * 1000:.2f} ms/image")
 
     tpu_shape = dict(rows=args.rows, cols=args.cols, m_tile=args.m_tile,
-                     link=args.link)
+                     link=args.link, offload=not args.no_offload)
 
     if args.compare:
         with TPU(args.port, **tpu_shape) as tpu:
+            print(f"firmware matmul offload (FW_MATMUL): "
+                  f"{'ON' if tpu.offload else 'off'}")
             tpu.reset_stats()
             hw_inference = MNISTInference(HardwareBackend(tpu), model)
             hw_result = run_test_set(hw_inference, x_test, y_test, idx)

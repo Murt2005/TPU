@@ -158,7 +158,7 @@ def run_tiled_stress(tpu, n, seed):
         w = rng.integers(-20, 20, size=(k, ncols)).astype(np.int8)
         bias = rng.integers(-50, 50, size=ncols).astype(np.int16)
         expected = golden(a, w, bias)
-        got = tpu.matmul_tiled(a, w, bias)
+        got = tpu.matmul_tiled(a, w, bias, offload=False)  # host-tiled path
         if not np.array_equal(got, expected):
             fails += 1
             print(f"       [tiled {i}] M={m} K={k} N={ncols} a={a.tolist()} w={w.tolist()} "
@@ -210,7 +210,7 @@ def run_stream_boundaries(tpu, seed):
         w = rng.integers(-20, 20, size=(tpu.rows * kt, tpu.cols)).astype(np.int8)
         bias = rng.integers(-50, 50, size=tpu.cols).astype(np.int16)
         expected = golden(a, w, bias)
-        got = tpu.matmul_tiled(a, w, bias)
+        got = tpu.matmul_tiled(a, w, bias, offload=False)  # host-tiled path
         if not np.array_equal(got, expected):
             fails += 1
             print(f"       [stream K_TILES={kt}] got={got.tolist()} expected={expected.tolist()}")
@@ -218,6 +218,45 @@ def run_stream_boundaries(tpu, seed):
     status = "PASS" if passed else "FAIL"
     print(f"[{status}] stream boundaries: {len(cases) - fails}/{len(cases)} K-runs "
           f"(K_TILES in {cases}) matched the golden model")
+    return passed
+
+
+def run_offload_ab(tpu, n, seed):
+    """M3 firmware-offload A/B: the FW_MATMUL path (firmware/tpu_tile.c
+    drives the whole tiling loop on the RP2350) must produce bit-identical
+    results to the host-tiled STREAM_RUN path, and both must match the
+    golden model -- catching any divergence between the C port of the
+    tiling loop and the Python reference. Skipped (as a pass) when the
+    connected firmware doesn't advertise the offload."""
+    if not tpu.offload:
+        print("[SKIP] offload A/B: firmware does not advertise FW_MATMUL "
+              "(--link uart, or pre-M3 firmware)")
+        return True
+    rng = np.random.default_rng(seed + 3)
+    r, c, mt = tpu.rows, tpu.cols, tpu.m_tile
+    m_choices = [1, mt, 2 * mt + 1]
+    k_choices = [1, r, 3 * r, 3 * r + 1]
+    n_choices = [1, c, 2 * c + 1, 3 * c - 1]
+    fails = 0
+    for i in range(n):
+        m = int(rng.choice(m_choices))
+        k = int(rng.choice(k_choices))
+        ncols = int(rng.choice(n_choices))
+        a = rng.integers(-128, 128, size=(m, k)).astype(np.int8)
+        w = rng.integers(-128, 128, size=(k, ncols)).astype(np.int8)
+        bias = rng.integers(-1000, 1000, size=ncols).astype(np.int16)
+        expected = golden(a, w, bias)
+        offloaded = tpu.matmul_tiled(a, w, bias, offload=True)
+        local = tpu.matmul_tiled(a, w, bias, offload=False)
+        if not (np.array_equal(offloaded, local) and np.array_equal(offloaded, expected)):
+            fails += 1
+            print(f"       [offload {i}] M={m} K={k} N={ncols} "
+                  f"offload={offloaded.tolist()} local={local.tolist()} "
+                  f"expected={expected.tolist()}")
+    passed = fails == 0
+    status = "PASS" if passed else "FAIL"
+    print(f"[{status}] offload A/B: {n - fails}/{n} FW_MATMUL results bit-matched "
+          f"the host-tiled path + golden model")
     return passed
 
 
@@ -270,6 +309,7 @@ def main():
         results.append(run_tiled_stress(tpu, min(args.stress_n, 50), args.seed))
         results.append(run_tile_equivalence(tpu, min(args.stress_n, 50), args.seed))
         results.append(run_stream_boundaries(tpu, args.seed))
+        results.append(run_offload_ab(tpu, min(args.stress_n, 30), args.seed))
 
     print("=" * 60)
     if all(results):

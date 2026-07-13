@@ -21,6 +21,7 @@ add_subdirectory(${PICO_ICE_SDK_PATH} pico-ice-sdk-build)
 # add the local files
 add_executable(${CMAKE_PROJECT_NAME}
     main.c
+    tpu_tile.c
     usb_descriptors.c
     )
 target_link_libraries(${CMAKE_PROJECT_NAME}
