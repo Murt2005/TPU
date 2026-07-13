@@ -251,6 +251,8 @@ def main():
                     help="NUM_COLS the flashed bitstream was built with (default 2)")
     p.add_argument("--m-tile", type=int, default=None,
                     help="M_TILE the flashed bitstream was built with (default: --rows)")
+    p.add_argument("--link", choices=("uart", "spi"), default="uart",
+                    help="host-link PHY the board is running (see tpu_host.py --help)")
     p.add_argument("--stress-n", type=int, default=200,
                     help="number of randomized matmuls to run (default 200)")
     p.add_argument("--seed", type=int, default=0, help="RNG seed for the stress test")
@@ -258,7 +260,7 @@ def main():
 
     results = []
     with TPU(args.port, args.baud, rows=args.rows, cols=args.cols,
-             m_tile=args.m_tile) as tpu:
+             m_tile=args.m_tile, link=args.link) as tpu:
         cases = build_cases(tpu.rows, tpu.cols, tpu.m_tile)
         for name, a, w, bias in cases:
             results.append(run_case(tpu, name, a, w, bias))

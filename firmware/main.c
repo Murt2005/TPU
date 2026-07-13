@@ -78,8 +78,15 @@
 #define TPU_SPI_SCK_PIN  6
 #define TPU_SPI_TX_PIN   7   /* RP2350 MOSI -> net ICE_SO (iCE40 pin 14) */
 
-#define TPU_SPI_WRITE_HZ 2000000
-#define TPU_SPI_READ_HZ  1500000
+// FPGA core clock for SPI builds: 24 MHz (vs. the UART build's 12 MHz --
+// the UART baud divider is synthesis-baked against CLK_FREQ, but the SPI
+// slave has no such coupling, and this design's measured fMax is ~32 MHz).
+// Both SPI clocks scale with it: write <= CLK/6, read <= CLK/8 (see the
+// cap comments above). The gateware must be built with the matching
+// CLK_FREQ=24000000.
+#define TPU_FPGA_CLK_MHZ 24
+#define TPU_SPI_WRITE_HZ 4000000
+#define TPU_SPI_READ_HZ  3000000
 
 static void tpu_cs(bool active) {
     gpio_put(TPU_SPI_CS_PIN, !active);
@@ -281,9 +288,15 @@ int main(void) {
     irq_set_enabled(UART0_IRQ, true);
 #endif
 
-    // Initialize the FPGA -- 12 MHz, not ICE_FPGA_DEFAULT_FREQUENCY (48 MHz):
-    // must match fpga/pico2_ice/Makefile's CLK_FREQ.
+    // Initialize the FPGA -- not ICE_FPGA_DEFAULT_FREQUENCY (48 MHz): must
+    // match fpga/Makefile's CLK_FREQ. UART builds stay at 12 MHz (the baud
+    // divider is baked against it); SPI builds run 24 MHz (TPU_FPGA_CLK_MHZ
+    // above) so the CLK-capped SPI clocks double.
+#if TPU_LINK_SPI
+    ice_fpga_init(FPGA_DATA, AS_MHZ(TPU_FPGA_CLK_MHZ));
+#else
     ice_fpga_init(FPGA_DATA, AS_MHZ(12));
+#endif
 
     // Let the FPGA start
     ice_fpga_start(FPGA_DATA);

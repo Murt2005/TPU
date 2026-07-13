@@ -161,6 +161,8 @@ def main():
                     help="NUM_COLS the flashed bitstream was built with (default 2)")
     p.add_argument("--m-tile", type=int, default=None,
                     help="M_TILE the flashed bitstream was built with (default: --rows)")
+    p.add_argument("--link", choices=("uart", "spi"), default="uart",
+                    help="host-link PHY the board is running (see tpu_host.py --help)")
     args = p.parse_args()
 
     if args.compare and not args.port:
@@ -180,7 +182,8 @@ def main():
         print(f"[{label}] {correct}/{n} correct ({100 * correct / n:.2f}%), "
               f"{elapsed / n * 1000:.2f} ms/image")
 
-    tpu_shape = dict(rows=args.rows, cols=args.cols, m_tile=args.m_tile)
+    tpu_shape = dict(rows=args.rows, cols=args.cols, m_tile=args.m_tile,
+                     link=args.link)
 
     if args.compare:
         with TPU(args.port, **tpu_shape) as tpu:

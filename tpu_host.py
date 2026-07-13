@@ -69,6 +69,17 @@ BRIDGE_CHUNK_BYTES = 28  # a little margin under the FIFO depth
 STATUS_OK = 0xAA
 STATUS_ERR = 0xFF
 
+# link="spi" (TPU_LINK_SPI firmware + USE_SPI=1 gateware): the CDC port is
+# bridged to the RP2350<->iCE40 SPI bus instead of uart0. Two host-side
+# differences, both handled by TPU(link=...):
+#  - no write pacing: the SPI bridge reads the CDC FIFO under TinyUSB flow
+#    control (no 32-byte UART FIFO to overrun), so the BRIDGE_* sleeps
+#    below would just emulate UART-era latency for nothing;
+#  - wire-time accounting: SPI moves 8 bits/byte at the bridge's write
+#    clock (firmware/main.c TPU_SPI_WRITE_HZ; reads are slower and add
+#    poll filler, so uart_wire_seconds() is a lower bound there).
+SPI_WIRE_HZ = 4_000_000
+
 # Must match fpga/Makefile's BAUD_RATE (the divider is baked into the
 # bitstream at synthesis time). The RP2350 bridge needs no matching change:
 # pico-ice-sdk's tud_cdc_line_coding_cb sets uart0's baud to whatever rate
@@ -96,10 +107,13 @@ class TPU:
     """
 
     def __init__(self, port, baud=DEFAULT_BAUD, timeout=2.0,
-                 rows=2, cols=2, m_tile=None, probe=True):
+                 rows=2, cols=2, m_tile=None, probe=True, link="uart"):
         self.rows = rows            # ARRAY_ROWS: K-tile depth
         self.cols = cols            # NUM_COLS:   N-tile width
         self.m_tile = rows if m_tile is None else m_tile  # M rows per RUN
+        if link not in ("uart", "spi"):
+            raise ValueError(f"link must be 'uart' or 'spi', got {link!r}")
+        self.link = link            # see the SPI_WIRE_HZ comment above
         self.result_bytes = 2 * self.m_tile * self.cols
         self.stream_tile_bytes = self.rows * self.cols + self.m_tile * self.rows
         self.max_stream_tiles = (255 - 2) // self.stream_tile_bytes
@@ -173,7 +187,7 @@ class TPU:
 
     def _send_cmd(self, cmd, payload=b""):
         wire_tx = bytes([cmd, len(payload)]) + payload
-        if len(wire_tx) <= BRIDGE_FIFO_BYTES:
+        if self.link == "spi" or len(wire_tx) <= BRIDGE_FIFO_BYTES:
             self.ser.write(wire_tx)
         else:
             # Paced write: never let more than one UART FIFO's worth be in
@@ -200,11 +214,15 @@ class TPU:
         self.stats = {}
 
     def uart_wire_seconds(self):
-        """Real seconds spent shifting bits across the UART link itself
-        (8N1 = 10 bits/byte), computed from every byte actually seen on the
-        wire since the last reset_stats(). Independent of CLK_FREQ -- baud
-        rate sets real bit time directly, see docs/sequencer_uart_design.md §1/§2."""
+        """Real seconds spent shifting bits across the host link itself,
+        computed from every byte actually seen on the wire since the last
+        reset_stats(). UART: 8N1 = 10 bits/byte at the CDC baud rate. SPI:
+        8 bits/byte at the bridge's write clock (SPI_WIRE_HZ) -- a lower
+        bound, since response bytes drain at the slower read clock plus
+        poll-filler overhead."""
         total_bytes = sum(bytes_tx + bytes_rx for _, bytes_tx, bytes_rx in self.stats.values())
+        if self.link == "spi":
+            return total_bytes * 8 / SPI_WIRE_HZ
         return total_bytes * 10 / self.ser.baudrate
 
     def estimated_rtl_seconds(self, clk_freq=FPGA_CLK_FREQ):
@@ -464,6 +482,10 @@ def main():
                     help="NUM_COLS the bitstream was built with (default 2)")
     p.add_argument("--m-tile", type=int, default=None,
                     help="M_TILE the bitstream was built with (default: same as --rows)")
+    p.add_argument("--link", choices=("uart", "spi"), default="uart",
+                    help="host-link PHY the board is running: uart (default) or "
+                         "spi (USE_SPI=1 gateware + TPU_LINK_SPI firmware; "
+                         "disables UART-era write pacing)")
     p.add_argument("--selftest", action="store_true",
                     help="run a known-good W/A/bias combo and check against the "
                          "expected result")
@@ -478,7 +500,7 @@ def main():
     args = p.parse_args()
 
     with TPU(args.port, args.baud, rows=args.rows, cols=args.cols,
-             m_tile=args.m_tile) as tpu:
+             m_tile=args.m_tile, link=args.link) as tpu:
         if args.reset:
             tpu.reset()
             print("Reset OK")

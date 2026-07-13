@@ -196,6 +196,8 @@ def main():
                     help="NUM_COLS the flashed bitstream was built with (default 2)")
     p.add_argument("--m-tile", type=int, default=None,
                     help="M_TILE the flashed bitstream was built with (default: --rows)")
+    p.add_argument("--link", choices=("uart", "spi"), default="uart",
+                    help="host-link PHY the board is running (see tpu_host.py --help)")
     args = p.parse_args()
 
     if not args.offline and not args.port:
@@ -212,7 +214,8 @@ def main():
         root.mainloop()
         return
 
-    with TPU(args.port, rows=args.rows, cols=args.cols, m_tile=args.m_tile) as tpu:
+    with TPU(args.port, rows=args.rows, cols=args.cols, m_tile=args.m_tile,
+             link=args.link) as tpu:
         inference = MNISTInference(HardwareBackend(tpu), model)
         DrawApp(root, inference, led_serial)
         root.mainloop()
