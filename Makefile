@@ -248,8 +248,9 @@ lint: $(SB_MAC16_SIM)
 # Each variant gets its own obj dir under sim/verilator/.
 # ----------------------------------------------------------------------------
 # ROWS_COLS_MTILE_PHY; phy "spipair" = SPI PHY + USE_MAC16_PAIR mmu (the
-# 4x4 hardware build: 16 PEs on 8 hand-instantiated SB_MAC16s, M_TILE=2)
-VERILATE_SHAPES := 2_2_2_uart 2_4_2_uart 4_2_3_uart 2_4_2_spi 4_4_2_spipair
+# 4x4 hardware build: 16 PEs on 8 hand-instantiated SB_MAC16s); 4_4_4 is
+# the shipped shape, 4_4_2 kept as the M_TILE-axis variant.
+VERILATE_SHAPES := 2_2_2_uart 2_4_2_uart 4_2_3_uart 2_4_2_spi 4_4_2_spipair 4_4_4_spipair
 
 verilate-test: $(SB_MAC16_SIM) | $(SIM_DIR)
 	@set -e; for shape in $(VERILATE_SHAPES); do \

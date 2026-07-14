@@ -68,6 +68,14 @@ USE_SPI ?= 0
 USE_MAC16_PAIR ?= 0
 DSP_FLAG := $(if $(filter-out 0,$(USE_MAC16_PAIR)),,-dsp)
 
+# ABC options: -abc9 (LUT-aware mapper) + -dff (register-aware ABC pass:
+# sweeps/merges the sequencer's duplicated staging registers) measured
+# 5,484 -> 5,072 LCs on the 4x4/M_TILE=4 pair build -- the difference
+# between not fitting (103%) and fitting (96%). Netlist-level change only;
+# bit-exactness is validated on hardware by tests/hw_regression.py (same
+# trust basis as -dsp).
+ABC_FLAGS := -abc9 -dff
+
 # DFU alt-setting the FPGA bitstream (flash) lives on for this board's
 # default firmware -- matches pico-ice-sdk's own example Makefiles.
 DFU_ALT_FLASH := 0
@@ -109,7 +117,7 @@ $(TOP).json: $(RTL)
 		chparam -set M_TILE $(M_TILE) $(TOP); \
 		chparam -set USE_SPI $(USE_SPI) $(TOP); \
 		chparam -set USE_MAC16_PAIR $(USE_MAC16_PAIR) $(TOP); \
-		synth_ice40 -top $(TOP) $(DSP_FLAG) -json $@"
+		synth_ice40 -top $(TOP) $(DSP_FLAG) $(ABC_FLAGS) -json $@"
 
 $(TOP).asc: $(TOP).json $(PCF)
 	$(NEXTPNR) -q --up5k --package sg48 --pcf $(PCF) --json $(TOP).json --asc $@
@@ -128,7 +136,7 @@ stat: $(RTL)
 		chparam -set M_TILE $(M_TILE) $(TOP); \
 		chparam -set USE_SPI $(USE_SPI) $(TOP); \
 		chparam -set USE_MAC16_PAIR $(USE_MAC16_PAIR) $(TOP); \
-		synth_ice40 -top $(TOP) $(DSP_FLAG)" 2>&1 \
+		synth_ice40 -top $(TOP) $(DSP_FLAG) $(ABC_FLAGS)" 2>&1 \
 		| awk '/^=== design hierarchy ===/{exit} /^=== $(TOP) ===/{p=1} p'
 
 # make util: nextpnr's post-PnR device utilisation table (LCs, BRAM,

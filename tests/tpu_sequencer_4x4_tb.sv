@@ -2,18 +2,19 @@
 
 // tpu_sequencer_4x4_tb — the M4 target shape: 16 PEs on 8 SB_MAC16s.
 //
-// Runs the full sequencer + datapath at ARRAY_ROWS=4, NUM_COLS=4, M_TILE=2 —
+// Runs the full sequencer + datapath at ARRAY_ROWS=4, NUM_COLS=4, M_TILE=4 —
 // the shape fpga/Makefile builds with USE_MAC16_PAIR=1 (each pair of
 // row-adjacent PEs shares one hand-instantiated SB_MAC16 in dual-8x8 mode;
-// M_TILE=2 because M_TILE=4 blows the LC budget: 103% vs 83%). The mmu is
-// instantiated with USE_MAC16_PAIR=1 here, so this tb simulates the
-// *shipped* DSP netlist path (yosys's SB_MAC16 model), not behavioral pe.sv.
+// fits at 93% LC with ABC_FLAGS=-abc9 -dff + the BRAM-backed unified
+// buffer). The mmu is instantiated with USE_MAC16_PAIR=1 here, so this tb
+// simulates the *shipped* DSP netlist path (yosys's SB_MAC16 model), not
+// behavioral pe.sv.
 //
 // Matrix shapes at this parameterization:
 //   W : 4x4  (ARRAY_ROWS x NUM_COLS)   LOAD_WEIGHTS LEN = 16, rows bottom-first
-//   A : 2x4  (M_TILE x ARRAY_ROWS)     LOAD_ACT     LEN = 8, row-major
+//   A : 4x4  (M_TILE x ARRAY_ROWS)     LOAD_ACT     LEN = 16, row-major
 //   B : 4    (NUM_COLS int16)          LOAD_BIAS    LEN = 8
-//   Y : 2x4  (M_TILE x NUM_COLS)       RUN response LEN = 16 (int16 LE)
+//   Y : 4x4  (M_TILE x NUM_COLS)       RUN response LEN = 32 (int16 LE)
 //
 // Expected results are computed in the testbench (integer matmul + bias +
 // ReLU), not hand-entered, so stimulus values can be arbitrary.
@@ -23,7 +24,7 @@ module tpu_sequencer_4x4_tb;
 
     localparam int ARRAY_ROWS = 4;
     localparam int NUM_COLS   = 4;
-    localparam int M_TILE     = 2;
+    localparam int M_TILE     = 4;
 
     localparam int WEIGHT_WIDTH = 8;
     localparam int FIFO_DEPTH   = 4;   // >= ARRAY_ROWS (weight_fifo), >= M_TILE (accumulator)
@@ -388,7 +389,7 @@ module tpu_sequencer_4x4_tb;
         // index produces a different product. Mixed-sign to cross ReLU.
         $display("[Test 1] Full matmul, asymmetric W/A, mixed-sign bias");
         W = '{'{1, 2, 3, 4}, '{5, 6, 7, 8}, '{9, 10, 11, 12}, '{13, 14, 15, 16}};
-        A = '{'{1, 2, 3, -4}, '{5, -6, 7, 8}};
+        A = '{'{1, 2, 3, -4}, '{5, -6, 7, 8}, '{-2, 4, 1, 3}, '{6, 0, -5, 2}};
         B = '{10, -20, 5, -40};
         do_compute("T1");
 
@@ -398,7 +399,7 @@ module tpu_sequencer_4x4_tb;
         // col c picks A[:, (c+1) mod 4].
         $display("[Test 2] One-hot weight columns (selection matrix)");
         W = '{'{0, 0, 0, 1}, '{1, 0, 0, 0}, '{0, 1, 0, 0}, '{0, 0, 1, 0}};
-        A = '{'{11, 22, -33, 44}, '{55, -66, 77, 88}};
+        A = '{'{11, 22, -33, 44}, '{55, -66, 77, 88}, '{-12, 34, 56, -78}, '{9, -8, 7, -6}};
         B = '{0, 0, 0, 0};
         do_compute("T2");
 
@@ -409,17 +410,17 @@ module tpu_sequencer_4x4_tb;
         B = '{5, -5, 15, -15};
         send_bias("T3");
         W = '{'{2, 0, -1, 3}, '{0, 3, 2, -2}, '{1, -1, 0, 2}, '{-2, 0, 3, 1}};
-        A = '{'{1, 2, -1, 3}, '{-3, 4, 0, -2}};
+        A = '{'{1, 2, -1, 3}, '{-3, 4, 0, -2}, '{2, -1, 3, 1}, '{0, 2, -2, 4}};
         do_tiled_pass(1'b1, 1'b0, "T3 K-tile0");
         W = '{'{1, -1, 4, 0}, '{2, -2, 0, 4}, '{0, 1, -3, 2}, '{3, 0, 1, -1}};
-        A = '{'{2, 2, -1, 0}, '{1, 0, 3, -2}};
+        A = '{'{2, 2, -1, 0}, '{1, 0, 3, -2}, '{-1, 3, 0, 2}, '{4, -2, 1, 0}};
         do_tiled_pass(1'b0, 1'b1, "T3 K-tile1");
 
         // Test 4: single-shot RUN_TILE at the 4x4 shape
-        // (LEN = 1 + 16 + 8 = 25 bytes in one frame).
+        // (LEN = 1 + 16 + 16 = 33 bytes in one frame).
         $display("[Test 4] RUN_TILE single frame, 4x4 shape");
         W = '{'{3, -2, 1, 0}, '{-1, 4, -3, 2}, '{2, 1, 0, -3}, '{0, -1, 2, 4}};
-        A = '{'{4, -3, 2, 1}, '{1, 5, -2, 0}};
+        A = '{'{4, -3, 2, 1}, '{1, 5, -2, 0}, '{-3, 2, 4, -1}, '{0, 1, -4, 3}};
         B = '{7, -7, 3, -3};
         send_bias("T4");
         do_run_tile_pass(1'b1, 1'b1, "T4 RUN_TILE");
@@ -430,14 +431,14 @@ module tpu_sequencer_4x4_tb;
         B = '{-3, 3, -6, 6};
         send_bias("T5");
         W = '{'{1, 2, -2, 0}, '{-2, 1, 3, 1}, '{0, -1, 2, 3}, '{1, 0, -1, 2}};
-        A = '{'{1, 0, 2, -1}, '{2, -2, 0, 1}};
+        A = '{'{1, 0, 2, -1}, '{2, -2, 0, 1}, '{3, 1, -1, 0}, '{-2, 0, 2, 1}};
         do_run_tile_pass(1'b1, 1'b0, "T5 K-tile0");
         W = '{'{-1, 1, 2, 2}, '{0, 3, 1, 0}, '{2, -2, 0, 1}, '{-1, 0, 3, -2}};
-        A = '{'{3, 1, -2, 0}, '{-1, 0, 1, 2}};
+        A = '{'{3, 1, -2, 0}, '{-1, 0, 1, 2}, '{0, -3, 2, 1}, '{1, 2, 0, -2}};
         do_run_tile_pass(1'b0, 1'b1, "T5 K-tile1");
 
         // Test 6: STREAM_RUN with 3 tiles in one frame at the 4x4 shape
-        // — LEN = 2 + 3*(16+8) = 74 bytes, one response.
+        // — LEN = 2 + 3*(16+16) = 98 bytes, one response.
         $display("[Test 6] STREAM_RUN: 3 tiles, one frame, 4x4 shape");
         B = '{11, -11, 22, -22};
         send_bias("T6");
@@ -446,13 +447,13 @@ module tpu_sequencer_4x4_tb;
         sr_send_byte(8'h03);   // flags = TILE_FIRST|TILE_LAST
         sr_send_byte(8'd3);    // K_TILES = 3
         W = '{'{1, 2, 3, -1}, '{0, 2, -2, 1}, '{2, -1, 1, 0}, '{-1, 0, 2, 3}};
-        A = '{'{1, 2, -1, 0}, '{5, -1, 2, 1}};
+        A = '{'{1, 2, -1, 0}, '{5, -1, 2, 1}, '{0, 3, 1, -2}, '{-1, 2, 0, 1}};
         sr_send_tile(1'b1);
         W = '{'{2, 0, 0, -2}, '{1, 1, 3, 0}, '{0, 2, -1, 1}, '{3, -2, 0, 2}};
-        A = '{'{0, 1, 2, -2}, '{2, 2, -1, 3}};
+        A = '{'{0, 1, 2, -2}, '{2, 2, -1, 3}, '{1, -1, 0, 2}, '{3, 0, -2, 1}};
         sr_send_tile(1'b0);
         W = '{'{-1, 3, 1, 1}, '{2, -1, 0, 2}, '{1, 0, -2, 3}, '{0, 1, 2, -1}};
-        A = '{'{1, 1, 0, -3}, '{-2, 0, 1, 2}};
+        A = '{'{1, 1, 0, -3}, '{-2, 0, 1, 2}, '{2, -1, 3, 0}, '{0, 2, -1, 1}};
         sr_send_tile(1'b0);
         check_result("T6 STREAM_RUN");
 
