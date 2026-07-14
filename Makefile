@@ -97,11 +97,14 @@ DEPS_spi_slave            := $(RTL_spi_slave)
 DEPS_tpu_sequencer        := $(RTL_tpu_sequencer) $(RTL_tpu_datapath)
 DEPS_tpu_sequencer_4x2    := $(RTL_tpu_sequencer) $(RTL_tpu_datapath)
 DEPS_tpu_sequencer_2x4    := $(RTL_tpu_sequencer) $(RTL_tpu_datapath)
+# 4x4 instantiates mmu with USE_MAC16_PAIR=1 -> needs pe_pair + SB_MAC16 model
+DEPS_tpu_sequencer_4x4    := $(RTL_tpu_sequencer) $(RTL_tpu_datapath) $(RTL_pe_pair)
 
 TESTS := fifo pe pe_pair mmu accumulator systolic_data_setup weight_fifo bias activation \
          unified_buffer \
          mmu_accum accum_bias bias_activation weight_fifo_mmu tpu_core \
-         uart_rx uart_tx spi_slave tpu_sequencer tpu_sequencer_4x2 tpu_sequencer_2x4
+         uart_rx uart_tx spi_slave tpu_sequencer tpu_sequencer_4x2 tpu_sequencer_2x4 \
+         tpu_sequencer_4x4
 
 # de-duplicate dep lists (modules shared via multiple paths, e.g. tpu_core -> fifo.sv)
 dedup = $(if $1,$(firstword $1) $(call dedup,$(filter-out $(firstword $1),$1)))
@@ -137,6 +140,7 @@ build-spi_slave:            $(SIM_DIR)/spi_slave.vvp
 build-tpu_sequencer:        $(SIM_DIR)/tpu_sequencer.vvp
 build-tpu_sequencer_4x2:    $(SIM_DIR)/tpu_sequencer_4x2.vvp
 build-tpu_sequencer_2x4:    $(SIM_DIR)/tpu_sequencer_2x4.vvp
+build-tpu_sequencer_4x4:    $(SIM_DIR)/tpu_sequencer_4x4.vvp
 
 $(SIM_DIR)/unified_buffer.vvp: $(TEST_DIR)/unified_buffer_tb.sv $(call dedup,$(DEPS_unified_buffer)) | $(SIM_DIR)
 	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_unified_buffer)) $<
@@ -201,6 +205,9 @@ $(SIM_DIR)/tpu_sequencer_4x2.vvp: $(TEST_DIR)/tpu_sequencer_4x2_tb.sv $(call ded
 $(SIM_DIR)/tpu_sequencer_2x4.vvp: $(TEST_DIR)/tpu_sequencer_2x4_tb.sv $(call dedup,$(DEPS_tpu_sequencer_2x4)) | $(SIM_DIR)
 	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_tpu_sequencer_2x4)) $<
 
+$(SIM_DIR)/tpu_sequencer_4x4.vvp: $(TEST_DIR)/tpu_sequencer_4x4_tb.sv $(call dedup,$(DEPS_tpu_sequencer_4x4)) | $(SIM_DIR)
+	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_tpu_sequencer_4x4)) $<
+
 # `make test-<name>` builds (if stale) and runs a single testbench, dumping
 # its VCD (if any) and console log into sim/
 define RUN_RULE
@@ -240,7 +247,9 @@ lint: $(SB_MAC16_SIM)
 # an SPI-PHY build (USE_SPI=1, spi_slave.sv) at the hardware 2x4 shape.
 # Each variant gets its own obj dir under sim/verilator/.
 # ----------------------------------------------------------------------------
-VERILATE_SHAPES := 2_2_2_uart 2_4_2_uart 4_2_3_uart 2_4_2_spi  # ROWS_COLS_MTILE_PHY
+# ROWS_COLS_MTILE_PHY; phy "spipair" = SPI PHY + USE_MAC16_PAIR mmu (the
+# 4x4 hardware build: 16 PEs on 8 hand-instantiated SB_MAC16s, M_TILE=2)
+VERILATE_SHAPES := 2_2_2_uart 2_4_2_uart 4_2_3_uart 2_4_2_spi 4_4_2_spipair
 
 verilate-test: $(SB_MAC16_SIM) | $(SIM_DIR)
 	@set -e; for shape in $(VERILATE_SHAPES); do \
@@ -252,6 +261,8 @@ verilate-test: $(SB_MAC16_SIM) | $(SIM_DIR)
 		phyflags=""; phycflags=""; \
 		if [ "$$phy" = "spi" ]; then \
 			phyflags="-GUSE_SPI=1"; phycflags="-DTB_SPI"; \
+		elif [ "$$phy" = "spipair" ]; then \
+			phyflags="-GUSE_SPI=1 -GUSE_MAC16_PAIR=1"; phycflags="-DTB_SPI"; \
 		fi; \
 		echo "=== verilate $${rows}x$${cols} M_TILE=$${mt} ($${phy}) ==="; \
 		$(VERILATOR) --cc --exe --build -j 0 -Wall \
