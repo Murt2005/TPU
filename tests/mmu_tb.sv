@@ -64,34 +64,34 @@ module mmu_tb;
 
     // --- Dynamic Telemetry Logger ---
     // Hierarchical paths follow mmu's generate-block naming:
-    // uut.gen_row[r].gen_col[c].pe_inst
+    // uut.gen_pe_rows.gen_row[r].gen_col[c].pe_inst
     always @(negedge clk) begin
         if (!reset) begin
             $display("[Time=%0t] --- Mode: %s ---", $time, loading_phase ? "WEIGHT LOAD" : "COMPUTE");
 
             // PE00 Telemetry
             $display("  PE00 | Act: In=%2d (V:%b), Out=%2d | Weight: In=%2d (V:%b), Reg=%2d | PSum: In=%2d (V:%b), Out=%2d (V:%b)",
-                     uut.gen_row[0].gen_col[0].pe_inst.in_activation,  uut.gen_row[0].gen_col[0].pe_inst.in_activation_valid,  uut.gen_row[0].gen_col[0].pe_inst.out_activation,
-                     uut.gen_row[0].gen_col[0].pe_inst.in_weight,      uut.gen_row[0].gen_col[0].pe_inst.in_weight_valid,      uut.gen_row[0].gen_col[0].pe_inst.weight_reg,
-                     uut.gen_row[0].gen_col[0].pe_inst.in_partial_sum, uut.gen_row[0].gen_col[0].pe_inst.in_partial_sum_valid, uut.gen_row[0].gen_col[0].pe_inst.out_partial_sum, uut.gen_row[0].gen_col[0].pe_inst.out_partial_sum_valid);
+                     uut.gen_pe_rows.gen_row[0].gen_col[0].pe_inst.in_activation,  uut.gen_pe_rows.gen_row[0].gen_col[0].pe_inst.in_activation_valid,  uut.gen_pe_rows.gen_row[0].gen_col[0].pe_inst.out_activation,
+                     uut.gen_pe_rows.gen_row[0].gen_col[0].pe_inst.in_weight,      uut.gen_pe_rows.gen_row[0].gen_col[0].pe_inst.in_weight_valid,      uut.gen_pe_rows.gen_row[0].gen_col[0].pe_inst.weight_reg,
+                     uut.gen_pe_rows.gen_row[0].gen_col[0].pe_inst.in_partial_sum, uut.gen_pe_rows.gen_row[0].gen_col[0].pe_inst.in_partial_sum_valid, uut.gen_pe_rows.gen_row[0].gen_col[0].pe_inst.out_partial_sum, uut.gen_pe_rows.gen_row[0].gen_col[0].pe_inst.out_partial_sum_valid);
 
             // PE01 Telemetry
             $display("  PE01 | Act: In=%2d (V:%b), Out=%2d | Weight: In=%2d (V:%b), Reg=%2d | PSum: In=%2d (V:%b), Out=%2d (V:%b)",
-                     uut.gen_row[0].gen_col[1].pe_inst.in_activation,  uut.gen_row[0].gen_col[1].pe_inst.in_activation_valid,  uut.gen_row[0].gen_col[1].pe_inst.out_activation,
-                     uut.gen_row[0].gen_col[1].pe_inst.in_weight,      uut.gen_row[0].gen_col[1].pe_inst.in_weight_valid,      uut.gen_row[0].gen_col[1].pe_inst.weight_reg,
-                     uut.gen_row[0].gen_col[1].pe_inst.in_partial_sum, uut.gen_row[0].gen_col[1].pe_inst.in_partial_sum_valid, uut.gen_row[0].gen_col[1].pe_inst.out_partial_sum, uut.gen_row[0].gen_col[1].pe_inst.out_partial_sum_valid);
+                     uut.gen_pe_rows.gen_row[0].gen_col[1].pe_inst.in_activation,  uut.gen_pe_rows.gen_row[0].gen_col[1].pe_inst.in_activation_valid,  uut.gen_pe_rows.gen_row[0].gen_col[1].pe_inst.out_activation,
+                     uut.gen_pe_rows.gen_row[0].gen_col[1].pe_inst.in_weight,      uut.gen_pe_rows.gen_row[0].gen_col[1].pe_inst.in_weight_valid,      uut.gen_pe_rows.gen_row[0].gen_col[1].pe_inst.weight_reg,
+                     uut.gen_pe_rows.gen_row[0].gen_col[1].pe_inst.in_partial_sum, uut.gen_pe_rows.gen_row[0].gen_col[1].pe_inst.in_partial_sum_valid, uut.gen_pe_rows.gen_row[0].gen_col[1].pe_inst.out_partial_sum, uut.gen_pe_rows.gen_row[0].gen_col[1].pe_inst.out_partial_sum_valid);
 
             // PE10 Telemetry
             $display("  PE10 | Act: In=%2d (V:%b), Out=%2d | Weight: In=%2d (V:%b), Reg=%2d | PSum: In=%2d (V:%b), Out=%2d (V:%b)",
-                     uut.gen_row[1].gen_col[0].pe_inst.in_activation,  uut.gen_row[1].gen_col[0].pe_inst.in_activation_valid,  uut.gen_row[1].gen_col[0].pe_inst.out_activation,
-                     uut.gen_row[1].gen_col[0].pe_inst.in_weight,      uut.gen_row[1].gen_col[0].pe_inst.in_weight_valid,      uut.gen_row[1].gen_col[0].pe_inst.weight_reg,
-                     uut.gen_row[1].gen_col[0].pe_inst.in_partial_sum, uut.gen_row[1].gen_col[0].pe_inst.in_partial_sum_valid, uut.gen_row[1].gen_col[0].pe_inst.out_partial_sum, uut.gen_row[1].gen_col[0].pe_inst.out_partial_sum_valid);
+                     uut.gen_pe_rows.gen_row[1].gen_col[0].pe_inst.in_activation,  uut.gen_pe_rows.gen_row[1].gen_col[0].pe_inst.in_activation_valid,  uut.gen_pe_rows.gen_row[1].gen_col[0].pe_inst.out_activation,
+                     uut.gen_pe_rows.gen_row[1].gen_col[0].pe_inst.in_weight,      uut.gen_pe_rows.gen_row[1].gen_col[0].pe_inst.in_weight_valid,      uut.gen_pe_rows.gen_row[1].gen_col[0].pe_inst.weight_reg,
+                     uut.gen_pe_rows.gen_row[1].gen_col[0].pe_inst.in_partial_sum, uut.gen_pe_rows.gen_row[1].gen_col[0].pe_inst.in_partial_sum_valid, uut.gen_pe_rows.gen_row[1].gen_col[0].pe_inst.out_partial_sum, uut.gen_pe_rows.gen_row[1].gen_col[0].pe_inst.out_partial_sum_valid);
 
             // PE11 Telemetry
             $display("  PE11 | Act: In=%2d (V:%b), Out=%2d | Weight: In=%2d (V:%b), Reg=%2d | PSum: In=%2d (V:%b), Out=%2d (V:%b)",
-                     uut.gen_row[1].gen_col[1].pe_inst.in_activation,  uut.gen_row[1].gen_col[1].pe_inst.in_activation_valid,  uut.gen_row[1].gen_col[1].pe_inst.out_activation,
-                     uut.gen_row[1].gen_col[1].pe_inst.in_weight,      uut.gen_row[1].gen_col[1].pe_inst.in_weight_valid,      uut.gen_row[1].gen_col[1].pe_inst.weight_reg,
-                     uut.gen_row[1].gen_col[1].pe_inst.in_partial_sum, uut.gen_row[1].gen_col[1].pe_inst.in_partial_sum_valid, uut.gen_row[1].gen_col[1].pe_inst.out_partial_sum, uut.gen_row[1].gen_col[1].pe_inst.out_partial_sum_valid);
+                     uut.gen_pe_rows.gen_row[1].gen_col[1].pe_inst.in_activation,  uut.gen_pe_rows.gen_row[1].gen_col[1].pe_inst.in_activation_valid,  uut.gen_pe_rows.gen_row[1].gen_col[1].pe_inst.out_activation,
+                     uut.gen_pe_rows.gen_row[1].gen_col[1].pe_inst.in_weight,      uut.gen_pe_rows.gen_row[1].gen_col[1].pe_inst.in_weight_valid,      uut.gen_pe_rows.gen_row[1].gen_col[1].pe_inst.weight_reg,
+                     uut.gen_pe_rows.gen_row[1].gen_col[1].pe_inst.in_partial_sum, uut.gen_pe_rows.gen_row[1].gen_col[1].pe_inst.in_partial_sum_valid, uut.gen_pe_rows.gen_row[1].gen_col[1].pe_inst.out_partial_sum, uut.gen_pe_rows.gen_row[1].gen_col[1].pe_inst.out_partial_sum_valid);
 
             $display("  SYSTEM OUTPUTS | Col0 PSum = %4d (Valid: %b) | Col1 PSum = %4d (Valid: %b)",
                      out_partial_sum[0], out_partial_sum_valid[0], out_partial_sum[1], out_partial_sum_valid[1]);

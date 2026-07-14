@@ -59,6 +59,15 @@ M_TILE     ?= $(ARRAY_ROWS)
 # pin-mapping comment.
 USE_SPI ?= 0
 
+# DSP mapping strategy: 0 = yosys -dsp inference over pe.sv's multiplies
+# (one SB_MAC16 per PE — caps the array at 8 PEs on the UP5K), 1 = build
+# the mmu from rtl/pe_pair.sv's hand-instantiated SB_MAC16 in dual-8x8
+# mode (two PEs per DSP — 4x4 = 16 PEs on 8 blocks). Requires even
+# ARRAY_ROWS. -dsp is dropped when set: nothing is left to infer, and it
+# must not remap the hand-placed primitives.
+USE_MAC16_PAIR ?= 0
+DSP_FLAG := $(if $(filter-out 0,$(USE_MAC16_PAIR)),,-dsp)
+
 # DFU alt-setting the FPGA bitstream (flash) lives on for this board's
 # default firmware -- matches pico-ice-sdk's own example Makefiles.
 DFU_ALT_FLASH := 0
@@ -73,6 +82,7 @@ RTL := $(RTL_DIR)/uart_rx.sv \
        $(RTL_DIR)/systolic_data_setup.sv \
        $(RTL_DIR)/mmu.sv \
        $(RTL_DIR)/pe.sv \
+       $(RTL_DIR)/pe_pair.sv \
        $(RTL_DIR)/accumulator.sv \
        $(RTL_DIR)/bias.sv \
        $(RTL_DIR)/activation.sv \
@@ -98,7 +108,8 @@ $(TOP).json: $(RTL)
 		chparam -set NUM_COLS $(NUM_COLS) $(TOP); \
 		chparam -set M_TILE $(M_TILE) $(TOP); \
 		chparam -set USE_SPI $(USE_SPI) $(TOP); \
-		synth_ice40 -top $(TOP) -dsp -json $@"
+		chparam -set USE_MAC16_PAIR $(USE_MAC16_PAIR) $(TOP); \
+		synth_ice40 -top $(TOP) $(DSP_FLAG) -json $@"
 
 $(TOP).asc: $(TOP).json $(PCF)
 	$(NEXTPNR) -q --up5k --package sg48 --pcf $(PCF) --json $(TOP).json --asc $@
@@ -116,7 +127,8 @@ stat: $(RTL)
 		chparam -set NUM_COLS $(NUM_COLS) $(TOP); \
 		chparam -set M_TILE $(M_TILE) $(TOP); \
 		chparam -set USE_SPI $(USE_SPI) $(TOP); \
-		synth_ice40 -top $(TOP) -dsp" 2>&1 \
+		chparam -set USE_MAC16_PAIR $(USE_MAC16_PAIR) $(TOP); \
+		synth_ice40 -top $(TOP) $(DSP_FLAG)" 2>&1 \
 		| awk '/^=== design hierarchy ===/{exit} /^=== $(TOP) ===/{p=1} p'
 
 # make util: nextpnr's post-PnR device utilisation table (LCs, BRAM,

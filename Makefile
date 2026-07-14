@@ -40,6 +40,19 @@ LOG_DIR  := $(SIM_DIR)/logs
 # ----------------------------------------------------------------------------
 RTL_fifo                 := $(RTL_DIR)/fifo.sv
 RTL_pe                   := $(RTL_DIR)/pe.sv
+# pe_pair hand-instantiates SB_MAC16, so simulations of it compile yosys's
+# own SB_MAC16 model — the same model synthesis maps to, not a stand-in.
+# The module is extracted from the installed cells_sim.v at build time
+# (single source of truth) because Verilator's -sv mode rejects unrelated
+# constructs elsewhere in that file (SB_RAM40_4K* port-default syntax).
+CELLS_SIM                := $(shell yosys-config --datdir)/ice40/cells_sim.v
+SB_MAC16_SIM             := $(SIM_DIR)/sb_mac16_sim.v
+RTL_pe_pair              := $(RTL_DIR)/pe_pair.sv $(SB_MAC16_SIM)
+
+$(SB_MAC16_SIM): $(CELLS_SIM) | $(SIM_DIR)
+	echo '`timescale 1ns / 1ps' > $@
+	sed -n '/^module SB_MAC16/,/^endmodule/p' $< >> $@
+	@grep -q endmodule $@ || { echo "SB_MAC16 extraction from $< failed"; rm -f $@; exit 1; }
 RTL_mmu                  := $(RTL_DIR)/mmu.sv $(RTL_pe)
 RTL_accumulator          := $(RTL_DIR)/accumulator.sv $(RTL_fifo)
 RTL_systolic_data_setup  := $(RTL_DIR)/systolic_data_setup.sv
@@ -65,6 +78,7 @@ RTL_tpu_datapath         := $(RTL_unified_buffer) $(RTL_weight_fifo) \
 # ----------------------------------------------------------------------------
 DEPS_fifo                 := $(RTL_fifo)
 DEPS_pe                   := $(RTL_pe)
+DEPS_pe_pair              := $(RTL_pe_pair) $(RTL_pe)
 DEPS_mmu                  := $(RTL_mmu)
 DEPS_accumulator          := $(RTL_accumulator)
 DEPS_systolic_data_setup  := $(RTL_systolic_data_setup)
@@ -84,7 +98,7 @@ DEPS_tpu_sequencer        := $(RTL_tpu_sequencer) $(RTL_tpu_datapath)
 DEPS_tpu_sequencer_4x2    := $(RTL_tpu_sequencer) $(RTL_tpu_datapath)
 DEPS_tpu_sequencer_2x4    := $(RTL_tpu_sequencer) $(RTL_tpu_datapath)
 
-TESTS := fifo pe mmu accumulator systolic_data_setup weight_fifo bias activation \
+TESTS := fifo pe pe_pair mmu accumulator systolic_data_setup weight_fifo bias activation \
          unified_buffer \
          mmu_accum accum_bias bias_activation weight_fifo_mmu tpu_core \
          uart_rx uart_tx spi_slave tpu_sequencer tpu_sequencer_4x2 tpu_sequencer_2x4
@@ -105,6 +119,7 @@ $(SIM_DIR) $(LOG_DIR):
 build-unified_buffer:       $(SIM_DIR)/unified_buffer.vvp
 build-fifo:                 $(SIM_DIR)/fifo.vvp
 build-pe:                   $(SIM_DIR)/pe.vvp
+build-pe_pair:              $(SIM_DIR)/pe_pair.vvp
 build-mmu:                  $(SIM_DIR)/mmu.vvp
 build-accumulator:          $(SIM_DIR)/accumulator.vvp
 build-systolic_data_setup:  $(SIM_DIR)/systolic_data_setup.vvp
@@ -131,6 +146,9 @@ $(SIM_DIR)/fifo.vvp: $(TEST_DIR)/fifo_tb.sv $(call dedup,$(DEPS_fifo)) | $(SIM_D
 
 $(SIM_DIR)/pe.vvp: $(TEST_DIR)/pe_tb.sv $(call dedup,$(DEPS_pe)) | $(SIM_DIR)
 	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_pe)) $<
+
+$(SIM_DIR)/pe_pair.vvp: $(TEST_DIR)/pe_pair_tb.sv $(call dedup,$(DEPS_pe_pair)) | $(SIM_DIR)
+	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_pe_pair)) $<
 
 $(SIM_DIR)/mmu.vvp: $(TEST_DIR)/mmu_tb.sv $(call dedup,$(DEPS_mmu)) | $(SIM_DIR)
 	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_mmu)) $<
@@ -202,13 +220,18 @@ test: | $(LOG_DIR)
 
 # Static lint over the whole synthesizable RTL tree (no simulation).
 # Waivers live in verilator.vlt -- every entry there is an audited
-# don't-care with a comment saying why.
-lint:
+# don't-care with a comment saying why. The extracted SB_MAC16 model is on
+# the file list because pe_pair.sv instantiates it (whole-file waiver in
+# the .vlt: it's yosys's library, not ours to lint).
+lint: $(SB_MAC16_SIM)
 	$(VERILATOR) --lint-only -Wall --timing -sv verilator.vlt \
-		$(RTL_DIR)/*.sv --top-module tpu_top
+		$(SB_MAC16_SIM) $(RTL_DIR)/*.sv --top-module tpu_top
 	$(VERILATOR) --lint-only -Wall --timing -sv verilator.vlt \
-		-GUSE_SPI=1 $(RTL_DIR)/*.sv --top-module tpu_top
-	@echo "lint: clean (UART + SPI configs)"
+		-GUSE_SPI=1 $(SB_MAC16_SIM) $(RTL_DIR)/*.sv --top-module tpu_top
+	$(VERILATOR) --lint-only -Wall --timing -sv verilator.vlt \
+		-GUSE_SPI=1 -GUSE_MAC16_PAIR=1 -GARRAY_ROWS=4 -GNUM_COLS=4 -GM_TILE=4 \
+		$(SB_MAC16_SIM) $(RTL_DIR)/*.sv --top-module tpu_top
+	@echo "lint: clean (UART + SPI + 4x4 MAC16-pair configs)"
 
 # ----------------------------------------------------------------------------
 # Verilator C++ full-chip testbench (tests/verilator/tb_tpu_top.cpp): drives
@@ -219,7 +242,7 @@ lint:
 # ----------------------------------------------------------------------------
 VERILATE_SHAPES := 2_2_2_uart 2_4_2_uart 4_2_3_uart 2_4_2_spi  # ROWS_COLS_MTILE_PHY
 
-verilate-test: | $(SIM_DIR)
+verilate-test: $(SB_MAC16_SIM) | $(SIM_DIR)
 	@set -e; for shape in $(VERILATE_SHAPES); do \
 		rows=$${shape%%_*}; rest=$${shape#*_}; \
 		cols=$${rest%%_*}; rest=$${rest#*_}; \
@@ -237,7 +260,7 @@ verilate-test: | $(SIM_DIR)
 			-GCLK_FREQ=12000000 -GBAUD_RATE=1000000 \
 			-GARRAY_ROWS=$$rows -GNUM_COLS=$$cols -GM_TILE=$$mt $$phyflags \
 			-CFLAGS "-std=c++17 -DTB_ROWS=$$rows -DTB_COLS=$$cols -DTB_MTILE=$$mt $$phycflags" \
-			$(RTL_DIR)/*.sv $(TEST_DIR)/verilator/tb_tpu_top.cpp \
+			$(SB_MAC16_SIM) $(RTL_DIR)/*.sv $(TEST_DIR)/verilator/tb_tpu_top.cpp \
 			-o tb_tpu_top > /dev/null; \
 		$$objdir/tb_tpu_top; \
 	done

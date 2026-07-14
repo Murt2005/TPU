@@ -19,7 +19,7 @@ LOG_DIR="$SIM_DIR/logs"
 mkdir -p "$LOG_DIR"
 
 # Must match the TESTS list in the Makefile
-ALL_TESTS=(fifo pe mmu accumulator systolic_data_setup weight_fifo bias activation \
+ALL_TESTS=(fifo pe pe_pair mmu accumulator systolic_data_setup weight_fifo bias activation \
            unified_buffer \
            mmu_accum accum_bias bias_activation weight_fifo_mmu tpu_core \
            uart_rx uart_tx spi_slave tpu_sequencer tpu_sequencer_4x2 tpu_sequencer_2x4)

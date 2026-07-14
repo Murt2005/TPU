@@ -38,7 +38,11 @@ module tpu_top #(
     // bring-up path), 1 = SPI slave on spi_* (rtl/spi_slave.sv; the RP2350
     // drives it as mode-0 master over the shared config bus). Only the
     // selected PHY is instantiated; the other side's pins idle.
-    parameter int USE_SPI      = 0
+    parameter int USE_SPI      = 0,
+    // 1 = build the mmu from pe_pair (one hand-instantiated SB_MAC16 per
+    // two row-adjacent PEs, dual-8x8 mode) — halves DSP usage so 4x4 fits
+    // the UP5K's 8 blocks. Requires even ARRAY_ROWS. See rtl/pe_pair.sv.
+    parameter int USE_MAC16_PAIR = 0
 ) (
     input  logic clk,
     input  logic reset_n,   // active-low (DE1-SoC KEY[0])
@@ -299,7 +303,8 @@ module tpu_top #(
         .mmu_in_valid   (skewed_valid)
     );
 
-    mmu #(.ARRAY_ROWS(ARRAY_ROWS), .NUM_COLS(NUM_COLS)) u_mmu (
+    mmu #(.ARRAY_ROWS(ARRAY_ROWS), .NUM_COLS(NUM_COLS),
+          .USE_MAC16_PAIR(USE_MAC16_PAIR)) u_mmu (
         .clk                   (clk),
         .reset                 (dp_reset),
         .loading_phase         (seq_loading_phase),

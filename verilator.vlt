@@ -18,6 +18,16 @@ lint_off -rule UNUSEDSIGNAL -file "*rtl/tpu_top.sv" -match "*'rx_pin'*"
 // domain can't work) AND 2FF-synchronized into clk for the TX engine.
 lint_off -rule SYNCASYNCNET -file "*rtl/tpu_top.sv" -match "*'spi_csn'*"
 
+// pe_pair deliberately leaves the SB_MAC16 carry/cascade outputs
+// (CO/ACCUMCO/SIGNEXTOUT) unconnected -- the two halves run independent
+// 16-bit adds; the empty named connection documents that.
+lint_off -rule PINCONNECTEMPTY -file "*rtl/pe_pair.sv"
+
+// yosys's SB_MAC16 model (extracted verbatim from ice40/cells_sim.v for
+// pe_pair.sv) is compiled as-is for simulation fidelity; it is upstream
+// code, not ours to lint.
+lint_off -file "*/sb_mac16_sim.v"
+
 // tpu_sequencer uses shared 8-bit counters (run_cnt, byte_cnt, sr_row/sr_col,
 // tx_byte_idx) across loop phases whose bounds are small, shape-dependent
 // parameters (ARRAY_ROWS/NUM_COLS/M_TILE); indexing per-shape-sized arrays

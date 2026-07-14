@@ -49,7 +49,12 @@ module mmu #(
     parameter int ARRAY_ROWS = 2,
     parameter int NUM_COLS   = 2,
     parameter int DATA_WIDTH = 8,
-    parameter int PSUM_WIDTH = 16
+    parameter int PSUM_WIDTH = 16,
+    // 1 = build the grid from pe_pair (one hand-instantiated SB_MAC16 in
+    // dual-8x8 mode per two row-adjacent PEs; halves the DSP count so 4x4
+    // fits the UP5K's 8 blocks). Requires even ARRAY_ROWS. 0 = plain pe.sv
+    // path (yosys -dsp inference or LUT multipliers), any shape.
+    parameter int USE_MAC16_PAIR = 0
 ) (
     input logic clk,
     input logic reset,
@@ -118,29 +123,76 @@ module mmu #(
             assign out_partial_sum_valid[c] = psum_out_valid[ARRAY_ROWS-1][c];
         end
 
-        for (r = 0; r < ARRAY_ROWS; r++) begin : gen_row
-            for (c = 0; c < NUM_COLS; c++) begin : gen_col
-                pe pe_inst (
-                    .clk(clk),
-                    .reset(reset),
+        // pe_pair exposes exactly two pe.sv port sets (_t = row r, _b =
+        // row r+1), so the pair path wires into the very same net arrays
+        // as two stacked pe instances — including the mid-pair hop where
+        // the top half's registered psum leaves on psum_out[r][c] and
+        // re-enters as psum_in[r+1][c] -> the DSP's D input.
+        if (USE_MAC16_PAIR != 0) begin : gen_pair_rows
+            if (ARRAY_ROWS % 2 != 0) begin : gen_odd_rows_check
+                $error("USE_MAC16_PAIR requires even ARRAY_ROWS (got %0d)", ARRAY_ROWS);
+            end
+            for (r = 0; r < ARRAY_ROWS; r += 2) begin : gen_row
+                for (c = 0; c < NUM_COLS; c++) begin : gen_col
+                    pe_pair pe_pair_inst (
+                        .clk(clk),
+                        .reset(reset),
+                        .loading_phase(loading_phase),
+                        .capture_weight(capture_weight_col[c]),
 
-                    .in_activation(act_in[r][c]),
-                    .in_activation_valid(act_in_valid[r][c]),
-                    .out_activation(act_out[r][c]),
-                    .out_activation_valid(act_out_valid[r][c]),
+                        .in_activation_t(act_in[r][c]),
+                        .in_activation_valid_t(act_in_valid[r][c]),
+                        .out_activation_t(act_out[r][c]),
+                        .out_activation_valid_t(act_out_valid[r][c]),
+                        .in_partial_sum_t(psum_in[r][c]),
+                        .in_partial_sum_valid_t(psum_in_valid[r][c]),
+                        .out_partial_sum_t(psum_out[r][c]),
+                        .out_partial_sum_valid_t(psum_out_valid[r][c]),
+                        .in_weight_t(weight_in[r][c]),
+                        .in_weight_valid_t(weight_in_valid[r][c]),
+                        .out_weight_t(weight_out[r][c]),
+                        .out_weight_valid_t(weight_out_valid[r][c]),
 
-                    .in_partial_sum(psum_in[r][c]),
-                    .in_partial_sum_valid(psum_in_valid[r][c]),
-                    .out_partial_sum(psum_out[r][c]),
-                    .out_partial_sum_valid(psum_out_valid[r][c]),
+                        .in_activation_b(act_in[r+1][c]),
+                        .in_activation_valid_b(act_in_valid[r+1][c]),
+                        .out_activation_b(act_out[r+1][c]),
+                        .out_activation_valid_b(act_out_valid[r+1][c]),
+                        .in_partial_sum_b(psum_in[r+1][c]),
+                        .in_partial_sum_valid_b(psum_in_valid[r+1][c]),
+                        .out_partial_sum_b(psum_out[r+1][c]),
+                        .out_partial_sum_valid_b(psum_out_valid[r+1][c]),
+                        .in_weight_b(weight_in[r+1][c]),
+                        .in_weight_valid_b(weight_in_valid[r+1][c]),
+                        .out_weight_b(weight_out[r+1][c]),
+                        .out_weight_valid_b(weight_out_valid[r+1][c])
+                    );
+                end
+            end
+        end else begin : gen_pe_rows
+            for (r = 0; r < ARRAY_ROWS; r++) begin : gen_row
+                for (c = 0; c < NUM_COLS; c++) begin : gen_col
+                    pe pe_inst (
+                        .clk(clk),
+                        .reset(reset),
 
-                    .loading_phase(loading_phase),
-                    .capture_weight(capture_weight_col[c]),
-                    .in_weight(weight_in[r][c]),
-                    .in_weight_valid(weight_in_valid[r][c]),
-                    .out_weight(weight_out[r][c]),
-                    .out_weight_valid(weight_out_valid[r][c])
-                );
+                        .in_activation(act_in[r][c]),
+                        .in_activation_valid(act_in_valid[r][c]),
+                        .out_activation(act_out[r][c]),
+                        .out_activation_valid(act_out_valid[r][c]),
+
+                        .in_partial_sum(psum_in[r][c]),
+                        .in_partial_sum_valid(psum_in_valid[r][c]),
+                        .out_partial_sum(psum_out[r][c]),
+                        .out_partial_sum_valid(psum_out_valid[r][c]),
+
+                        .loading_phase(loading_phase),
+                        .capture_weight(capture_weight_col[c]),
+                        .in_weight(weight_in[r][c]),
+                        .in_weight_valid(weight_in_valid[r][c]),
+                        .out_weight(weight_out[r][c]),
+                        .out_weight_valid(weight_out_valid[r][c])
+                    );
+                end
             end
         end
     endgenerate
