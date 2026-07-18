@@ -22,7 +22,6 @@ module pe (
     output logic                out_weight_valid
 );
 
-    // Internal storage for the stationary weight
     logic signed [7:0] weight_reg;
 
     always_ff @(posedge clk) begin
@@ -36,14 +35,10 @@ module pe (
             weight_reg            <= 8'sd0;
         end else begin
             
-            // ==========================================
-            // 1. WEIGHT LOADING PHASE
-            // ==========================================
             if (loading_phase) begin
                 out_weight       <= in_weight;
                 out_weight_valid <= in_weight_valid;
                 
-                // Capture weight locally only if the incoming weight is valid
                 if (capture_weight && in_weight_valid) begin
                     weight_reg   <= in_weight;
                 end
@@ -52,25 +47,18 @@ module pe (
                 out_weight_valid <= 1'b0;
             end
 
-            // ==========================================
-            // 2. COMPUTATION PHASE
-            // ==========================================
             if (!loading_phase) begin
-                // Register and pass downstream the activation and its valid tag
                 out_activation       <= in_activation;
                 out_activation_valid <= in_activation_valid;
 
-                // Multiply-Accumulate logic gates on valid input data
                 if (in_activation_valid) begin
                     out_partial_sum       <= (weight_reg * in_activation) + (in_partial_sum_valid ? in_partial_sum : 16'sd0);
                     out_partial_sum_valid <= 1'b1;
                 end else begin
-                    // no activation this cycle, pass incoming partial sum straight through unchanged
                     out_partial_sum       <= in_partial_sum;
                     out_partial_sum_valid <= in_partial_sum_valid;
                 end
             end else begin
-                // Clear execution channels when explicitly loading weights
                 out_activation        <= 8'sd0;
                 out_activation_valid  <= 1'b0;
                 out_partial_sum       <= 16'sd0;

@@ -1,9 +1,6 @@
 `timescale 1ns / 1ps
 
 // Generic circular-queue FIFO.
-// Has no awareness of the MMU, PSums, weights, or rows
-// Reusable anywhere a simple synchronous FIFO is needed (weight loading,
-// accumulator column buffers, unified_buffer, etc).
 module fifo #(
     parameter int WIDTH = 16,
     parameter int DEPTH = 4  // must be a power of 2
@@ -50,22 +47,19 @@ module fifo #(
             read_ptr <= '0;
             data_count  <= '0;
         end else begin
-            // Write
             if (write_enable && !full) begin
                 memory[write_ptr] <= write_data;
                 write_ptr      <= write_ptr + 1'b1;
             end
 
-            // Read
             if (read_enable && !empty) begin
                 read_ptr <= read_ptr + 1'b1;
             end
 
-            // data_count update, handles simultaneous read+write correctly
             case ({(write_enable && !full), (read_enable && !empty)})
                 2'b10:   data_count <= data_count + 1'b1;
                 2'b01:   data_count <= data_count - 1'b1;
-                default: data_count <= data_count; // 00: no change, 11: simultaneous r/w nets to no change
+                default: data_count <= data_count;
             endcase
         end
     end

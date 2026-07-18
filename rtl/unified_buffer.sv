@@ -22,29 +22,24 @@ module unified_buffer #(
     input  logic clk,
     input  logic reset,
 
-    // Host write port (ARM loads input activation matrix before inference)
     input  logic [ADDR_WIDTH-1:0]         host_write_addr,
     input  logic signed [COLS-1:0][DATA_WIDTH-1:0] host_write_data,
     input  logic                          host_write_valid,
 
-    // Host read port (ARM reads result after DONE), 1-cycle latency
     input  logic [ADDR_WIDTH-1:0]         host_read_addr,
     output logic signed [COLS-1:0][DATA_WIDTH-1:0] host_read_data,
     input  logic                          host_read_en,
     output logic                          host_read_valid,
 
-    // Systolic data setup read port, 2-cycle latency
     input  logic [ADDR_WIDTH-1:0]         ub_read_addr,
     input  logic                          ub_read_en,
     output logic signed [COLS-1:0][DATA_WIDTH-1:0] ub_read_data,
     output logic                          ub_read_valid,
 
-    // Activation write port: address auto-increments on each valid pulse
     input  logic signed [COLS-1:0][DATA_WIDTH-1:0] act_write_data,
     input  logic                          act_write_valid,
     input  logic                          act_write_addr_reset,
 
-    // FSM pulses once per layer boundary to swap active / shadow banks
     input  logic                          bank_swap
 );
 

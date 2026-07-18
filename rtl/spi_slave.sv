@@ -48,28 +48,24 @@ module spi_slave (
     input  logic clk,
     input  logic reset,
 
-    // SPI pins (async to clk; sck is used as a clock for the RX shifter)
     input  logic sck,
-    input  logic csn,     // active-low chip select
+    input  logic csn,
     input  logic mosi,
     output logic miso,
 
-    // byte stream to/from tpu_sequencer (clk domain)
     output logic [7:0] rx_data,
-    output logic       rx_valid,   // one-cycle pulse per received byte
+    output logic       rx_valid,
 
     input  logic [7:0] tx_data,
-    input  logic       tx_valid,   // push one response byte (when !tx_busy)
-    output logic       tx_busy     // response FIFO full
+    input  logic       tx_valid,
+    output logic       tx_busy
 );
 
     localparam logic [7:0] IDLE_BYTE = 8'h00;  // MISO filler when no response
                                                // queued; must differ from both
                                                // STATUS values (0xAA/0xFF)
 
-    // =========================================================================
     // RX: shift MOSI in the SCK domain, byte-level toggle CDC into clk
-    // =========================================================================
     logic [2:0] rx_bit = '0;        // SCK domain: bits received in current byte.
                                     // Power-up initializer matters: before the
                                     // first CS deassert edge ever fires, the
@@ -116,9 +112,7 @@ module spi_slave (
         end
     end
 
-    // =========================================================================
     // TX: response FIFO (clk domain) + MISO engine on synchronized SCK edges
-    // =========================================================================
     logic        fifo_full, fifo_empty;
     logic signed [7:0] fifo_head;
     logic signed [7:0] fifo_wr_data;   // fifo.sv's ports are signed; the byte

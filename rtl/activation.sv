@@ -32,11 +32,9 @@ module activation #(
     input  logic clk,
     input  logic reset,
 
-    // Row from the bias unit.
     input  logic signed [NUM_COLS-1:0][PSUM_WIDTH-1:0] in_row,
     input  logic                         in_row_valid,
 
-    // ReLU-clamped row out.  Valid exactly one cycle after in_row_valid.
     output logic signed [NUM_COLS-1:0][PSUM_WIDTH-1:0] out_row,
     output logic                         out_row_valid
 );

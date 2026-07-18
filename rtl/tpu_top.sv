@@ -15,13 +15,6 @@
 //   activation       (ReLU)
 //
 // Parameters mirror the testbench defaults so sim and hardware match.
-//
-// Pin mapping for DE1-SoC (Cyclone V):
-//   clk_50mhz → PIN_AF14 (CLOCK_50 on DE1-SoC)
-//   rx_pin    → GPIO header or UART-to-USB bridge RX
-//   tx_pin    → GPIO header or UART-to-USB bridge TX
-//   reset_n   → KEY[0] (active-low push-button)
-
 module tpu_top #(
     parameter int CLK_FREQ    = 50_000_000,
     parameter int BAUD_RATE   = 115_200,
@@ -34,45 +27,36 @@ module tpu_top #(
     parameter int ARRAY_ROWS   = 2,
     parameter int NUM_COLS     = 2,
     parameter int M_TILE       = ARRAY_ROWS,
-    // Host PHY select: 0 = UART on rx_pin/tx_pin (default, the validated
-    // bring-up path), 1 = SPI slave on spi_* (rtl/spi_slave.sv; the RP2350
-    // drives it as mode-0 master over the shared config bus). Only the
-    // selected PHY is instantiated; the other side's pins idle.
+    
     parameter int USE_SPI      = 0,
-    // 1 = build the mmu from pe_pair (one hand-instantiated SB_MAC16 per
-    // two row-adjacent PEs, dual-8x8 mode) — halves DSP usage so 4x4 fits
-    // the UP5K's 8 blocks. Requires even ARRAY_ROWS. See rtl/pe_pair.sv.
+    
     parameter int USE_MAC16_PAIR = 0
 ) (
     input  logic clk,
-    input  logic reset_n,   // active-low (DE1-SoC KEY[0])
+    input  logic reset_n,
 
-    input  logic rx_pin,    // UART RX from host
-    output logic tx_pin,    // UART TX to host
+    input  logic rx_pin,
+    output logic tx_pin,
 
-    // SPI slave pins (USE_SPI=1 builds; see fpga/tpu_top.pcf for the
-    // pico2-ice config-bus pin mapping)
     input  logic spi_sck,
     input  logic spi_csn,
     input  logic spi_mosi,
     output logic spi_miso
 );
 
-    // =========================================================================
-    // Synchronous active-high reset
-    // =========================================================================
-    // Power-on-reset generator: holds an internal reset for the first 256
-    // cycles after configuration, regardless of reset_n's level. Needed
-    // because every module's registers (e.g. uart_tx's tx_busy/state) only
-    // get their known-good value inside their `if (reset)` branch -- if
-    // reset_n is already idle-high the instant the FPGA configures (true on
-    // boards where the reset button is a plain pull-up with no reset IC),
-    // that branch would otherwise never fire even once, leaving those
-    // registers to whatever value the toolchain's power-on initial-value
-    // inference happens to pick. Confirmed on iCE40/pico2-ice: without this,
-    // uart_tx never transmits (tx_busy powers up stuck) even though the
-    // exact same design works fine in simulation, where testbenches always
-    // pulse reset explicitly at the start.
+    // Synchronous active-high reset:
+    //  Power-on-reset generator: holds an internal reset for the first 256
+    //  cycles after configuration, regardless of reset_n's level. Needed
+    //  because every module's registers (e.g. uart_tx's tx_busy/state) only
+    //  get their known-good value inside their `if (reset)` branch -- if
+    //  reset_n is already idle-high the instant the FPGA configures (true on
+    //  boards where the reset button is a plain pull-up with no reset IC),
+    //  that branch would otherwise never fire even once, leaving those
+    //  registers to whatever value the toolchain's power-on initial-value
+    //  inference happens to pick. Confirmed on iCE40/pico2-ice: without this,
+    //  uart_tx never transmits (tx_busy powers up stuck) even though the
+    //  exact same design works fine in simulation, where testbenches always
+    //  pulse reset explicitly at the start.
     logic [7:0] por_ctr = '0;
     logic       por_done = 1'b0;
     always_ff @(posedge clk) begin
@@ -85,9 +69,7 @@ module tpu_top #(
     logic rst;
     assign rst = ~reset_n | ~por_done;
 
-    // =========================================================================
     // UART byte streams
-    // =========================================================================
     logic [7:0] rx_byte;
     logic        rx_valid;
     logic        rx_error;
@@ -137,11 +119,9 @@ module tpu_top #(
         end
     endgenerate
 
-    // =========================================================================
-    // Sequencer control signals
-    // =========================================================================
-    // unified_buffer address width (must match tpu_sequencer's derived
-    // UB_ADDR_W and unified_buffer's ADDR_WIDTH with ROWS = M_TILE)
+    // Sequencer control signals:
+    //  unified_buffer address width (must match tpu_sequencer's derived
+    //  UB_ADDR_W and unified_buffer's ADDR_WIDTH with ROWS = M_TILE)
     localparam int UB_ADDR_W = (M_TILE > 1) ? $clog2(M_TILE) : 1;
 
     // weight_fifo (array-port style, one lane per column)
@@ -219,10 +199,6 @@ module tpu_top #(
         .busy               ()
     );
 
-    // =========================================================================
-    // Datapath glue
-    // =========================================================================
-
     // unified_buffer → systolic_data_setup
     logic signed [ARRAY_ROWS-1:0][7:0] ub_read_data;
     logic              ub_read_valid;
@@ -251,13 +227,10 @@ module tpu_top #(
     logic signed [ARRAY_ROWS-1:0][7:0] ub_act_dummy;
     assign ub_act_dummy = '0;
 
-    // =========================================================================
     // Module instantiations
-    // =========================================================================
-
-    // UB geometry: ROWS = M_TILE addresses, each holding one ARRAY_ROWS-wide
-    // activation row (COLS must equal ARRAY_ROWS — its read port feeds
-    // systolic_data_setup's ARRAY_ROWS-wide input).
+    //  UB geometry: ROWS = M_TILE addresses, each holding one ARRAY_ROWS-wide
+    //  activation row (COLS must equal ARRAY_ROWS — its read port feeds
+    //  systolic_data_setup's ARRAY_ROWS-wide input).
     unified_buffer #(.ROWS(M_TILE), .COLS(ARRAY_ROWS), .DATA_WIDTH(8)) u_ub (
         .clk                (clk),
         .reset              (dp_reset),

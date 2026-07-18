@@ -55,22 +55,15 @@ module accumulator #(
     input  logic clk,
     input  logic reset,
 
-    // One partial-sum input + valid strobe per MMU output column.
     input  logic signed [NUM_COLS-1:0][PSUM_WIDTH-1:0] in_partial_sum,
     input  logic        [NUM_COLS-1:0]                 in_partial_sum_valid,
 
-    // Tile-accumulation control -- see header comment. Must stay stable for
-    // the whole pass (all ARRAY_ROWS row-completions).
     input  logic tile_first,
     input  logic tile_last,
 
-    // Output: one full row, valid for exactly one cycle when tile_last=1
-    // and all columns' FIFOs have produced a matching entry.
     output logic signed [NUM_COLS-1:0][PSUM_WIDTH-1:0] out_row,
     output logic                         out_row_valid,
 
-    // Pulses for exactly one cycle once every ARRAY_ROWS rows of this pass
-    // have been folded into psum_reg, regardless of tile_last.
     output logic                         pass_done,
 
     // Backpressure-free for now (consumer must accept the row when
@@ -85,7 +78,6 @@ module accumulator #(
     logic signed [PSUM_WIDTH-1:0]  fifo_rd_data [NUM_COLS];
     logic                          pop_row;
 
-    // A row is ready exactly when every column FIFO is non-empty.
     logic all_fifos_have_data;
     always_comb begin
         all_fifos_have_data = 1'b1;
@@ -122,7 +114,6 @@ module accumulator #(
         end
     endgenerate
 
-    // Persistent per-row running sum, survives across separate passes.
     logic signed [PSUM_WIDTH-1:0] psum_reg [ARRAY_ROWS][NUM_COLS];
     logic [ROW_IDX_W-1:0]         row_idx;
 

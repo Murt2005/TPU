@@ -70,11 +70,9 @@ module weight_fifo #(
     input  logic clk,
     input  logic reset,
 
-    // Off-chip write interface: one write_enable/write_data pair per column.
     input  logic                                          [NUM_COLS-1:0] write_enable_col,
     input  logic signed [NUM_COLS-1:0][WEIGHT_WIDTH-1:0]                 write_data_col,
 
-    // Bank control
     input  logic         swap_banks,
 
     // Convenience status: is the CURRENT shadow bank fully loaded
@@ -90,13 +88,11 @@ module weight_fifo #(
     output logic signed [NUM_COLS-1:0][WEIGHT_WIDTH-1:0] out_col,
     output logic                      [NUM_COLS-1:0]      out_col_valid,
 
-    // Status
     output logic active_empty,
     output logic active_full,
     output logic any_shadow_full  // either shadow-bank fifo full (back-pressure to DMA writer)
 );
 
-    // Bank-select register
     logic active_bank_q;
 
     always_ff @(posedge clk) begin
@@ -109,11 +105,9 @@ module weight_fifo #(
 
     assign active_bank = active_bank_q;
 
-    // shadow bank index is simply the complement of active
     logic shadow_bank_q;
     assign shadow_bank_q = ~active_bank_q;
 
-    // 2*NUM_COLS underlying FIFOs: bank 0 / bank 1, each with NUM_COLS columns
     logic                           bank_write_enable [2][NUM_COLS]; // [bank][col]
     logic signed [WEIGHT_WIDTH-1:0] bank_write_data   [2][NUM_COLS];
     logic                           bank_read_enable  [2][NUM_COLS];
@@ -142,10 +136,6 @@ module weight_fifo #(
         end
     endgenerate
 
-    // Off-chip write port routing: always targets the shadow bank.
-    // Bank index is dynamic (depends on active_bank_q), so route each
-    // column's external write_enable/write_data pair to whichever
-    // physical fifo is currently the shadow one for that column.
     always_comb begin
         for (int bi = 0; bi < 2; bi++) begin
             for (int ci = 0; ci < NUM_COLS; ci++) begin
@@ -203,7 +193,6 @@ module weight_fifo #(
         end
     end
 
-    // Status flags
     always_comb begin
         active_empty    = 1'b1;
         active_full     = 1'b0;

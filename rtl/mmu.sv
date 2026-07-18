@@ -4,11 +4,9 @@
 // ----
 // Weight-stationary systolic array: an ARRAY_ROWS x NUM_COLS grid of `pe`
 // instances, built with a generate block so the array size is a parameter
-// bump, not a port-list rewrite (matches the pattern already used by
-// weight_fifo.sv / accumulator.sv: array ports rather than individually
-// named per-row/per-column signals).
+// bump
 //
-// Data flow through the grid (unchanged from the original hardcoded 2x2):
+// Data flow through the grid:
 //   - Activations enter on the LEFT edge (in_row[r]) and shift rightward
 //     one PE per cycle, row r independent of the others.
 //   - Weights enter on the TOP edge (in_col[c]) and shift downward one PE
@@ -22,38 +20,26 @@
 //     downward one PE per cycle; out_partial_sum[c]/out_partial_sum_valid[c]
 //     is the BOTTOM edge of column c, i.e. the finished dot product.
 //
-// Boundary conditions (replacing the original's hardcoded 16'd0/1'b0 and
-// unconnected ports):
+// Boundary conditions:
 //   - the top edge's incoming partial sum is '0/invalid for every column
 //   - the last column's out_activation / last row's out_weight are left
-//     unread -- same as the original's dangling pe01.out_activation /
-//     pe10.out_weight etc.
+//     unread
 //
 // Each PE's in_*/out_* pair is split into its own array (act_in/act_out,
 // weight_in/weight_out, psum_in/psum_out) rather than one shared network
 // array indexed 0..N, because Icarus Verilog rejects an array that is
 // partly driven by generate-instance port connections and partly by a
-// procedural/continuous boundary assignment elsewhere -- even at disjoint
+// procedural/continuous boundary assignment elsewhere, even at disjoint
 // indices, it treats the whole array as one multiply-driven object. Keeping
 // "written by the generate block" and "written by boundary logic" as
 // physically separate arrays sidesteps that; act_in[r][c]/weight_in[r][c]/
 // psum_in[r][c] are wired from either the boundary input or the previous
 // PE's *_out via the assigns below.
-//
-// DATA_WIDTH/PSUM_WIDTH are exposed for consistency with weight_fifo.sv /
-// accumulator.sv's parameter lists, but `pe.sv` itself hardcodes 8-bit
-// activation/weight and 16-bit partial-sum ports today -- changing these
-// away from the defaults requires parameterizing pe.sv too (out of scope
-// here; ARRAY_ROWS/NUM_COLS are the axes this rewrite actually enables).
 module mmu #(
     parameter int ARRAY_ROWS = 2,
     parameter int NUM_COLS   = 2,
     parameter int DATA_WIDTH = 8,
     parameter int PSUM_WIDTH = 16,
-    // 1 = build the grid from pe_pair (one hand-instantiated SB_MAC16 in
-    // dual-8x8 mode per two row-adjacent PEs; halves the DSP count so 4x4
-    // fits the UP5K's 8 blocks). Requires even ARRAY_ROWS. 0 = plain pe.sv
-    // path (yosys -dsp inference or LUT multipliers), any shape.
     parameter int USE_MAC16_PAIR = 0
 ) (
     input logic clk,
@@ -72,10 +58,6 @@ module mmu #(
     output logic        [NUM_COLS-1:0]                 out_partial_sum_valid
 );
 
-    // Per-PE input/output nets, ARRAY_ROWS x NUM_COLS each. act_in/weight_in/
-    // psum_in are driven only by the boundary `assign`s below; act_out/
-    // weight_out/psum_out are driven only by the generate block's PE
-    // instances -- see header comment for why they can't share one array.
     logic signed [DATA_WIDTH-1:0] act_in  [ARRAY_ROWS][NUM_COLS];
     logic                         act_in_valid [ARRAY_ROWS][NUM_COLS];
     logic signed [DATA_WIDTH-1:0] act_out [ARRAY_ROWS][NUM_COLS];
@@ -93,8 +75,6 @@ module mmu #(
 
     genvar r, c;
     generate
-        // Activation: row r's PE(r,0) reads the left-edge input; PE(r,c)
-        // for c>0 reads PE(r,c-1)'s registered output.
         for (r = 0; r < ARRAY_ROWS; r++) begin : gen_act_row
             assign act_in[r][0]       = in_row[r];
             assign act_in_valid[r][0] = in_row_valid[r];
@@ -104,10 +84,6 @@ module mmu #(
             end
         end
 
-        // Weight + partial-sum: column c's PE(0,c) reads the top-edge
-        // weight input and a zero/invalid partial sum; PE(r,c) for r>0
-        // reads PE(r-1,c)'s registered outputs. Column c's finished dot
-        // product is PE(ARRAY_ROWS-1,c)'s partial-sum output.
         for (c = 0; c < NUM_COLS; c++) begin : gen_col_boundary
             assign weight_in[0][c]       = in_col[c];
             assign weight_in_valid[0][c] = in_col_valid[c];

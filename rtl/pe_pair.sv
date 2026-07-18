@@ -42,7 +42,6 @@ module pe_pair (
     input  logic                loading_phase,
     input  logic                capture_weight,
 
-    // ---- top PE (array row r) ----
     input  logic signed [7:0]   in_activation_t,
     output logic signed [7:0]   out_activation_t,
     input  logic                in_activation_valid_t,
@@ -58,7 +57,6 @@ module pe_pair (
     input  logic                in_weight_valid_t,
     output logic                out_weight_valid_t,
 
-    // ---- bottom PE (array row r+1) ----
     input  logic signed [7:0]   in_activation_b,
     output logic signed [7:0]   out_activation_b,
     input  logic                in_activation_valid_b,
@@ -75,7 +73,6 @@ module pe_pair (
     output logic                out_weight_valid_b
 );
 
-    // Stationary weights (fabric, same capture rule as pe.sv)
     logic signed [7:0] weight_reg_t;
     logic signed [7:0] weight_reg_b;
 
@@ -94,7 +91,6 @@ module pe_pair (
             out_partial_sum_valid_t <= 1'b0;
             out_partial_sum_valid_b <= 1'b0;
         end else begin
-            // Weight shift chain (active during loading, cleared otherwise)
             if (loading_phase) begin
                 out_weight_t       <= in_weight_t;
                 out_weight_valid_t <= in_weight_valid_t;
@@ -109,7 +105,6 @@ module pe_pair (
                 out_weight_valid_b <= 1'b0;
             end
 
-            // Activation forwarding + psum valid tags (compute phase)
             if (!loading_phase) begin
                 out_activation_t       <= in_activation_t;
                 out_activation_valid_t <= in_activation_valid_t;

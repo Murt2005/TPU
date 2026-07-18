@@ -27,16 +27,11 @@ module bias #(
     input  logic clk,
     input  logic reset,
 
-    // One fully-accumulated row in from the accumulator.
     input  logic signed [NUM_COLS-1:0][PSUM_WIDTH-1:0] in_row,
     input  logic                         in_row_valid,
 
-    // Stationary per-column bias values. Column c's bias is added to
-    // in_row[c]. Sampled the same cycle in_row_valid is high.
     input  logic signed [NUM_COLS-1:0][PSUM_WIDTH-1:0] in_bias,
 
-    // Bias-added row out, valid for exactly one cycle, one cycle after
-    // in_row_valid (registered, same latency convention as accumulator).
     output logic signed [NUM_COLS-1:0][PSUM_WIDTH-1:0] out_row,
     output logic                         out_row_valid
 );
