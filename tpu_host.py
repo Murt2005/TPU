@@ -58,6 +58,8 @@ import time
 import numpy as np
 import serial
 
+# Wire-protocol opcodes / status bytes. These mirror rtl/tpu_pkg.sv, which is
+# the canonical (RTL) side of the host<->FPGA contract -- keep the two in sync.
 CMD_LOAD_WEIGHTS = 0x01
 CMD_LOAD_BIAS = 0x02
 CMD_LOAD_ACT = 0x03

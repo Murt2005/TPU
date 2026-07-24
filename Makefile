@@ -63,7 +63,10 @@ RTL_unified_buffer       := $(RTL_DIR)/unified_buffer.sv
 RTL_uart_rx              := $(RTL_DIR)/uart_rx.sv
 RTL_uart_tx              := $(RTL_DIR)/uart_tx.sv
 RTL_spi_slave            := $(RTL_DIR)/spi_slave.sv $(RTL_fifo)
-RTL_tpu_sequencer        := $(RTL_DIR)/tpu_sequencer.sv
+# tpu_pkg.sv (shared opcode/status/width constants) must precede any file that
+# imports it, so it leads every dep list that pulls in tpu_sequencer.
+RTL_pkg                  := $(RTL_DIR)/tpu_pkg.sv
+RTL_tpu_sequencer        := $(RTL_pkg) $(RTL_DIR)/tpu_sequencer.sv
 
 # Full datapath (everything tpu_sequencer_tb needs to instantiate)
 RTL_tpu_datapath         := $(RTL_unified_buffer) $(RTL_weight_fifo) \

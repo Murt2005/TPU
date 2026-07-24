@@ -80,7 +80,8 @@ ABC_FLAGS := -abc9 -dff
 # default firmware -- matches pico-ice-sdk's own example Makefiles.
 DFU_ALT_FLASH := 0
 
-RTL := $(RTL_DIR)/uart_rx.sv \
+RTL := $(RTL_DIR)/tpu_pkg.sv \
+       $(RTL_DIR)/uart_rx.sv \
        $(RTL_DIR)/uart_tx.sv \
        $(RTL_DIR)/spi_slave.sv \
        $(RTL_DIR)/tpu_sequencer.sv \

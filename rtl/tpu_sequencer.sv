@@ -208,23 +208,10 @@ module tpu_sequencer #(
     output logic               busy          // high while processing a command
 );
 
-    localparam logic [7:0] CMD_LOAD_WEIGHTS = 8'h01;
-    localparam logic [7:0] CMD_LOAD_BIAS    = 8'h02;
-    localparam logic [7:0] CMD_LOAD_ACT     = 8'h03;
-    localparam logic [7:0] CMD_RUN          = 8'h04;
-    localparam logic [7:0] CMD_RESET        = 8'h05;
-    localparam logic [7:0] CMD_RUN_TILE     = 8'h06;
-    localparam logic [7:0] CMD_STREAM_RUN   = 8'h07;
-    // 0xFF in S_IDLE is a NOP, silently ignored (no response). The SPI host
-    // interface (rtl/spi_slave.sv) needs this: reading a response over SPI
-    // means the master clocks dummy filler bytes, and those arrive here as
-    // rx_valid bytes exactly like command bytes do. 0xFF filler + this rule
-    // keeps read-polling invisible to the protocol. (UART hosts simply never
-    // send 0xFF as a command; unknown-command tests use other bytes.)
-    localparam logic [7:0] CMD_NOP          = 8'hFF;
-
-    localparam logic [7:0] STATUS_OK  = 8'hAA;
-    localparam logic [7:0] STATUS_ERR = 8'hFF;
+    // Command opcodes (CMD_*), the NOP filler byte, and STATUS_OK/STATUS_ERR
+    // are the host<->FPGA wire-protocol contract; they live in tpu_pkg so the
+    // one table is shared (and mirrored by tpu_host.py). See rtl/tpu_pkg.sv.
+    import tpu_pkg::*;
 
     localparam int TIMEOUT_W = $clog2(WAIT_TIMEOUT + 1);
 
