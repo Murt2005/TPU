@@ -81,20 +81,13 @@ TPU/
 │   ├── ice40/                     # pico2-ice (iCE40UP5K): yosys/nextpnr-ice40/icepack, see §3.1
 │   └── de1soc/                    # DE1-SoC (Cyclone V): Quartus + HPS bridge (scaffolding, see its README)
 ├── firmware/                      # RP2350 firmware: USB-CDC <-> FPGA UART bridge
-│   └── pico-ice-sdk/              # vendored SDK, git submodule -- see docs/FPGA.md §6
-├── mnist/
-│   ├── train_mnist.py            # trains + quantizes the 144->64->10 MLP
-│   ├── infer.py                  # multi-layer tiled inference driver (hardware + offline backends)
-│   ├── draw_demo.py              # interactive drawing demo, LED feedback
-│   ├── model/mnist_2x2_int8.npz  # quantized weights (committed, ~5KB)
-│   └── data/                     # downloaded MNIST idx files, gitignored
-└── docs/
-    ├── REPO_MAP.md               # file-by-file guide to this repo
-    ├── FPGA.md                   # pico2-ice architecture + end-to-end build/flash/validate runbook
-    ├── sequencer_uart_design.md  # tpu_sequencer/uart_rx/uart_tx FSM + timing writeup
-    ├── SEQUENCER_REDESIGN.md     # sequencer parameterization + batched-protocol design & status log
-    ├── HARDWARE_COMPARISON.md    # pico2-ice vs. local Mac: speed/accuracy/power/size, same model
-    └── PERFORMANCE_ANALYSIS.md   # UART vs RTL time breakdown, LUT budget, array-scaling feasibility
+│   └── pico-ice-sdk/              # vendored SDK, git submodule
+└── mnist/
+    ├── train_mnist.py            # trains + quantizes the 144->64->10 MLP
+    ├── infer.py                  # multi-layer tiled inference driver (hardware + offline backends)
+    ├── draw_demo.py              # interactive drawing demo, LED feedback
+    ├── model/mnist_2x2_int8.npz  # quantized weights (committed, ~5KB)
+    └── data/                     # downloaded MNIST idx files, gitignored
 ```
 
 ### 2.1 Simulation workflow
@@ -156,11 +149,7 @@ A parameterized `ARRAY_ROWS × NUM_COLS` systolic array (default 2×2;
 hardware-validated at 2×2 and 2×4, the latter with all 8 of the UP5K's `SB_MAC16`
 DSP blocks backing the PEs) runs the full datapath (UART RX → sequencer →
 weight FIFO → unified buffer → systolic data setup → MMU → accumulator → bias →
-ReLU → UART TX) on real silicon. Architecture, code layout, build/flash/validate
-steps, board gotchas, and the wire protocol are all in `docs/FPGA.md`; the
-sequencer/UART FSM design and cycle-by-cycle timing are in
-`docs/sequencer_uart_design.md`; the batched-protocol and array-scaling design
-history is in `docs/SEQUENCER_REDESIGN.md`.
+ReLU → UART TX) on real silicon.
 
 ```bash
 cd fpga/ice40 && make && make prog       # build + flash the gateware (2x2, 1 Mbaud defaults)
@@ -183,7 +172,7 @@ make stat       # yosys post-synth cell/LUT/FF-type breakdown
 make util       # nextpnr device utilisation (LCs, DSPs, BRAM, IO vs. the UP5K's budget)
 make time       # icetime static timing report (post-PnR fMax vs. the clock constraint)
 make prog       # flash tpu_top.bin over USB DFU (board in normal run mode; ignore
-                #   dfu-util's "firmware corrupt" message -- known false alarm, docs/FPGA.md §8.3)
+                #   dfu-util's "firmware corrupt" message -- known false alarm)
 make clean      # remove tpu_top.json/.asc/.bin
 ```
 Build knobs (accepted by every target above; all `chparam`'d into the
@@ -223,24 +212,23 @@ hardware or, with `--offline`, in pure numpy with no board at all.
    python3 mnist/train_mnist.py
    ```
 
-2. **Board must already be flashed** — firmware + gateware, per §3.1 above
-   (`docs/FPGA.md` §7 for the full runbook). Pure RTL/software changes here
-   don't need a firmware reflash, just the gateware.
+2. **Board must already be flashed** — firmware + gateware, per §3.1 above.
+   Pure RTL/software changes here don't need a firmware reflash, just the
+   gateware.
 
 3. **Find the board's two USB-CDC ports**:
    ```bash
    python3 -c "import serial.tools.list_ports as p; [print(x) for x in p.comports()]"
    ```
-   Both may show identically as `pico-ice` on macOS (see `docs/FPGA.md`
-   §8.5) — try the higher-numbered `/dev/cu.usbmodemN` for `--port` (the
+   Both may show identically as `pico-ice` on macOS — try the higher-numbered
+   `/dev/cu.usbmodemN` for `--port` (the
    TPU/"iCE40 UART" link) first; the other is `--led-port` ("RP2040 logs",
    used only for the demo's LED feedback in step 5).
 
 4. **Sanity-check accuracy on real hardware** — classifies N random real
    MNIST test images end-to-end (~64 ms/image at the 2×4 SPI build with
    firmware offload; ~240 ms over 1 Mbaud UART at the same shape, ~316 ms
-   at the default 2×2 — see §4's latency note and
-   `docs/PERFORMANCE_ANALYSIS.md` for where the time goes):
+   at the default 2×2 — see §4's latency note for where the time goes):
    ```bash
    python3 mnist/infer.py --port /dev/cu.usbmodemXXXX --test-n 20
    # flashed a non-default shape (e.g. make ARRAY_ROWS=2 NUM_COLS=4)? match it:
@@ -248,7 +236,7 @@ hardware or, with `--offline`, in pure numpy with no board at all.
    # no board handy? pure-numpy backend, same fixed-point math, no LED:
    python3 mnist/infer.py --offline --test-n 200
    # want both, on the exact same images, side by side (hardware vs local Mac,
-   # one-at-a-time vs batched)? see docs/HARDWARE_COMPARISON.md:
+   # one-at-a-time vs batched)?
    python3 mnist/infer.py --port /dev/cu.usbmodemXXXX --compare --test-n 20
    ```
 
@@ -276,13 +264,13 @@ hardware or, with `--offline`, in pure numpy with no board at all.
   `ARRAY_ROWS`/`NUM_COLS`/`M_TILE`; the shape is a build knob (§3.1) threaded from
   `fpga/ice40/Makefile` through `tpu_host.py`. 2×4 (8 PEs, all DSP-backed, 67% of the UP5K's
   LUTs) is the largest shape that fits — 4×4 needs 16 multipliers against the chip's
-  8 `SB_MAC16` blocks. See `docs/PERFORMANCE_ANALYSIS.md` §3.
+  8 `SB_MAC16` blocks.
 - **K-dim tiling** — `accumulator.sv` holds a persistent per-row PSUM register that
   survives across separate `RUN`s (`tile_first`/`tile_last` control, `pass_done` status),
   so a matmul with K larger than the array can be tiled into multiple weight-reload
-  passes summed in hardware before bias/ReLU ever runs — see its header comment and
-  `docs/sequencer_uart_design.md` §3.2 for the wire-protocol side (`RUN`'s optional
-  `LEN=1` flags byte). Verified in sim (`accumulator_tb`, `tpu_core_tb` Test 8,
+  passes summed in hardware before bias/ReLU ever runs — see its header comment
+  and the `RUN` command's optional `LEN=1` flags byte (`rtl/tpu_sequencer.sv`).
+  Verified in sim (`accumulator_tb`, `tpu_core_tb` Test 8,
   `tpu_sequencer_tb` Test 7) and on real pico2-ice hardware (`tpu_host.py`'s
   `TPU.matmul_tiled()`, `tests/hw_regression.py`'s randomized multi-tile stress case).
 - **Inference latency: 8.0 s → 64 ms/image (125x)** — measured on real hardware, in
@@ -296,8 +284,7 @@ hardware or, with `--offline`, in pure numpy with no board at all.
   network layer instead of one per tile frame, 1.5x — bit-identical to the
   host-tiled path, A/B-verified in `tests/hw_regression.py`). The remaining
   budget is genuinely wire-bound: mostly SPI tile traffic at the CLK/6-capped
-  4 MHz write clock, ~3% actual RTL compute; full measurement trail in
-  `docs/PERFORMANCE_ANALYSIS.md` and `docs/SEQUENCER_REDESIGN.md`.
+  4 MHz write clock, ~3% actual RTL compute.
 - **MNIST** — `mnist/train_mnist.py` trains and quantizes a 144→64→10 MLP (12×12
   downsampled input, int8 weights/activations, int16 bias) sized and empirically
   verified against the accumulator's non-saturating int16 width (5% calibration
@@ -313,9 +300,9 @@ hardware or, with `--offline`, in pure numpy with no board at all.
 - **Future work** — a bigger/better MNIST model (current one is deliberately tiny to
   stay provably inside the accumulator's int16 width — see `mnist/train_mnist.py`'s
   header comment); batching `M_TILE` images per inference call in `mnist/infer.py` so a
-  single image stops wasting the padded activation rows; and the wire-format ideas in
-  `docs/SEQUENCER_REDESIGN.md` §6 (packed instruction headers, int4 payload packing —
-  the latter gated on a software-only accuracy experiment).
+  single image stops wasting the padded activation rows; and wire-format ideas
+  like packed instruction headers and int4 payload packing (the latter gated on
+  a software-only accuracy experiment).
 - **DE1-SoC (Cyclone V) target** — planned: a Quartus build driven from the
   board's ARM HPS over the lightweight FPGA bridge, scaling the array well past
   the UP5K's 8-DSP ceiling (the RTL top is already board-neutral; the SB_MAC16
