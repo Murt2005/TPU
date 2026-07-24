@@ -9,6 +9,7 @@ sim/
 fpga/**/*.json
 fpga/**/*.asc
 fpga/**/*.bin
+fpga/**/*.aig
 
 # RP2350 firmware out-of-tree build dirs (build/ = UART bridge,
 # build-spi/ = TPU_LINK_SPI=ON variant)
