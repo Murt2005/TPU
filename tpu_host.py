@@ -51,6 +51,8 @@ without support forwards them to the FPGA, which rejects the unknown CMD):
                               supports FW_MATMUL. See TPU._probe_offload().
 """
 import argparse
+import mmap
+import os
 import struct
 import sys
 import time
@@ -120,6 +122,84 @@ class TPUError(RuntimeError):
     pass
 
 
+class MmioLink:
+    """Duck-typed drop-in for serial.Serial that reaches the DE1-SoC's
+    hps_bridge (rtl/hps_bridge.sv) over the Cyclone V lightweight HPS->FPGA
+    bridge via /dev/mem. It exposes the small slice of the pyserial API the
+    TPU class uses (write/read/reset_input_buffer/close/baudrate) so nothing
+    else in this driver changes -- only the transport does.
+
+    This runs ON the board's ARM Linux (not on the host PC): tpu_host.py is
+    copied to the DE1-SoC and invoked there with `--link hps --port /dev/mem`.
+    The byte-level wire protocol is identical to the UART/SPI links.
+
+    hps_bridge register map (word offsets within the Avalon component):
+        0x0  TXDATA (w)  host->FPGA byte  (writing pushes one rx byte)
+        0x4  RXDATA (r)  FPGA->host byte  (reading pops it)
+        0x8  STATUS (r)  bit0 TX_SPACE=1 always, bit1 RX_AVAIL=byte waiting
+
+    NOTE: unvalidated on hardware from this repo yet -- the register contract
+    matches hps_bridge.sv / hps_bridge_tb.sv, but confirm the base address and
+    the component's Qsys offset for your generated system. LWH2F_BASE is the
+    standard Cyclone V lightweight bridge base; `offset` is the hps_bridge
+    component's base assigned in Platform Designer (page-aligned).
+    """
+
+    LWH2F_BASE  = 0xFF20_0000      # Cyclone V lightweight HPS->FPGA bridge base
+    SPAN        = 0x1000           # one page is plenty for 3 registers
+    TXDATA      = 0x0
+    RXDATA      = 0x4
+    STATUS      = 0x8
+    ST_RX_AVAIL = 1 << 1
+
+    def __init__(self, port="/dev/mem", timeout=2.0,
+                 base=LWH2F_BASE, offset=0):
+        if offset % mmap.PAGESIZE:
+            raise ValueError(
+                f"hps_bridge component offset 0x{offset:X} must be page-aligned "
+                f"(multiple of 0x{mmap.PAGESIZE:X}); set its Qsys base accordingly"
+            )
+        self.timeout = timeout
+        self.baudrate = 10 ** 9    # sentinel: makes the UART-era pacing math ~0
+        self._fd = os.open(port, os.O_RDWR | os.O_SYNC)
+        self._map = mmap.mmap(self._fd, self.SPAN,
+                              flags=mmap.MAP_SHARED,
+                              prot=mmap.PROT_READ | mmap.PROT_WRITE,
+                              offset=base + offset)
+
+    def _rd32(self, off):
+        return int.from_bytes(self._map[off:off + 4], "little")
+
+    def _wr32(self, off, val):
+        self._map[off:off + 4] = int(val & 0xFFFFFFFF).to_bytes(4, "little")
+
+    def write(self, data):
+        for b in data:
+            self._wr32(self.TXDATA, b)
+        return len(data)
+
+    def read(self, n):
+        out = bytearray()
+        deadline = time.time() + self.timeout
+        while len(out) < n:
+            if self._rd32(self.STATUS) & self.ST_RX_AVAIL:
+                out.append(self._rd32(self.RXDATA) & 0xFF)
+            elif time.time() > deadline:
+                break
+        return bytes(out)
+
+    def reset_input_buffer(self):
+        # drain any FPGA->host bytes still pending in the bridge
+        while self._rd32(self.STATUS) & self.ST_RX_AVAIL:
+            _ = self._rd32(self.RXDATA)
+
+    def close(self):
+        try:
+            self._map.close()
+        finally:
+            os.close(self._fd)
+
+
 class TPU:
     """One systolic-array TPU core, reachable over a UART link.
 
@@ -135,13 +215,18 @@ class TPU:
         self.rows = rows            # ARRAY_ROWS: K-tile depth
         self.cols = cols            # NUM_COLS:   N-tile width
         self.m_tile = rows if m_tile is None else m_tile  # M rows per RUN
-        if link not in ("uart", "spi"):
-            raise ValueError(f"link must be 'uart' or 'spi', got {link!r}")
+        if link not in ("uart", "spi", "hps"):
+            raise ValueError(f"link must be 'uart', 'spi', or 'hps', got {link!r}")
         self.link = link            # see the SPI_WIRE_HZ comment above
         self.result_bytes = 2 * self.m_tile * self.cols
         self.stream_tile_bytes = self.rows * self.cols + self.m_tile * self.rows
         self.max_stream_tiles = (255 - 2) // self.stream_tile_bytes
-        self.ser = serial.Serial(port, baud, timeout=timeout)
+        # hps: memory-mapped bridge on the DE1-SoC (runs on the board's ARM);
+        # uart/spi: a real serial device. MmioLink is a serial.Serial stand-in.
+        if link == "hps":
+            self.ser = MmioLink(port, timeout=timeout)
+        else:
+            self.ser = serial.Serial(port, baud, timeout=timeout)
         # cmd byte -> [call count, wire bytes tx (incl. CMD/LEN header), wire bytes rx]
         # Lets a caller measure exactly how many bytes crossed the wire per command
         # type, to separate UART transmission time from actual RTL execution time
@@ -233,7 +318,8 @@ class TPU:
 
     def _send_cmd(self, cmd, payload=b""):
         wire_tx = bytes([cmd, len(payload)]) + payload
-        if self.link == "spi" or len(wire_tx) <= BRIDGE_FIFO_BYTES:
+        if self.link in ("spi", "hps") or len(wire_tx) <= BRIDGE_FIFO_BYTES:
+            # spi/hps have no USB-CDC bridge FIFO to pace against; write directly.
             self.ser.write(wire_tx)
         else:
             # Paced write: never let more than one UART FIFO's worth be in
@@ -571,7 +657,8 @@ def main():
                     help="serial device for the board's 'iCE40 UART' USB-CDC port "
                          "(not 'RP2040 logs' -- the board exposes two ports with "
                          "identical descriptions on macOS/pyserial; if unsure, try "
-                         "the higher-numbered /dev/cu.usbmodemN one first)")
+                         "the higher-numbered /dev/cu.usbmodemN one first). "
+                         "For --link hps this is the mmap device, normally /dev/mem")
     p.add_argument("--baud", type=int, default=DEFAULT_BAUD,
                     help=f"must match CLK_FREQ/BAUD_RATE the bitstream was built with "
                          f"(default {DEFAULT_BAUD})")
@@ -581,10 +668,12 @@ def main():
                     help="NUM_COLS the bitstream was built with (default 2)")
     p.add_argument("--m-tile", type=int, default=None,
                     help="M_TILE the bitstream was built with (default: same as --rows)")
-    p.add_argument("--link", choices=("uart", "spi"), default="uart",
-                    help="host-link PHY the board is running: uart (default) or "
+    p.add_argument("--link", choices=("uart", "spi", "hps"), default="uart",
+                    help="host-link PHY the board is running: uart (default), "
                          "spi (USE_SPI=1 gateware + TPU_LINK_SPI firmware; "
-                         "disables UART-era write pacing)")
+                         "disables UART-era write pacing), or hps (DE1-SoC "
+                         "tpu_top_hps gateware, driven over /dev/mem from the "
+                         "board's ARM Linux -- run tpu_host.py on the board)")
     p.add_argument("--selftest", action="store_true",
                     help="run a known-good W/A/bias combo and check against the "
                          "expected result")
