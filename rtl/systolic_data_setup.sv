@@ -1,5 +1,17 @@
 `timescale 1ns / 1ps
 
+// systolic_data_setup — time-skews an activation row for the MMU's left edge.
+//
+// A weight-stationary systolic array needs the activation vector to enter
+// diagonally: element i of a given row must arrive i cycles later than element
+// 0, so that as it marches rightward it meets each column's weights on the
+// right cycle. This module applies exactly that stagger — row i is delayed by i
+// cycles through a length-i shift register (row 0 passes through combinationally,
+// row 1 through one flop, ...), with the valid strobe skewed alongside the data.
+//
+// Built with a generate block so the skew depth follows ARRAY_ROWS. Feeds
+// mmu.in_row / in_row_valid; driven from unified_buffer's read port. The
+// accumulator applies the mirror-image de-skew on the array's output side.
 module systolic_data_setup #(
     parameter int ARRAY_ROWS   = 2,
     parameter int DATA_WIDTH   = 8

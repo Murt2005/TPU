@@ -1,5 +1,26 @@
 `timescale 1ns/1ps
 
+// pe — one processing element of the weight-stationary systolic array.
+//
+// Holds a single stationary int8 weight and, each cycle, forms one MAC step of
+// a dot product: (weight * streaming activation) + incoming partial sum.
+//
+// Two phases, selected by loading_phase:
+//   loading_phase = 1  weight load: in_weight is registered downward one PE per
+//                      cycle (out_weight); when capture_weight is asserted the
+//                      PE latches in_weight into its stationary weight_reg. The
+//                      activation/psum datapath is held idle.
+//   loading_phase = 0  compute: in_activation shifts right to out_activation,
+//                      and out_partial_sum = weight_reg*in_activation +
+//                      in_partial_sum (passes psum through unchanged when the
+//                      activation isn't valid). Weight outputs held idle.
+//
+// Latency: one registered cycle on every output (activation right, weight down,
+// partial sum down). Synchronous active-high reset. Widths are fixed int8
+// data / int16 partial sum (the array-level modules parameterize these; the PE
+// is the hard-wired leaf). mmu.sv builds the ARRAY_ROWS x NUM_COLS grid from
+// these; the generic multiply on line ~55 is what yosys -dsp maps to an
+// SB_MAC16 (see pe_pair.sv for the two-PEs-per-DSP iCE40 variant).
 module pe (
     input  logic                clk,
     input  logic                reset,
