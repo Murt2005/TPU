@@ -140,7 +140,7 @@ module tpu_sequencer_4x4_tb;
     );
 
     // accumulator's ARRAY_ROWS parameter = output rows per pass = M_TILE
-    accumulator #(.NUM_COLS(NUM_COLS), .PSUM_WIDTH(16), .FIFO_DEPTH(FIFO_DEPTH), .ARRAY_ROWS(M_TILE)) u_accum (
+    accumulator #(.NUM_COLS(NUM_COLS), .PSUM_WIDTH(16), .FIFO_DEPTH(FIFO_DEPTH), .ROWS_PER_PASS(M_TILE)) u_accum (
         .clk(clk), .reset(dp_reset),
         .in_partial_sum(accum_in_data), .in_partial_sum_valid(accum_in_valid),
         .tile_first(seq_tile_first), .tile_last(seq_tile_last),

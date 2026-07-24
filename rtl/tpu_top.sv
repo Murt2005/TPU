@@ -290,10 +290,9 @@ module tpu_top #(
         .out_partial_sum_valid (accum_in_valid)
     );
 
-    // accumulator's ARRAY_ROWS parameter counts output rows per pass — that
-    // is M_TILE (one output row per streamed activation row), not the
-    // systolic row count.
-    accumulator #(.NUM_COLS(NUM_COLS), .PSUM_WIDTH(16), .FIFO_DEPTH(FIFO_DEPTH), .ARRAY_ROWS(M_TILE)) u_accum (
+    // accumulator's ROWS_PER_PASS counts output rows per pass — that is M_TILE
+    // (one output row per streamed activation row), not the systolic row count.
+    accumulator #(.NUM_COLS(NUM_COLS), .PSUM_WIDTH(16), .FIFO_DEPTH(FIFO_DEPTH), .ROWS_PER_PASS(M_TILE)) u_accum (
         .clk                  (clk),
         .reset                (dp_reset),
         .in_partial_sum       (accum_in_data),
