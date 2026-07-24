@@ -3,7 +3,7 @@
 Reimplementing the core datapath of Google's first-generation Tensor Processing Unit
 (as described in *In-Datacenter Performance Analysis of a Tensor Processing Unit*)
 as synthesizable SystemVerilog with a fully parameterized array shape: verified in
-simulation (19 testbenches), and validated end-to-end on real hardware on a
+simulation (22 testbenches), and validated end-to-end on real hardware on a
 [pico2-ice](https://pico2-ice.tinyvision.ai/) (iCE40UP5K) board over a UART or SPI
 host link — including hardware-side K-dim matmul tiling, a batched wire protocol,
 DSP-backed PEs, an RP2350-offloaded tiling loop, and a real-time MNIST digit
@@ -103,10 +103,18 @@ want to open waveforms via `make wave-<name>`:
 brew install icarus-verilog gtkwave     # macOS
 sudo apt install iverilog gtkwave       # Debian/Ubuntu
 ```
+`make lint` / `make verilate-test` additionally need **Verilator**, and the
+`pe_pair`/4x4 tests extract their `SB_MAC16` model from an installed **Yosys**
+(so yosys is required even for pure simulation of the DSP-pair path). The host
+driver needs **Python 3.11+** with `pip install -r requirements.txt`.
+
+Tested toolchain versions (other recent releases likely work; these are what
+CI-equivalent local runs use): Icarus Verilog 13.0, Verilator 5.032, Yosys
+0.63, Python 3.13.
 
 **To run everything:**
 ```bash
-make test            # build + run all 19 testbenches, print a pass/fail summary table
+make test            # build + run all 22 testbenches, print a pass/fail summary table
 # or, equivalently and usable outside make:
 ./run_tests.sh
 ./run_tests.sh fifo mmu     # ...or just a subset
@@ -255,7 +263,7 @@ hardware or, with `--offline`, in pure numpy with no board at all.
 
 ## 4. Current Status and Future Work
 
-- **Simulation** — full datapath implemented and passing all 19 SystemVerilog
+- **Simulation** — full datapath implemented and passing all 22 SystemVerilog
   testbenches (`make test`).
 - **pico2-ice hardware** — bring-up complete; `tests/hw_regression.py` (`make hw-test`)
   replays every simulation test vector plus int8/int16 boundary cases and a randomized
@@ -305,3 +313,15 @@ hardware or, with `--offline`, in pure numpy with no board at all.
   single image stops wasting the padded activation rows; and the wire-format ideas in
   `docs/SEQUENCER_REDESIGN.md` §6 (packed instruction headers, int4 payload packing —
   the latter gated on a software-only accuracy experiment).
+- **DE1-SoC (Cyclone V) target** — planned: a Quartus build driven from the
+  board's ARM HPS over the lightweight FPGA bridge, scaling the array well past
+  the UP5K's 8-DSP ceiling (the RTL top is already board-neutral; the SB_MAC16
+  DSP-pair path is iCE40-only and drops to generic multiply inference there).
+
+## 5. License
+
+Released under the [MIT License](LICENSE) — © 2026 Murat Acar. You are free to
+use, modify, and distribute this design; attribution is appreciated.
+
+Questions, issues, and contributions are welcome — see
+[CONTRIBUTING.md](CONTRIBUTING.md).
