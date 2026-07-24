@@ -1,0 +1,45 @@
+# Quartus settings skeleton for the DE1-SoC TPU build.
+#
+# SCAFFOLDING — this is NOT a complete project. The DE1-SoC HPS design is built
+# on top of Terasic's GHRD, whose .qsf already carries the ~200 HPS/DDR3 pin
+# assignments and the device/board settings. Merge the TPU-specific lines below
+# into that project's .qsf (or add them via Assignment Editor); do not use this
+# file standalone. See README.md in this directory.
+
+# --- Device (DE1-SoC) ---
+set_global_assignment -name FAMILY "Cyclone V"
+set_global_assignment -name DEVICE 5CSEMA5F31C6N
+
+# --- TPU RTL (board-neutral core + HPS top) ---
+# tpu_pkg must be read before the sequencer that imports it.
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/tpu_pkg.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/uart_rx.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/uart_tx.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/spi_slave.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/hps_bridge.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/tpu_sequencer.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/unified_buffer.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/weight_fifo.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/fifo.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/systolic_data_setup.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/mmu.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/pe.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/accumulator.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/bias.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/activation.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/tpu_core.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/tpu_top_hps.sv
+# NOTE: rtl/pe_pair.sv is intentionally omitted — it instantiates the iCE40
+# SB_MAC16 primitive and is only used when USE_MAC16_PAIR=1 (iCE40 builds).
+# Build tpu_top_hps with USE_MAC16_PAIR=0 on Cyclone V.
+
+set_global_assignment -name SDC_FILE tpu_top_hps.sdc
+
+# --- TPU-specific pin assignments (the rest come from the GHRD) ---
+# 50 MHz fabric clock and the KEY[0] reset. If tpu_top_hps is instantiated
+# inside the Qsys system (recommended), these connect through the system rather
+# than to top-level ports — assign at whatever level exposes them.
+set_location_assignment PIN_AF14 -to CLOCK_50
+set_location_assignment PIN_AA14 -to KEY[0]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to CLOCK_50
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to KEY[0]

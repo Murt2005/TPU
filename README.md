@@ -78,8 +78,8 @@ TPU/
 │   ├── *.vcd
 │   └── logs/
 ├── fpga/                          # per-board FPGA build targets (dispatcher Makefile)
-│   └── ice40/                     # pico2-ice (iCE40UP5K): yosys/nextpnr-ice40/icepack, see §3.1
-│                                  #   (fpga/de1soc/ — DE1-SoC/Cyclone V — planned)
+│   ├── ice40/                     # pico2-ice (iCE40UP5K): yosys/nextpnr-ice40/icepack, see §3.1
+│   └── de1soc/                    # DE1-SoC (Cyclone V): Quartus + HPS bridge (scaffolding, see its README)
 ├── firmware/                      # RP2350 firmware: USB-CDC <-> FPGA UART bridge
 │   └── pico-ice-sdk/              # vendored SDK, git submodule -- see docs/FPGA.md §6
 ├── mnist/
