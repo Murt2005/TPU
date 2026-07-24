@@ -56,9 +56,12 @@ module unified_buffer #(
     // ram_style: the buffer is far smaller than one 4Kbit block, so yosys's
     // efficiency heuristic would otherwise keep it in fabric FFs -- but the
     // LCs are the scarce resource here (4x4/M_TILE=4 is at the packing
-    // limit) and 29 of the 30 BRAMs are idle.
-    (* ram_style = "block" *) logic [WORD_W-1:0] mem0 [ROWS];
-    (* ram_style = "block" *) logic [WORD_W-1:0] mem1 [ROWS];
+    // limit) and 29 of the 30 BRAMs are idle. `ram_style` is the yosys/iCE40
+    // spelling; `ramstyle="M10K"` is the Quartus/Cyclone V spelling for the
+    // DE1-SoC build -- each toolchain honors the attribute it recognizes and
+    // ignores the other, so both force BRAM inference here.
+    (* ram_style = "block", ramstyle = "M10K" *) logic [WORD_W-1:0] mem0 [ROWS];
+    (* ram_style = "block", ramstyle = "M10K" *) logic [WORD_W-1:0] mem1 [ROWS];
 
     // bank_sel = index of the active bank (SDS reads from it; host writes before inference)
     // ~bank_sel = shadow bank (activation writes to it; host reads after inference)
