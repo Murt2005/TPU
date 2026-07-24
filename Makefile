@@ -260,8 +260,11 @@ lint: $(SB_MAC16_SIM)
 # ----------------------------------------------------------------------------
 # ROWS_COLS_MTILE_PHY; phy "spipair" = SPI PHY + USE_MAC16_PAIR mmu (the
 # 4x4 hardware build: 16 PEs on 8 hand-instantiated SB_MAC16s); 4_4_4 is
-# the shipped shape, 4_4_2 kept as the M_TILE-axis variant.
-VERILATE_SHAPES := 2_2_2_uart 2_4_2_uart 4_2_3_uart 2_4_2_spi 4_4_2_spipair 4_4_4_spipair
+# the shipped shape, 4_4_2 kept as the M_TILE-axis variant. 8_8_8_uart is the
+# DE1-SoC scale-up shape (64 PEs, generic-fabric multiply) — sim-only proof
+# that the datapath parameterizes past the iCE40's 8-DSP ceiling.
+VERILATE_SHAPES := 2_2_2_uart 2_4_2_uart 4_2_3_uart 2_4_2_spi 4_4_2_spipair 4_4_4_spipair \
+                   8_8_8_uart
 
 verilate-test: $(SB_MAC16_SIM) | $(SIM_DIR)
 	@set -e; for shape in $(VERILATE_SHAPES); do \
@@ -276,11 +279,13 @@ verilate-test: $(SB_MAC16_SIM) | $(SIM_DIR)
 		elif [ "$$phy" = "spipair" ]; then \
 			phyflags="-GUSE_SPI=1 -GUSE_MAC16_PAIR=1"; phycflags="-DTB_SPI"; \
 		fi; \
-		echo "=== verilate $${rows}x$${cols} M_TILE=$${mt} ($${phy}) ==="; \
+		fd=4; m=$$rows; [ $$mt -gt $$m ] && m=$$mt; \
+		while [ $$fd -lt $$m ]; do fd=$$((fd*2)); done; \
+		echo "=== verilate $${rows}x$${cols} M_TILE=$${mt} FIFO_DEPTH=$${fd} ($${phy}) ==="; \
 		$(VERILATOR) --cc --exe --build -j 0 -Wall \
 			--Mdir $$objdir verilator.vlt \
 			--top-module tpu_top \
-			-GCLK_FREQ=12000000 -GBAUD_RATE=1000000 \
+			-GCLK_FREQ=12000000 -GBAUD_RATE=1000000 -GFIFO_DEPTH=$$fd \
 			-GARRAY_ROWS=$$rows -GNUM_COLS=$$cols -GM_TILE=$$mt $$phyflags \
 			-CFLAGS "-std=c++17 -DTB_ROWS=$$rows -DTB_COLS=$$cols -DTB_MTILE=$$mt $$phycflags" \
 			$(SB_MAC16_SIM) $(RTL_DIR)/*.sv $(TEST_DIR)/verilator/tb_tpu_top.cpp \
