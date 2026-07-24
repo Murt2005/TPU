@@ -95,6 +95,7 @@ RTL := $(RTL_DIR)/tpu_pkg.sv \
        $(RTL_DIR)/accumulator.sv \
        $(RTL_DIR)/bias.sv \
        $(RTL_DIR)/activation.sv \
+       $(RTL_DIR)/tpu_core.sv \
        $(RTL_DIR)/tpu_top.sv
 
 .PHONY: all json asc bin stat util time prog clean

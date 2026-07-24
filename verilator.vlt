@@ -2,10 +2,10 @@
 // Lint waivers for `make lint` (verilator --lint-only). Each entry is an
 // audited don't-care, not a deferred fix -- add new ones sparingly and say why.
 
-// tpu_top deliberately leaves some submodule status outputs unconnected
-// (e.g. weight_fifo bank flags, sequencer busy) -- the empty named
-// connection is the documentation that this is intentional.
-lint_off -rule PINCONNECTEMPTY -file "*rtl/tpu_top.sv"
+// tpu_core deliberately leaves some submodule status outputs unconnected
+// (e.g. weight_fifo bank flags, sequencer busy, accumulator any_fifo_full) --
+// the empty named connection is the documentation that this is intentional.
+lint_off -rule PINCONNECTEMPTY -file "*rtl/tpu_core.sv"
 
 // tpu_top's host-PHY pins are config-dependent by design (USE_SPI selects
 // UART or SPI); the deselected PHY's input pins are intentionally unused.
@@ -44,3 +44,8 @@ lint_off -rule WIDTHEXPAND -file "*rtl/tpu_sequencer.sv"
 // status constants -- no ambiguous names -- and the sequencer is the sole
 // importer, so there is no actual pollution to worry about.
 lint_off -rule IMPORTSTAR -file "*rtl/tpu_sequencer.sv"
+
+// hps_bridge's Avalon registers are byte-wide within a 32-bit word, so the
+// upper 24 bits of avs_writedata (the TXDATA register) are intentionally
+// unused -- only writedata[7:0] carries a host->FPGA byte.
+lint_off -rule UNUSEDSIGNAL -file "*rtl/hps_bridge.sv" -match "*avs_writedata*"

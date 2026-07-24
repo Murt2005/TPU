@@ -63,6 +63,7 @@ RTL_unified_buffer       := $(RTL_DIR)/unified_buffer.sv
 RTL_uart_rx              := $(RTL_DIR)/uart_rx.sv
 RTL_uart_tx              := $(RTL_DIR)/uart_tx.sv
 RTL_spi_slave            := $(RTL_DIR)/spi_slave.sv $(RTL_fifo)
+RTL_hps_bridge           := $(RTL_DIR)/hps_bridge.sv
 # tpu_pkg.sv (shared opcode/status/width constants) must precede any file that
 # imports it, so it leads every dep list that pulls in tpu_sequencer.
 RTL_pkg                  := $(RTL_DIR)/tpu_pkg.sv
@@ -97,6 +98,7 @@ DEPS_tpu_core             := $(RTL_tpu_datapath)
 DEPS_uart_rx              := $(RTL_uart_rx)
 DEPS_uart_tx              := $(RTL_uart_tx)
 DEPS_spi_slave            := $(RTL_spi_slave)
+DEPS_hps_bridge           := $(RTL_hps_bridge)
 DEPS_tpu_sequencer        := $(RTL_tpu_sequencer) $(RTL_tpu_datapath)
 DEPS_tpu_sequencer_4x2    := $(RTL_tpu_sequencer) $(RTL_tpu_datapath)
 DEPS_tpu_sequencer_2x4    := $(RTL_tpu_sequencer) $(RTL_tpu_datapath)
@@ -106,7 +108,7 @@ DEPS_tpu_sequencer_4x4    := $(RTL_tpu_sequencer) $(RTL_tpu_datapath) $(RTL_pe_p
 TESTS := fifo pe pe_pair mmu accumulator systolic_data_setup weight_fifo bias activation \
          unified_buffer \
          mmu_accum accum_bias bias_activation weight_fifo_mmu tpu_core \
-         uart_rx uart_tx spi_slave tpu_sequencer tpu_sequencer_4x2 tpu_sequencer_2x4 \
+         uart_rx uart_tx spi_slave hps_bridge tpu_sequencer tpu_sequencer_4x2 tpu_sequencer_2x4 \
          tpu_sequencer_4x4
 
 # de-duplicate dep lists (modules shared via multiple paths, e.g. tpu_core -> fifo.sv)
@@ -140,6 +142,7 @@ build-tpu_core:             $(SIM_DIR)/tpu_core.vvp
 build-uart_rx:              $(SIM_DIR)/uart_rx.vvp
 build-uart_tx:              $(SIM_DIR)/uart_tx.vvp
 build-spi_slave:            $(SIM_DIR)/spi_slave.vvp
+build-hps_bridge:           $(SIM_DIR)/hps_bridge.vvp
 build-tpu_sequencer:        $(SIM_DIR)/tpu_sequencer.vvp
 build-tpu_sequencer_4x2:    $(SIM_DIR)/tpu_sequencer_4x2.vvp
 build-tpu_sequencer_2x4:    $(SIM_DIR)/tpu_sequencer_2x4.vvp
@@ -199,6 +202,9 @@ $(SIM_DIR)/uart_tx.vvp: $(TEST_DIR)/uart_tx_tb.sv $(call dedup,$(DEPS_uart_tx)) 
 $(SIM_DIR)/spi_slave.vvp: $(TEST_DIR)/spi_slave_tb.sv $(call dedup,$(DEPS_spi_slave)) | $(SIM_DIR)
 	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_spi_slave)) $<
 
+$(SIM_DIR)/hps_bridge.vvp: $(TEST_DIR)/hps_bridge_tb.sv $(call dedup,$(DEPS_hps_bridge)) | $(SIM_DIR)
+	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_hps_bridge)) $<
+
 $(SIM_DIR)/tpu_sequencer.vvp: $(TEST_DIR)/tpu_sequencer_tb.sv $(call dedup,$(DEPS_tpu_sequencer)) | $(SIM_DIR)
 	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_tpu_sequencer)) $<
 
@@ -241,7 +247,9 @@ lint: $(SB_MAC16_SIM)
 	$(VERILATOR) --lint-only -Wall --timing -sv verilator.vlt \
 		-GUSE_SPI=1 -GUSE_MAC16_PAIR=1 -GARRAY_ROWS=4 -GNUM_COLS=4 -GM_TILE=4 \
 		$(SB_MAC16_SIM) $(RTL_DIR)/*.sv --top-module tpu_top
-	@echo "lint: clean (UART + SPI + 4x4 MAC16-pair configs)"
+	$(VERILATOR) --lint-only -Wall --timing -sv verilator.vlt \
+		$(SB_MAC16_SIM) $(RTL_DIR)/*.sv --top-module tpu_top_hps
+	@echo "lint: clean (UART + SPI + 4x4 MAC16-pair + HPS configs)"
 
 # ----------------------------------------------------------------------------
 # Verilator C++ full-chip testbench (tests/verilator/tb_tpu_top.cpp): drives
