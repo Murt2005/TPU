@@ -303,10 +303,27 @@ hardware or, with `--offline`, in pure numpy with no board at all.
   single image stops wasting the padded activation rows; and wire-format ideas
   like packed instruction headers and int4 payload packing (the latter gated on
   a software-only accuracy experiment).
-- **DE1-SoC (Cyclone V) target** — planned: a Quartus build driven from the
-  board's ARM HPS over the lightweight FPGA bridge, scaling the array well past
-  the UP5K's 8-DSP ceiling (the RTL top is already board-neutral; the SB_MAC16
-  DSP-pair path is iCE40-only and drops to generic multiply inference there).
+- **DE1-SoC (Cyclone V) target** — in progress. The board-neutral `tpu_core`,
+  the HPS Avalon-MM bridge (`rtl/hps_bridge.sv` + `rtl/tpu_top_hps.sv`), and the
+  memory-mapped host transport (`tpu_host.py --link hps`, driven over `/dev/mem`
+  from the board's ARM Linux) are implemented and simulation-tested — including
+  an 8×8 shape (64 PEs on generic-fabric multiply, well past the UP5K's 8-DSP
+  ceiling; the iCE40-only `SB_MAC16` DSP-pair path drops to inferred DSPs on
+  Cyclone V). The `fpga/de1soc/` Quartus build is scaffolded. Remaining steps:
+  - **Cloud Quartus build.** Quartus has no macOS build, so the `.rbf` is
+    produced on x86-64 Linux in AWS: an AWS CDK stack (S3 artifact bucket + an
+    SSM-managed IAM instance profile, no SSH) plus an *ephemeral,
+    self-terminating* EC2 build instance launched from a pre-baked Quartus AMI —
+    spin up, `quartus_sh` compile, push the `.rbf` to S3, tear down (Spot to cut
+    cost). The one-time Qsys/GHRD integration is baked into the AMI so per-build
+    instances stay fully headless. See `fpga/de1soc/README.md` for the build and
+    HPS-deploy runbook.
+  - **On-board bring-up.** `scp` the `.rbf` to the board, let the ARM HPS
+    configure the FPGA, then run `tests/hw_regression.py --link hps
+    --port /dev/mem` *on the board* to validate the bridge end-to-end against
+    the same vectors the sim and pico2-ice targets use.
+  - **Scale up.** Once the flow is up, raise `ARRAY_ROWS`/`NUM_COLS` to the
+    largest shape that closes timing at 50 MHz on the Cyclone V.
 
 ## 5. License
 
