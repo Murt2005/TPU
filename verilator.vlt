@@ -36,3 +36,11 @@ lint_off -file "*/sb_mac16_sim.v"
 // be re-derived at every array shape for zero behavioral difference.
 lint_off -rule WIDTHTRUNC  -file "*rtl/tpu_sequencer.sv"
 lint_off -rule WIDTHEXPAND -file "*rtl/tpu_sequencer.sv"
+
+// tpu_sequencer imports tpu_pkg::* at $unit scope. Verilator warns this "may
+// pollute the global namespace", but the $unit-scope form is the only package
+// import yosys's frontend accepts (module-header and body forms are rejected),
+// so it is deliberate and portable. tpu_pkg holds only wire-protocol opcode /
+// status constants -- no ambiguous names -- and the sequencer is the sole
+// importer, so there is no actual pollution to worry about.
+lint_off -rule IMPORTSTAR -file "*rtl/tpu_sequencer.sv"

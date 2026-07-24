@@ -1,5 +1,12 @@
 `timescale 1ns / 1ps
 
+// Compilation-unit-scope import of the shared wire-protocol constants. Placed
+// here (before the module, not in the module header or body) because that is
+// the one form yosys's Verilog frontend accepts; iverilog and Verilator accept
+// it too. tpu_pkg.sv must be read before this file (the build dep lists ensure
+// that). See rtl/tpu_pkg.sv.
+import tpu_pkg::*;
+
 // tpu_sequencer — UART command decoder + TPU pipeline orchestrator.
 //
 // Sits between the uart_rx/uart_tx pair and the existing tpu_core datapath.
@@ -209,9 +216,9 @@ module tpu_sequencer #(
 );
 
     // Command opcodes (CMD_*), the NOP filler byte, and STATUS_OK/STATUS_ERR
-    // are the host<->FPGA wire-protocol contract; they live in tpu_pkg so the
-    // one table is shared (and mirrored by tpu_host.py). See rtl/tpu_pkg.sv.
-    import tpu_pkg::*;
+    // are the host<->FPGA wire-protocol contract; they come from tpu_pkg
+    // (imported at file scope above) so the one table is shared, and mirrored
+    // by tpu_host.py. See rtl/tpu_pkg.sv.
 
     localparam int TIMEOUT_W = $clog2(WAIT_TIMEOUT + 1);
 
