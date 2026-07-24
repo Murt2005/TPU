@@ -77,7 +77,9 @@ TPU/
 │   ├── *.vvp
 │   ├── *.vcd
 │   └── logs/
-├── fpga/                          # iCE40 build target (yosys/nextpnr-ice40/icepack), see §3.1
+├── fpga/                          # per-board FPGA build targets (dispatcher Makefile)
+│   └── ice40/                     # pico2-ice (iCE40UP5K): yosys/nextpnr-ice40/icepack, see §3.1
+│                                  #   (fpga/de1soc/ — DE1-SoC/Cyclone V — planned)
 ├── firmware/                      # RP2350 firmware: USB-CDC <-> FPGA UART bridge
 │   └── pico-ice-sdk/              # vendored SDK, git submodule -- see docs/FPGA.md §6
 ├── mnist/
@@ -161,7 +163,7 @@ sequencer/UART FSM design and cycle-by-cycle timing are in
 history is in `docs/SEQUENCER_REDESIGN.md`.
 
 ```bash
-cd fpga && make && make prog             # build + flash the gateware (2x2, 1 Mbaud defaults)
+cd fpga/ice40 && make && make prog       # build + flash the gateware (2x2, 1 Mbaud defaults)
 python3 tpu_host.py --port /dev/cu.usbmodemXXXX --selftest
                                          # add --rows/--cols/--m-tile for a non-2x2 bitstream,
                                          # --baud for a non-1M one (see tpu_host.py --help)
@@ -169,8 +171,9 @@ make hw-test PORT=/dev/cu.usbmodemXXXX   # broader regression suite (see tests/h
                                          # same shape rule: ARRAY_ROWS=/NUM_COLS=/M_TILE=
 ```
 
-**`fpga/` make targets** (run from `fpga/`; the yosys → nextpnr-ice40 →
-icepack flow, staged so each intermediate can be inspected):
+**iCE40 make targets** (run from `fpga/ice40/`, or via the dispatcher as
+`make -C fpga ice40 TARGET=<target>`; the yosys → nextpnr-ice40 → icepack flow,
+staged so each intermediate can be inspected):
 ```bash
 make            # full build to tpu_top.bin (equivalent to make bin)
 make json       # synthesize only, up to tpu_top.json (yosys, with -dsp)
@@ -271,7 +274,7 @@ hardware or, with `--offline`, in pure numpy with no board at all.
   (validated at 2×2 and 2×4).
 - **Parameterized array shape** — every module including the sequencer takes
   `ARRAY_ROWS`/`NUM_COLS`/`M_TILE`; the shape is a build knob (§3.1) threaded from
-  `fpga/Makefile` through `tpu_host.py`. 2×4 (8 PEs, all DSP-backed, 67% of the UP5K's
+  `fpga/ice40/Makefile` through `tpu_host.py`. 2×4 (8 PEs, all DSP-backed, 67% of the UP5K's
   LUTs) is the largest shape that fits — 4×4 needs 16 multipliers against the chip's
   8 `SB_MAC16` blocks. See `docs/PERFORMANCE_ANALYSIS.md` §3.
 - **K-dim tiling** — `accumulator.sv` holds a persistent per-row PSUM register that
