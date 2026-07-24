@@ -34,6 +34,5 @@ lib/
 pyvenv.cfg
 __pycache__/
 
-# Kept locally only, untracked from the repo
-docs/FPGA.md
-docs/sequencer_uart_design.md
+# docs/ is maintained locally only and intentionally not published to GitHub
+docs/
