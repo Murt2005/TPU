@@ -8,9 +8,266 @@ simulation (22 testbenches), and validated end-to-end on real hardware on a
 host link — including hardware-side K-dim matmul tiling, a batched wire protocol,
 DSP-backed PEs, an RP2350-offloaded tiling loop, and a real-time MNIST digit
 classification demo at ~64 ms/image on-silicon (125x down from the first working
-bring-up) — see §3.2 and §4.
+bring-up).
 
-## 1. TPU Design
+**Where to start:**
+
+| You have… | Go to |
+|---|---|
+| A pico2-ice board and want to run this on it | [§1 Quick start](#1-quick-start-on-a-pico2-ice) |
+| No board (yet) — just want to see it work | [§2 Without a board](#2-without-a-board-simulation--offline-mnist) |
+| Curiosity about how a TPU actually works | [§3 How the design works](#3-how-the-design-works) |
+| A different FPGA, or want to change the array shape | [§5 FPGA build reference](#5-fpga-build-reference) |
+
+---
+
+## 1. Quick start on a pico2-ice
+
+By the end of this section you'll have a systolic array running on real silicon,
+classifying hand-drawn MNIST digits. Budget ~30 minutes the first time, most of
+it toolchain installation.
+
+### 1.1 The one thing to understand first
+
+pico2-ice is **two chips**, and the FPGA is a peripheral of the microcontroller:
+
+```
+   Your PC  ──USB──►  RP2350 (MCU)  ──►  iCE40UP5K (FPGA)
+                        │  exports the FPGA's CLOCK (it has no crystal)
+                        │  pushes the FPGA's BITSTREAM (USB-DFU)
+                        │  bridges your bytes to the FPGA's UART pins
+                        └  drives the onboard LED
+```
+
+Three consequences that will save you an evening of debugging:
+
+- **You flash two separate things**: firmware onto the RP2350 (§1.4, once), and
+  gateware onto the iCE40 (§1.5, every time you change the RTL). **Firmware
+  first** — the DFU interface that accepts the bitstream lives *in* the firmware.
+- **The FPGA's clock frequency is chosen by the firmware**, and the UART's baud
+  divider is baked into the bitstream at synthesis time against that same number.
+  If you change one, change both. The defaults here already agree (12 MHz / 1 Mbaud).
+- **The board exposes two identical-looking USB serial ports.** One talks to the
+  FPGA, one doesn't. You'll pick the right one by trial in §1.6.
+
+### 1.2 Get the code
+
+The RP2350 SDK is a git submodule, so clone recursively:
+
+```bash
+git clone --recurse-submodules https://github.com/Murt2005/TPU.git
+cd TPU
+```
+
+Already cloned without it? `git submodule update --init --recursive`
+
+### 1.3 Install the toolchain
+
+**macOS (Homebrew):**
+```bash
+brew install yosys nextpnr-ice40 icestorm dfu-util   # FPGA build + flash
+brew install icarus-verilog verilator gtkwave         # simulation (optional but recommended)
+brew install cmake ninja                             # firmware build
+brew tap riscv-software-src/riscv && brew install riscv-gnu-toolchain   # RP2350 compiler
+```
+
+**Debian/Ubuntu:**
+```bash
+sudo apt install yosys nextpnr-ice40 fpga-icestorm dfu-util cmake ninja-build
+sudo apt install iverilog verilator gtkwave             # simulation (optional but recommended)
+sudo apt install gcc-arm-none-eabi     # RP2350 compiler (ARM path, see §1.4)
+```
+If your distro's yosys/nextpnr packages are old, the prebuilt
+[oss-cad-suite](https://github.com/YosysHQ/oss-cad-suite-build/releases) bundle is
+the easiest fix — it ships all of the above in one tarball.
+
+**Python host driver** (needs Python 3.11+):
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt          # pyserial, numpy
+```
+> ⚠️ Create the venv in `.venv/`, **not** the repo root. `venv` writes a
+> `.gitignore` containing `*` into its target directory, which would silently hide
+> the entire repo from git.
+
+Tested versions (other recent releases are likely fine): Yosys 0.63, Verilator
+5.032, Icarus Verilog 13.0, Python 3.13.
+
+### 1.4 Build and flash the RP2350 firmware (once)
+
+This is the USB↔UART bridge. You only ever redo this if you change something in
+`firmware/` — pure RTL changes need only a gateware reflash.
+
+```bash
+cd firmware && mkdir -p build && cd build
+cmake -DPICO_BOARD=pico2_ice -DPICO_PLATFORM=rp2350-riscv \
+      -DPICO_GCC_TRIPLE=riscv64-unknown-elf -G Ninja ..
+ninja                                    # -> pico2_ice_bridge.uf2
+```
+Prefer ARM? `-DPICO_PLATFORM=rp2350-arm-s` and drop `-DPICO_GCC_TRIPLE`, with
+`arm-none-eabi-gcc` on `PATH`. The first configure builds `picotool` from source,
+so it takes noticeably longer than later ones.
+
+Then flash it:
+
+1. Hold the **BOOTSEL** button while plugging in USB. The board mounts as a drive.
+2. Copy `pico2_ice_bridge.uf2` onto that drive. The board reboots on its own.
+3. **Check the LED**: red is expected right now — no gateware is loaded yet.
+
+> After this first flash you never need BOOTSEL again: opening the TPU serial port
+> at 1200 baud reboots the board into the UF2 bootloader.
+
+### 1.5 Build and flash the gateware
+
+```bash
+cd fpga/ice40
+make            # yosys -> nextpnr-ice40 -> icepack, produces tpu_top.bin
+make prog       # flash it over USB-DFU (board in normal run mode, no button needed)
+```
+
+Two things to expect here:
+
+- `dfu-util` prints **"Device's firmware is corrupt"** on every single flash. It is
+  a known false alarm from an SDK bug (it reports a return value that's always
+  falsy instead of polling the FPGA's `CDONE` pin). Ignore it.
+- **Replug the board** afterwards, so the firmware's boot-time `CDONE` check re-runs
+  against the new bitstream. The LED should now be **green** = FPGA configured and
+  running. Red means it isn't — see §1.8.
+
+This builds the default 2×2 array at 12 MHz / 1 Mbaud. Other shapes and the SPI
+link are build knobs — see §5.1.
+
+### 1.6 Find the board's serial port
+
+```bash
+python3 -c "import serial.tools.list_ports as p; [print(x) for x in p.comports()]"
+```
+
+You'll see two ports. On macOS both report the same product string (`pico-ice`), so
+there's no reliable way to tell them apart programmatically:
+
+- **`--port`** → the one bridged to the FPGA (`"iCE40 UART"`). On macOS, try the
+  **higher-numbered** `/dev/cu.usbmodemN` first.
+- **`--led-port`** → the other one (`"RP2040 logs"`), used only for the demo's LED
+  feedback in §1.7. Entirely optional.
+
+On Linux they're usually `/dev/ttyACM0` and `/dev/ttyACM1`.
+
+Picked the wrong one? The host driver probes on connect and fails with an explicit
+error rather than hanging — just try the other port.
+
+### 1.7 Talk to it
+
+Work up this ladder; each rung tells you something different if it fails.
+
+```bash
+# 1. One known-golden matmul vector, straight from the simulation test suite.
+python3 tpu_host.py --port /dev/cu.usbmodemXXXX --selftest
+
+# 2. The full hardware regression: every sim vector, int8/int16 boundary cases,
+#    and a randomized multi-tile stress run, all against real silicon.
+make hw-test PORT=/dev/cu.usbmodemXXXX
+
+# 3. Real MNIST digits classified end-to-end on the array.
+python3 mnist/infer.py --port /dev/cu.usbmodemXXXX --test-n 20
+
+# 4. The fun one: draw a digit with your mouse, watch the board's LED flip
+#    green -> blue as the on-chip inference completes.
+python3 mnist/draw_demo.py --port /dev/cu.usbmodemXXXX --led-port /dev/cu.usbmodemYYYY
+```
+
+Step 3 runs a trained, quantized 144→64→10 MLP tile-by-tile through the physical
+array — ~316 ms/image on this default 2×2 UART build (see §5.2 for the faster
+configurations and §6 for where the time goes). The model is committed, so there's
+nothing to train.
+
+Step 4 needs `tkinter`; on Homebrew Python, `brew install python-tk` if
+`import tkinter` fails. `--led-port` is optional.
+
+> **Built a non-default array shape?** Every host-side tool takes matching
+> `--rows` / `--cols` / `--m-tile` flags, and `make hw-test` takes
+> `ARRAY_ROWS=` / `NUM_COLS=` / `M_TILE=`. They must agree with what the bitstream
+> was built with, or the driver will refuse to run. `tpu_host.py --help` lists them all.
+
+### 1.8 Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| LED red after flashing gateware | FPGA didn't configure | Replug the board so the boot-time `CDONE` check re-runs; confirm `make prog` actually completed |
+| `dfu-util`: *"Device's firmware is corrupt"* | Known SDK false alarm, printed on **every** flash | Ignore it; trust the LED |
+| Nothing responds on either port | Firmware not flashed, or FPGA not configured | `dfu-util -l` should list two DFU alt interfaces; check LED is green |
+| Board responds, but data is **garbled** (not absent) | `CLK_FREQ` in `fpga/ice40/Makefile` ≠ `ice_fpga_init()` in `firmware/main.c` — the baud divider is baked in at synthesis | Change both together, reflash both images |
+| Selftest fails with a shape mismatch error | Host flags don't match the flashed bitstream | Pass `--rows/--cols/--m-tile` matching your build knobs |
+| Both serial ports look identical | macOS shows the USB product string, not per-interface descriptions | Trial and error; higher-numbered port first |
+| `make time`: *"Can't find chipdb file"* | Some Homebrew icestorm installs can't resolve `-d up5k` | `make time ICETIME_CHIPDB=$(brew --prefix icestorm)/share/icestorm/chipdb/chipdb-5k.txt` |
+| Long commands lose their tail; short ones are fine | You're on stock SDK bridge code | This repo's `firmware/main.c` already fixes it (blocking CDC→UART write) — make sure you flashed *this* firmware |
+
+Still stuck? Open an issue — please include your LED state, the output of
+`dfu-util -l`, and the exact `make`/`tpu_host.py` commands you ran.
+
+---
+
+## 2. Without a board: simulation & offline MNIST
+
+Everything except the physical array runs on your laptop.
+
+**Run the full test suite** (needs only Icarus Verilog):
+```bash
+make test                    # build + run all 22 testbenches, pass/fail summary table
+./run_tests.sh fifo mmu      # ...or just a subset, without make
+```
+
+**Classify real MNIST digits in pure numpy**, with the exact same fixed-point math
+the hardware does — no board, no FPGA toolchain:
+```bash
+python3 mnist/infer.py --offline --test-n 200
+python3 mnist/draw_demo.py --offline          # the drawing demo works offline too
+```
+
+**Simulate the whole chip through its real UART pins**, at the hardware's actual
+12 MHz / 1 Mbaud ratio (needs Verilator):
+```bash
+make verilate-test
+```
+
+Have hardware later? The same test vectors run against silicon via `make hw-test`,
+so a passing sim is a genuine predictor.
+
+### 2.1 Simulation workflow reference
+
+**Prerequisites** — Icarus Verilog (`iverilog`/`vvp`), plus `gtkwave` for
+waveforms. `make lint` / `make verilate-test` additionally need **Verilator**, and
+the `pe_pair`/4x4 tests extract their `SB_MAC16` model from an installed **Yosys**
+(so yosys is required even for pure simulation of the DSP-pair path).
+
+**Per-testbench commands** — every testbench gets a matching `build-`, `test-`, and
+`wave-` target. RTL dependencies are resolved automatically.
+```bash
+make build-<name>    # compile one testbench to sim/<name>.vvp (e.g. make build-mmu)
+make test-<name>     # build (if stale) + run it, log to sim/logs/, dump VCD to sim/
+make wave-<name>     # run it, then open its VCD in gtkwave
+```
+
+**Other targets:**
+```bash
+make lint      # verilator --lint-only -Wall over all of rtl/ (audited waivers
+               #   live in verilator.vlt, each with a comment saying why)
+make verilate-test
+               # Verilator C++ full-chip testbench (tests/verilator/): drives
+               #   tpu_top through its real UART pins at the hardware's
+               #   12 MHz / 1 Mbaud ratio, at three array shapes (2x2, 2x4,
+               #   and 4x2/M_TILE=3), replaying the hw_regression.py vector
+               #   set plus a UART framing-error injection only sim can do
+make list      # print every registered test name and its available targets
+make clean     # remove sim/ (compiled binaries, logs, waveform dumps)
+make hw-test PORT=/dev/cu.usbmodemXXXX [ARRAY_ROWS=2] [NUM_COLS=2] [M_TILE=2] [LINK=uart]
+               # real-hardware regression (§1.7); PORT is required, and the shape
+               # flags must match the flashed bitstream's build knobs
+```
+
+---
+
+## 3. How the design works
 
 The TPUv1 is designed around the idea of keeping weights stationary inside the
 MMU and streaming activations through it, so weights
@@ -19,7 +276,7 @@ Here are the major blocks, and how data moves between them:
 
 - **Host I/O** — in the original TPUv1, a PCIe link to the host and DDR3 channels. In
   this implementation, a UART over two GPIO pins (1 Mbaud by default — a synthesis-time
-  knob, see §3.1) replaces the PCIe/DDR path. `tpu_host.py` is the Python driver that
+  knob, see §5.1) replaces the PCIe/DDR path. `tpu_host.py` is the Python driver that
   sends weights/activations from the PC and reads back results.
 - **Weight FIFO (weight fetcher)** — in the original TPUv1, pulls weight tiles from DRAM.
   Here, weights are streamed over UART and pushed directly into the shadow bank of the
@@ -43,16 +300,17 @@ Here are the major blocks, and how data moves between them:
   when to stream activations, which tile is active) instead of a testbench wiggling
   signals by hand.
 
-## 2. TPU
+---
 
-### Repo layout
+## 4. Repo layout
+
 ```
 TPU/
 ├── README.md
 ├── Makefile                    # RTL sim automation (make test, make hw-test, ...)
 ├── run_tests.sh
 ├── requirements.txt             # tpu_host.py deps: pyserial, numpy
-├── tpu_host.py                  # host-side UART driver + CLI
+├── tpu_host.py                  # host-side driver + CLI (UART / SPI / HPS links)
 ├── rtl/                         # synthesizable SystemVerilog datapath + control plane
 │   ├── pe.sv
 │   ├── mmu.sv
@@ -65,100 +323,41 @@ TPU/
 │   ├── unified_buffer.sv
 │   ├── uart_rx.sv
 │   ├── uart_tx.sv
-│   ├── tpu_sequencer.sv         # UART command protocol + pipeline orchestration
-│   └── tpu_top.sv               # top-level: wires the datapath + sequencer together
+│   ├── spi_slave.sv             # optional faster host PHY (see §5.1)
+│   ├── tpu_sequencer.sv         # wire command protocol + pipeline orchestration
+│   ├── tpu_core.sv              # board-neutral datapath + sequencer
+│   └── tpu_top.sv               # pico2-ice top level: PHY + power-on reset + pins
 ├── verilator.vlt                # audited lint waivers for `make lint`
 ├── tests/                       # SystemVerilog testbenches (simulation)
 │   ├── *_tb.sv                  # unit + integration tbs, incl. tpu_sequencer_{4x2,2x4}_tb.sv
 │   │                            #   proving the parameterized sequencer at non-2x2 shapes
 │   ├── verilator/               # C++ full-chip testbench (`make verilate-test`)
-│   └── hw_regression.py         # real-hardware regression suite (see §3.1)
+│   └── hw_regression.py         # real-hardware regression suite (§1.7)
 ├── sim/                         # simulation build output (gitignored)
-│   ├── *.vvp
-│   ├── *.vcd
-│   └── logs/
 ├── fpga/                          # per-board FPGA build targets (dispatcher Makefile)
-│   ├── ice40/                     # pico2-ice (iCE40UP5K): yosys/nextpnr-ice40/icepack, see §3.1
-│   └── de1soc/                    # DE1-SoC (Cyclone V): Quartus + HPS bridge (scaffolding, see its README)
-├── firmware/                      # RP2350 firmware: USB-CDC <-> FPGA UART bridge
+│   ├── ice40/                     # pico2-ice (iCE40UP5K): yosys/nextpnr-ice40/icepack, §5.1
+│   └── de1soc/                    # DE1-SoC (Cyclone V): Quartus + HPS bridge (scaffolding)
+├── firmware/                      # RP2350 firmware: USB-CDC <-> FPGA UART bridge (§1.4)
 │   └── pico-ice-sdk/              # vendored SDK, git submodule
 └── mnist/
-    ├── train_mnist.py            # trains + quantizes the 144->64->10 MLP
-    ├── infer.py                  # multi-layer tiled inference driver (hardware + offline backends)
-    ├── draw_demo.py              # interactive drawing demo, LED feedback
-    ├── model/mnist_2x2_int8.npz  # quantized weights (committed, ~5KB)
-    └── data/                     # downloaded MNIST idx files, gitignored
+    ├── train_mnist.py           # trains + quantizes the 144->64->10 MLP
+    ├── infer.py                 # multi-layer tiled inference driver (hardware + offline)
+    ├── draw_demo.py             # interactive drawing demo, LED feedback
+    ├── model/mnist_2x2_int8.npz # quantized weights (committed, ~5KB)
+    └── data/                    # downloaded MNIST idx files, gitignored
 ```
 
-### 2.1 Simulation workflow
+---
 
-**Prerequisites** — Icarus Verilog (`iverilog`/`vvp`), and `gtkwave` if you
-want to open waveforms via `make wave-<name>`:
-```bash
-brew install icarus-verilog gtkwave     # macOS
-sudo apt install iverilog gtkwave       # Debian/Ubuntu
-```
-`make lint` / `make verilate-test` additionally need **Verilator**, and the
-`pe_pair`/4x4 tests extract their `SB_MAC16` model from an installed **Yosys**
-(so yosys is required even for pure simulation of the DSP-pair path). The host
-driver needs **Python 3.11+** with `pip install -r requirements.txt`.
+## 5. FPGA build reference
 
-Tested toolchain versions (other recent releases likely work; these are what
-CI-equivalent local runs use): Icarus Verilog 13.0, Verilator 5.032, Yosys
-0.63, Python 3.13.
-
-**To run everything:**
-```bash
-make test            # build + run all 22 testbenches, print a pass/fail summary table
-# or, equivalently and usable outside make:
-./run_tests.sh
-./run_tests.sh fifo mmu     # ...or just a subset
-```
-
-**Per-testbench commands** — every testbench gets a matching `build-`,
-`test-`, and `wave-` target. RTL dependencies are resolved automatically.
-```bash
-make build-<name>    # compile one testbench to sim/<name>.vvp (e.g. make build-mmu)
-make test-<name>     # build (if stale) + run it, log to sim/logs/, dump VCD to sim/
-make wave-<name>     # run it, then open its VCD in gtkwave
-```
-
-**Other targets:**
-```bash
-make lint      # verilator --lint-only -Wall over all of rtl/ (audited waivers
-               #   live in verilator.vlt, each with a comment saying why)
-make verilate-test
-               # Verilator C++ full-chip testbench (tests/verilator/): drives
-               #   tpu_top through its real UART pins at the hardware's
-               #   12 MHz / 1 Mbaud ratio, at three array shapes (2x2, 2x4,
-               #   and 4x2/M_TILE=3), replaying the hw_regression.py vector
-               #   set plus a UART framing-error injection only sim can do
-make list      # print every registered test name and its available targets
-make clean     # remove sim/ (compiled binaries, logs, waveform dumps)
-make hw-test PORT=/dev/cu.usbmodemXXXX [ARRAY_ROWS=2] [NUM_COLS=2] [M_TILE=2]
-               # real-hardware regression (see §3.1); PORT is required, and the
-               # three shape flags must match the flashed bitstream's build knobs
-               # (defaults match the default 2x2 build)
-```
-
-## 3. FPGA Targets
-
-### 3.1 pico2-ice (iCE40UP5K) — bring-up complete, hardware-validated
+### 5.1 pico2-ice (iCE40UP5K) — bring-up complete, hardware-validated
 
 A parameterized `ARRAY_ROWS × NUM_COLS` systolic array (default 2×2;
 hardware-validated at 2×2 and 2×4, the latter with all 8 of the UP5K's `SB_MAC16`
 DSP blocks backing the PEs) runs the full datapath (UART RX → sequencer →
 weight FIFO → unified buffer → systolic data setup → MMU → accumulator → bias →
 ReLU → UART TX) on real silicon.
-
-```bash
-cd fpga/ice40 && make && make prog       # build + flash the gateware (2x2, 1 Mbaud defaults)
-python3 tpu_host.py --port /dev/cu.usbmodemXXXX --selftest
-                                         # add --rows/--cols/--m-tile for a non-2x2 bitstream,
-                                         # --baud for a non-1M one (see tpu_host.py --help)
-make hw-test PORT=/dev/cu.usbmodemXXXX   # broader regression suite (see tests/hw_regression.py);
-                                         # same shape rule: ARRAY_ROWS=/NUM_COLS=/M_TILE=
-```
 
 **iCE40 make targets** (run from `fpga/ice40/`, or via the dispatcher as
 `make -C fpga ice40 TARGET=<target>`; the yosys → nextpnr-ice40 → icepack flow,
@@ -175,7 +374,8 @@ make prog       # flash tpu_top.bin over USB DFU (board in normal run mode; igno
                 #   dfu-util's "firmware corrupt" message -- known false alarm)
 make clean      # remove tpu_top.json/.asc/.bin
 ```
-Build knobs (accepted by every target above; all `chparam`'d into the
+
+**Build knobs** (accepted by every target above; all `chparam`'d into the
 bitstream at synthesis time — the matching host-side flags must agree, see
 `tpu_host.py --help`):
 ```bash
@@ -188,71 +388,58 @@ make USE_SPI=1 CLK_FREQ=24000000        # SPI host link (rtl/spi_slave.sv) on th
                                         #   24 MHz works because the SPI slave, unlike the UART,
                                         #   has no synthesis-baked baud divider (fMax ~32 MHz)
 ```
-If `make time` fails with "Can't find chipdb file" (some Homebrew icestorm
-installs), point it at the file directly:
-```bash
-make time ICETIME_CHIPDB=$(brew --prefix icestorm)/share/icestorm/chipdb/chipdb-5k.txt
-```
 
-### 3.2 MNIST digit classification demo
+**The fastest configuration** (2×4 array over SPI, ~64 ms/image on MNIST) needs
+all three sides rebuilt and reflashed together:
+```bash
+# 1. Firmware, with the SPI bridge compiled in (separate build dir keeps the UART one intact)
+cd firmware && mkdir -p build-spi && cd build-spi
+cmake -DPICO_BOARD=pico2_ice -DPICO_PLATFORM=rp2350-riscv \
+      -DPICO_GCC_TRIPLE=riscv64-unknown-elf -DTPU_LINK_SPI=ON -G Ninja ..
+ninja                                  # then flash pico2_ice_bridge.uf2 as in §1.4
+
+# 2. Gateware, matching link + clock + shape
+cd ../../fpga/ice40 && make USE_SPI=1 CLK_FREQ=24000000 NUM_COLS=4 && make prog
+
+# 3. Host, matching all three
+python3 mnist/infer.py --port /dev/cu.usbmodemXXXX --link spi --cols 4 --test-n 20
+```
+Keep the UART build around as a bisect fallback — if the SPI path misbehaves, reflashing
+the plain `make` gateware plus the `build/` firmware gets you back to a known-good state.
+
+### 5.2 MNIST digit classification demo
 
 Runs a trained+quantized 144→64→10 MLP through the real systolic array, tile
 by tile, via `mnist/infer.py`'s `matmul_tiled()` driver (built on the K-dim
-tiling from §3.1/§4; any layer shape works — non-multiples of the array size
+tiling from §5.1/§6; any layer shape works — non-multiples of the array size
 are zero-padded on the wire and sliced off the result) — either against real
 hardware or, with `--offline`, in pure numpy with no board at all.
-`mnist/model/mnist_2x2_int8.npz` is already trained and committed, so steps
-1–2 below are only needed if you want to retrain it. Both scripts below take
-`--rows/--cols/--m-tile` to match a non-2×2 bitstream, same as `tpu_host.py`.
+`mnist/model/mnist_2x2_int8.npz` is already trained and committed, so retraining
+is entirely optional. All three scripts take `--rows/--cols/--m-tile` to match a
+non-2×2 bitstream.
 
-1. **(Optional) Retrain/requantize the model** — downloads MNIST (~11 MB,
-   cached in `mnist/data/`, gitignored) and overwrites
-   `mnist/model/mnist_2x2_int8.npz`:
-   ```bash
-   python3 mnist/train_mnist.py
-   ```
+```bash
+# Accuracy on real hardware, N random real MNIST test images end-to-end:
+python3 mnist/infer.py --port /dev/cu.usbmodemXXXX --test-n 20
 
-2. **Board must already be flashed** — firmware + gateware, per §3.1 above.
-   Pure RTL/software changes here don't need a firmware reflash, just the
-   gateware.
+# Hardware vs. local numpy on the exact same images, side by side:
+python3 mnist/infer.py --port /dev/cu.usbmodemXXXX --compare --test-n 20
 
-3. **Find the board's two USB-CDC ports**:
-   ```bash
-   python3 -c "import serial.tools.list_ports as p; [print(x) for x in p.comports()]"
-   ```
-   Both may show identically as `pico-ice` on macOS — try the higher-numbered
-   `/dev/cu.usbmodemN` for `--port` (the
-   TPU/"iCE40 UART" link) first; the other is `--led-port` ("RP2040 logs",
-   used only for the demo's LED feedback in step 5).
+# Interactive drawing demo (LED flips green->blue when inference completes):
+python3 mnist/draw_demo.py --port /dev/cu.usbmodemXXXX --led-port /dev/cu.usbmodemYYYY
 
-4. **Sanity-check accuracy on real hardware** — classifies N random real
-   MNIST test images end-to-end (~64 ms/image at the 2×4 SPI build with
-   firmware offload; ~240 ms over 1 Mbaud UART at the same shape, ~316 ms
-   at the default 2×2 — see §4's latency note for where the time goes):
-   ```bash
-   python3 mnist/infer.py --port /dev/cu.usbmodemXXXX --test-n 20
-   # flashed a non-default shape (e.g. make ARRAY_ROWS=2 NUM_COLS=4)? match it:
-   python3 mnist/infer.py --port /dev/cu.usbmodemXXXX --test-n 20 --cols 4
-   # no board handy? pure-numpy backend, same fixed-point math, no LED:
-   python3 mnist/infer.py --offline --test-n 200
-   # want both, on the exact same images, side by side (hardware vs local Mac,
-   # one-at-a-time vs batched)?
-   python3 mnist/infer.py --port /dev/cu.usbmodemXXXX --compare --test-n 20
-   ```
+# (Optional) retrain + requantize — downloads MNIST (~11 MB, cached in mnist/data/,
+# gitignored) and overwrites mnist/model/mnist_2x2_int8.npz:
+python3 mnist/train_mnist.py
+```
 
-5. **Launch the interactive drawing demo** — draw a digit, click Predict,
-   watch the board's LED flip green→blue when the on-chip inference
-   completes:
-   ```bash
-   python3 mnist/draw_demo.py --port /dev/cu.usbmodemXXXX --led-port /dev/cu.usbmodemYYYY
-   # --led-port is optional (skips LED feedback); --offline works here too:
-   python3 mnist/draw_demo.py --offline
-   ```
-   Needs `tkinter` (bundled with most Python installs; on macOS via
-   Homebrew Python, `brew install python-tk` if `import tkinter` fails).
+Per-image latency depends on the build: ~316 ms at the default 2×2 over 1 Mbaud
+UART, ~240 ms at 2×4 over UART, ~64 ms at 2×4 over SPI with firmware offload —
+see §6's latency note for where the time actually goes.
 
+---
 
-## 4. Current Status and Future Work
+## 6. Current status and future work
 
 - **Simulation** — full datapath implemented and passing all 22 SystemVerilog
   testbenches (`make test`).
@@ -261,7 +448,7 @@ hardware or, with `--offline`, in pure numpy with no board at all.
   stress run against real silicon, at whatever array shape the bitstream was built with
   (validated at 2×2 and 2×4).
 - **Parameterized array shape** — every module including the sequencer takes
-  `ARRAY_ROWS`/`NUM_COLS`/`M_TILE`; the shape is a build knob (§3.1) threaded from
+  `ARRAY_ROWS`/`NUM_COLS`/`M_TILE`; the shape is a build knob (§5.1) threaded from
   `fpga/ice40/Makefile` through `tpu_host.py`. 2×4 (8 PEs, all DSP-backed, 67% of the UP5K's
   LUTs) is the largest shape that fits — 4×4 needs 16 multipliers against the chip's
   8 `SB_MAC16` blocks.
@@ -325,10 +512,18 @@ hardware or, with `--offline`, in pure numpy with no board at all.
   - **Scale up.** Once the flow is up, raise `ARRAY_ROWS`/`NUM_COLS` to the
     largest shape that closes timing at 50 MHz on the Cyclone V.
 
-## 5. License
+---
+
+## 7. Contributing
+
+Contributions — bug fixes, new testbenches, board ports, docs — are welcome. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for development setup, the local quality gates
+(`make test` / `make lint` / `make verilate-test` — this project deliberately uses
+no hosted CI), how to register a new testbench, and the RTL house style.
+
+Questions and issues are welcome too, especially bring-up problems §1.8 doesn't cover.
+
+## 8. License
 
 Released under the [MIT License](LICENSE) — © 2026 Murat Acar. You are free to
 use, modify, and distribute this design; attribution is appreciated.
-
-Questions, issues, and contributions are welcome — see
-[CONTRIBUTING.md](CONTRIBUTING.md).
