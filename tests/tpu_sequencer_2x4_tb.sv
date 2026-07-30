@@ -3,8 +3,8 @@
 // tpu_sequencer_2x4_tb — the hardware-shape twin of tpu_sequencer_4x2_tb.
 //
 // Runs the full sequencer + datapath at ARRAY_ROWS=2, NUM_COLS=4, M_TILE=2 —
-// exactly the shape fpga/Makefile builds for the pico2-ice scale-up (8 PEs,
-// all SB_MAC16-backed; see docs/PERFORMANCE_ANALYSIS.md §3). The
+// exactly the shape fpga/ice40/Makefile builds for the pico2-ice scale-up (8 PEs,
+// all SB_MAC16-backed; see docs/performance.md §2). The
 // all-axes-distinct generalization proof lives in tpu_sequencer_4x2_tb.sv;
 // this tb pins down the *deployed* configuration, in particular the
 // wider-than-rows column axis (NUM_COLS > ARRAY_ROWS), which the 4x2 tb's

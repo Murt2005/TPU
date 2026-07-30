@@ -536,7 +536,7 @@ module tpu_sequencer_tb;
                      16'sd7,16'sd10,16'sd19,16'sd22, "T7 K-tile1");
 
         // Test 8: RUN_TILE single-shot — the exact worked example from
-        // docs/SEQUENCER_REDESIGN.md §3.1: bias=[100,200] preloaded, then
+        // docs/protocol.md §3: bias=[100,200] preloaded, then
         // one 06 09 03 ... frame returning AA 08 6C 00 D3 00 78 00 E3 00.
         $display("[Test 8] RUN_TILE single frame (doc §3.1 worked example)");
         host_send_byte(8'h02);   // LOAD_BIAS = [100,200]

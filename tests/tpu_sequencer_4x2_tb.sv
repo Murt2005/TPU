@@ -5,8 +5,8 @@
 // Runs the full sequencer + datapath at ARRAY_ROWS=4, NUM_COLS=2, M_TILE=3 —
 // a shape where all three size axes differ, so any place that conflates
 // rows/cols/M (or "happens to work because N=2") fails loudly instead of
-// silently. This is validation step 3 of docs/SEQUENCER_REDESIGN.md §5; the
-// bit-exact 2x2 parity check lives in tpu_sequencer_tb.sv.
+// silently. This is the all-axes-distinct shape variant (docs/verification.md
+// §1); the bit-exact 2x2 parity check lives in tpu_sequencer_tb.sv.
 //
 // Matrix shapes at this parameterization:
 //   W : 4x2  (ARRAY_ROWS x NUM_COLS)   LOAD_WEIGHTS LEN = 8, rows bottom-first

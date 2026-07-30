@@ -34,5 +34,5 @@ lib/
 pyvenv.cfg
 __pycache__/
 
-# docs/ is maintained locally only and intentionally not published to GitHub
-docs/
+# Pre-reorganization docs, kept locally for reference only (superseded by docs/)
+olddocs/

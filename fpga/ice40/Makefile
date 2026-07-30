@@ -44,7 +44,7 @@ CLK_FREQ ?= 12000000
 # (TICKS_PER_BIT = 13, +0.16% error, still within the mid-bit sample margin).
 BAUD_RATE ?= 1000000
 
-# Array geometry (see docs/SEQUENCER_REDESIGN.md §1): ARRAY_ROWS = K-tile
+# Array geometry (see docs/architecture.md §3): ARRAY_ROWS = K-tile
 # depth, NUM_COLS = N-tile width, M_TILE = activation rows per RUN. The RTL
 # is fully parameterized; these must match what tpu_host.py is invoked with
 # (--rows/--cols/--m-tile). FIFO_DEPTH in tpu_top.sv must stay a power of 2
@@ -55,7 +55,7 @@ M_TILE     ?= $(ARRAY_ROWS)
 
 # Host PHY: 0 = UART on the CDC-bridged pins (default, validated), 1 = SPI
 # slave on the RP2350<->iCE40 config bus pins (rtl/spi_slave.sv; needs the
-# matching SPI-bridge firmware). See docs/FPGA.md and tpu_top.pcf's SPI
+# matching SPI-bridge firmware). See docs/pico2-ice.md and tpu_top.pcf's SPI
 # pin-mapping comment.
 USE_SPI ?= 0
 
@@ -108,7 +108,7 @@ bin: $(TOP).bin
 
 # -dsp maps pe.sv's int8 multiplies onto the UP5K's 8 hard SB_MAC16 blocks
 # instead of building them from LUTs (~251 -> ~36 LUTs per PE, see
-# docs/PERFORMANCE_ANALYSIS.md §2); bit-exact, validated by tests/hw_regression.py.
+# docs/performance.md §2); bit-exact, validated by tests/hw_regression.py.
 $(TOP).json: $(RTL)
 	$(YOSYS) -q -p "\
 		read_verilog -sv $(RTL); \

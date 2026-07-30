@@ -224,7 +224,7 @@ def main():
         print(f"  Python/numpy call overhead                       "
               f"{mac_dispatch_s * 1000 / n:8.3f} ms/image "
               f"({100 * mac_dispatch_s / mac_loop_s:5.1f}% of the one-at-a-time number)")
-        print(f"\nSee docs/PERFORMANCE_ANALYSIS.md for the full writeup and what it does/doesn't mean.")
+        print(f"\nSee docs/performance.md for the full writeup and what it does/doesn't mean.")
         return
 
     if args.offline:

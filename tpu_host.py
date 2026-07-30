@@ -230,7 +230,7 @@ class TPU:
         # cmd byte -> [call count, wire bytes tx (incl. CMD/LEN header), wire bytes rx]
         # Lets a caller measure exactly how many bytes crossed the wire per command
         # type, to separate UART transmission time from actual RTL execution time
-        # (see mnist/infer.py's --timing-breakdown and docs/PERFORMANCE_ANALYSIS.md).
+        # (see mnist/infer.py's --timing-breakdown and docs/performance.md §1).
         self.stats = {}
         # FPGA-side work done on the offload path, invisible to self.stats'
         # wire counts (the tile frames run RP2350->FPGA, not host->board);
@@ -365,7 +365,7 @@ class TPU:
     def estimated_rtl_seconds(self, clk_freq=FPGA_CLK_FREQ):
         """Estimated wall-clock time actually spent inside tpu_core's
         datapath (no UART, no USB) -- RUN costs 21 cycles dispatch-to-result
-        (docs/sequencer_uart_design.md §3.3, cycle-accurate from the RTL);
+        (docs/architecture.md §2, cycle-accurate from the RTL);
         LOAD_*/RESET just latch a register file and ACK, budgeted at a
         conservative 2 cycles since that path isn't cycle-counted in the docs
         the way RUN is. clk_freq defaults to the 12 MHz this repo's firmware
@@ -453,7 +453,7 @@ class TPU:
     def run_tile(self, w, a, first=True, last=True):
         """One K-tile pass -- LOAD_WEIGHTS + LOAD_ACT + RUN folded into a
         single CMD_RUN_TILE round trip (3x fewer transactions per tile; see
-        docs/SEQUENCER_REDESIGN.md §3.1). w is (rows x cols), a is
+        docs/protocol.md §3). w is (rows x cols), a is
         (m_tile x rows), both int8 row-major; unlike load_weights(), the
         weights go over the wire in natural row-major order -- the sequencer
         does the bottom-first reorder internally. first/last have exactly
@@ -472,7 +472,7 @@ class TPU:
         """A whole K-run (or a chunk of one) in a single CMD_STREAM_RUN
         round trip: up to self.max_stream_tiles (w, a) tile pairs,
         accumulated tile-by-tile in the datapath
-        (docs/SEQUENCER_REDESIGN.md §3.2). Weights go in natural row-major
+        (docs/protocol.md §3). Weights go in natural row-major
         order, like run_tile(). first/last apply to the frame's first/last
         tile respectively, so a K-run longer than one frame chains:
         first=True,last=False / False,False / ... / False,last=True.

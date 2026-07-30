@@ -88,8 +88,8 @@ import tpu_pkg::*;
 //                             (255-2)/(tile bytes), 31 at 2x2) spans several
 //                             STREAM_RUN frames: first=1,last=0 / 0,0 / ...
 //                             / 0,last=1. (This flags byte is the one
-//                             deviation from docs/SEQUENCER_REDESIGN.md
-//                             §3.2's payload sketch — required because MNIST
+//                             deviation from the original payload sketch
+//                             (docs/protocol.md §3) — required because MNIST
 //                             layer 1's K=144 means 72 K-tiles per output
 //                             block, over the single-frame cap.)
 //                             Response: on a TILE_LAST frame, STATUS=0xAA +
@@ -118,7 +118,7 @@ import tpu_pkg::*;
 //                             semantics as RUN's LEN=1 variant. Folds
 //                             LOAD_WEIGHTS+LOAD_ACT+RUN into one frame: one
 //                             round trip per K-tile instead of three
-//                             (docs/SEQUENCER_REDESIGN.md §3.1). Response is
+//                             (docs/protocol.md §3). Response is
 //                             identical to RUN's (result bytes if TILE_LAST,
 //                             else a bare STATUS_OK/LEN=0 ACK). Does not
 //                             touch reg_bias — LOAD_BIAS stays a separate,
@@ -177,7 +177,7 @@ module tpu_sequencer #(
     // uart_rx framing-error flag (level: latched on a bad stop bit, cleared
     // by the next good byte). A rising edge while receiving a frame aborts
     // it with an explicit STATUS_ERR instead of a silent drop + WAIT_TIMEOUT
-    // on the host side (docs/SEQUENCER_REDESIGN.md §3.3 / sequencer_uart_design §5.7).
+    // on the host side (docs/protocol.md §1).
     input  logic       rx_error,
 
     output logic [7:0] tx_data,
@@ -242,8 +242,8 @@ module tpu_sequencer #(
     // Persistent register file (survives across commands)
     // reg_weights is stored in NATURAL row-major order (row 0 = top row);
     // the bottom-first wire order of LOAD_WEIGHTS is undone at unpack time,
-    // and S_LD_WF re-derives it at presentation time (see §2.3 of
-    // docs/SEQUENCER_REDESIGN.md).
+    // and S_LD_WF re-derives it at presentation time (see docs/architecture.md
+    // §5).
     logic signed [7:0]  reg_weights [ARRAY_ROWS][NUM_COLS];
     logic signed [7:0]  reg_act     [M_TILE][ARRAY_ROWS];
     logic signed [15:0] reg_bias    [NUM_COLS];

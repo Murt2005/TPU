@@ -5,7 +5,7 @@ pico2-ice board's Raspberry Pi RP2350. It is **not** the TPU design itself —
 the TPU datapath is the Verilog under `../rtl/`, synthesized to a bitstream by
 `../fpga/`. This firmware's only job is to get bytes from the host PC to the
 iCE40 FPGA and back, and to get the FPGA a clock and its configuration in the
-first place. See `../docs/FPGA.md` for the full architecture writeup and
+first place. See `../docs/pico2-ice.md` for the full target reference and
 build/flash/validate runbook; this file just covers what lives in this
 directory.
 
@@ -56,7 +56,7 @@ nothing else — it does not parse or interpret any of the bytes it bridges.
     callback reports a bogus "firmware corrupt" error on **every** flash,
     success or failure. The LED driven from `ice_fpga_configured()` is the
     real signal; the DFU error message is a known false alarm (see
-    `../docs/FPGA.md` §8.3).
+    `../docs/pico2-ice.md` §5.1).
   - `while (true) { tud_task(); }` — the TinyUSB device-stack service loop;
     everything else (the actual CDC↔UART forwarding) happens inside
     `pico-ice-sdk`'s USB callbacks, driven by this loop.
@@ -77,7 +77,7 @@ nothing else — it does not parse or interpret any of the bytes it bridges.
     these per-interface descriptions — so the two resulting
     `/dev/cu.usbmodemN` devices look identical from the port list alone.
     There's no reliable way to tell them apart programmatically on macOS;
-    see `../docs/FPGA.md` §7.5/§8.5 for the trial-and-error approach
+    see `../docs/pico2-ice.md` §5.4 for the trial-and-error approach
     (try the higher-numbered port first).
 
 - **`tusb_config.h`** — TinyUSB device-stack configuration:
@@ -118,7 +118,7 @@ nothing else — it does not parse or interpret any of the bytes it bridges.
   repo root). Fetch it with
   `git submodule update --init --recursive -- firmware/pico-ice-sdk`, or
   `git clone --recurse-submodules` when cloning this repo fresh
-  (`../docs/FPGA.md` §6).
+  (`../docs/pico2-ice.md` §7).
 - **The FPGA bitstream/gateware.** That's `../fpga/` (RTL sources are
   `../rtl/*.sv`). This firmware doesn't know anything about the TPU protocol
   it's bridging — that logic lives entirely in `tpu_sequencer.sv` on the FPGA
@@ -141,4 +141,4 @@ Only needed once, or after changing something in this directory (e.g.
 `CLK_FREQ`/pin numbers) — pure RTL changes under `../rtl/` never require a
 firmware rebuild, only a gateware rebuild + reflash. Full flash/validate
 sequence, including *why* firmware must be flashed before gateware, is in
-`../docs/FPGA.md` §7.3–§7.5.
+`../docs/pico2-ice.md` §1 and §8.

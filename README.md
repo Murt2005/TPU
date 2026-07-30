@@ -347,6 +347,12 @@ TPU/
     └── data/                    # downloaded MNIST idx files, gitignored
 ```
 
+Deeper reference material lives in [`docs/`](docs/) — [architecture](docs/architecture.md),
+[wire protocol](docs/protocol.md), [pico2-ice target](docs/pico2-ice.md),
+[DE1-SoC target](docs/de1soc.md), [performance](docs/performance.md),
+[verification](docs/verification.md), [MNIST](docs/mnist.md), and a
+[full repo map](docs/repo-map.md). Start at [`docs/README.md`](docs/README.md).
+
 ---
 
 ## 5. FPGA build reference

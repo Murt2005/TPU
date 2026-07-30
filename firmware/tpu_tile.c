@@ -14,7 +14,7 @@
  *    non-0x00 byte = STATUS, then forwards LEN and the payload
  *    (rtl/spi_slave.sv's write-then-poll protocol).
  *
- * 2. Matmul offload (docs/SEQUENCER_REDESIGN.md's M3): two command bytes
+ * 2. Matmul offload (docs/protocol.md §5): two command bytes
  *    are CAPTURED off the host stream instead of forwarded -- the FPGA
  *    never sees them, so any CMD the sequencer understands still passes
  *    through byte-identically (tests/hw_regression.py needs no changes):

@@ -35,8 +35,8 @@ nothing board-facing happens on the Mac at all.
 The array shape is a parameter (`ARRAY_ROWS`/`NUM_COLS`/`M_TILE`/`USE_MAC16_PAIR`
 on `tpu_top_hps`). Build with **`USE_MAC16_PAIR=0`** — the `SB_MAC16` DSP-pair
 path is iCE40-only; Cyclone V infers its own DSPs from `pe.sv`'s multiply. Start
-at the current small shape to bring the flow up, then scale (see the repo
-`docs/` and the top-level plan).
+at the current small shape to bring the flow up, then scale (see
+`../../docs/de1soc.md` and `../../docs/backlog.md`).
 
 ## Build steps (on x86-64 Linux with Quartus Prime Lite)
 

@@ -4,7 +4,7 @@
 // byte-stream interface as the uart_rx/uart_tx pair, so tpu_sequencer.sv
 // plugs into either PHY unchanged (tpu_top's USE_SPI parameter selects).
 //
-//  Host-facing protocol notes (see docs/FPGA.md / SEQUENCER_REDESIGN.md):
+//  Host-facing protocol notes (see docs/protocol.md §4):
 //
 //  * SPI is master-driven, so the request/response protocol becomes
 //    write-then-poll: the master clocks the command frame out on MOSI,
