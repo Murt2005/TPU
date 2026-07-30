@@ -8,7 +8,7 @@ simulation (22 testbenches), and validated end-to-end on real hardware on a
 host link — including hardware-side K-dim matmul tiling, a batched wire protocol,
 DSP-backed PEs, an RP2350-offloaded tiling loop, and a real-time MNIST digit
 classification demo at ~64 ms/image on-silicon (125x down from the first working
-bring-up).
+bring-up). Full design notes live in [`docs/`](docs/).
 
 **Where to start:**
 
@@ -254,10 +254,12 @@ make lint      # verilator --lint-only -Wall over all of rtl/ (audited waivers
                #   live in verilator.vlt, each with a comment saying why)
 make verilate-test
                # Verilator C++ full-chip testbench (tests/verilator/): drives
-               #   tpu_top through its real UART pins at the hardware's
-               #   12 MHz / 1 Mbaud ratio, at three array shapes (2x2, 2x4,
-               #   and 4x2/M_TILE=3), replaying the hw_regression.py vector
-               #   set plus a UART framing-error injection only sim can do
+               #   tpu_top through its real host pins (UART at the hardware's
+               #   12 MHz / 1 Mbaud ratio, and real SPI) across seven
+               #   shape/PHY combinations -- 2x2, 2x4, 4x2/M_TILE=3, the two
+               #   4x4 SB_MAC16-pair SPI builds, and an 8x8 sim-only shape --
+               #   replaying the hw_regression.py vector set plus a UART
+               #   framing-error injection only sim can do
 make list      # print every registered test name and its available targets
 make clean     # remove sim/ (compiled binaries, logs, waveform dumps)
 make hw-test PORT=/dev/cu.usbmodemXXXX [ARRAY_ROWS=2] [NUM_COLS=2] [M_TILE=2] [LINK=uart]
@@ -329,7 +331,7 @@ TPU/
 │   └── tpu_top.sv               # pico2-ice top level: PHY + power-on reset + pins
 ├── verilator.vlt                # audited lint waivers for `make lint`
 ├── tests/                       # SystemVerilog testbenches (simulation)
-│   ├── *_tb.sv                  # unit + integration tbs, incl. tpu_sequencer_{4x2,2x4}_tb.sv
+│   ├── *_tb.sv                  # unit + integration tbs, incl. tpu_sequencer_{4x2,2x4,4x4}_tb.sv
 │   │                            #   proving the parameterized sequencer at non-2x2 shapes
 │   ├── verilator/               # C++ full-chip testbench (`make verilate-test`)
 │   └── hw_regression.py         # real-hardware regression suite (§1.7)
@@ -360,8 +362,9 @@ Deeper reference material lives in [`docs/`](docs/) — [architecture](docs/arch
 ### 5.1 pico2-ice (iCE40UP5K) — bring-up complete, hardware-validated
 
 A parameterized `ARRAY_ROWS × NUM_COLS` systolic array (default 2×2;
-hardware-validated at 2×2 and 2×4, the latter with all 8 of the UP5K's `SB_MAC16`
-DSP blocks backing the PEs) runs the full datapath (UART RX → sequencer →
+hardware-validated at 2×2, 2×4, and 4×4 — 2×4 puts one PE on each of the UP5K's
+8 `SB_MAC16` DSP blocks, 4×4 puts *two* PEs on each via `rtl/pe_pair.sv`'s
+dual-8×8 mode) runs the full datapath (UART RX → sequencer →
 weight FIFO → unified buffer → systolic data setup → MMU → accumulator → bias →
 ReLU → UART TX) on real silicon.
 
@@ -393,9 +396,14 @@ make USE_SPI=1 CLK_FREQ=24000000        # SPI host link (rtl/spi_slave.sv) on th
                                         #   TPU_LINK_SPI=ON firmware build and hosts' --link spi.
                                         #   24 MHz works because the SPI slave, unlike the UART,
                                         #   has no synthesis-baked baud divider (fMax ~32 MHz)
+make USE_MAC16_PAIR=1 ARRAY_ROWS=4 NUM_COLS=4 M_TILE=2
+                                        # build the MMU from rtl/pe_pair.sv (hand-instantiated
+                                        #   SB_MAC16 in dual-8x8 mode: two PEs per DSP, so 16 PEs
+                                        #   fit on the UP5K's 8 blocks). Requires even ARRAY_ROWS;
+                                        #   -dsp is dropped automatically (nothing left to infer)
 ```
 
-**The fastest configuration** (2×4 array over SPI, ~64 ms/image on MNIST) needs
+**The fastest configuration** (4×4 array over SPI, ~63.8 ms/image on MNIST) needs
 all three sides rebuilt and reflashed together:
 ```bash
 # 1. Firmware, with the SPI bridge compiled in (separate build dir keeps the UART one intact)
@@ -405,10 +413,12 @@ cmake -DPICO_BOARD=pico2_ice -DPICO_PLATFORM=rp2350-riscv \
 ninja                                  # then flash pico2_ice_bridge.uf2 as in §1.4
 
 # 2. Gateware, matching link + clock + shape
-cd ../../fpga/ice40 && make USE_SPI=1 CLK_FREQ=24000000 NUM_COLS=4 && make prog
+cd ../../fpga/ice40 && make USE_SPI=1 CLK_FREQ=24000000 \
+     USE_MAC16_PAIR=1 ARRAY_ROWS=4 NUM_COLS=4 M_TILE=2 && make prog
 
 # 3. Host, matching all three
-python3 mnist/infer.py --port /dev/cu.usbmodemXXXX --link spi --cols 4 --test-n 20
+python3 mnist/infer.py --port /dev/cu.usbmodemXXXX --link spi \
+     --rows 4 --cols 4 --m-tile 2 --test-n 20
 ```
 Keep the UART build around as a bisect fallback — if the SPI path misbehaves, reflashing
 the plain `make` gateware plus the `build/` firmware gets you back to a known-good state.
@@ -440,8 +450,10 @@ python3 mnist/train_mnist.py
 ```
 
 Per-image latency depends on the build: ~316 ms at the default 2×2 over 1 Mbaud
-UART, ~240 ms at 2×4 over UART, ~64 ms at 2×4 over SPI with firmware offload —
-see §6's latency note for where the time actually goes.
+UART, ~240 ms at 2×4 over UART, ~64 ms at 2×4 over SPI with firmware offload, and
+~63.8 ms at 4×4/M_TILE=2. (4×4/M_TILE=4 fits too, but measures *worse* on a single
+image — 80.3 ms — because three of its four streamed activation rows are padding;
+it wins once `infer.py` batches images. See [`docs/performance.md`](docs/performance.md).)
 
 ---
 
@@ -452,12 +464,17 @@ see §6's latency note for where the time actually goes.
 - **pico2-ice hardware** — bring-up complete; `tests/hw_regression.py` (`make hw-test`)
   replays every simulation test vector plus int8/int16 boundary cases and a randomized
   stress run against real silicon, at whatever array shape the bitstream was built with
-  (validated at 2×2 and 2×4).
+  (validated at 2×2, 2×4, and 4×4 — 14/14 at each).
 - **Parameterized array shape** — every module including the sequencer takes
   `ARRAY_ROWS`/`NUM_COLS`/`M_TILE`; the shape is a build knob (§5.1) threaded from
-  `fpga/ice40/Makefile` through `tpu_host.py`. 2×4 (8 PEs, all DSP-backed, 67% of the UP5K's
-  LUTs) is the largest shape that fits — 4×4 needs 16 multipliers against the chip's
-  8 `SB_MAC16` blocks.
+  `fpga/ice40/Makefile` through `tpu_host.py`. The largest shape that fits is
+  **4×4/M_TILE=4** at 4,935 LCs (93%), 8/8 DSPs, fMax 27.62 MHz. Getting there took
+  breaking an apparent 8-PE ceiling: yosys `-dsp` maps one PE per `SB_MAC16` with no
+  per-instance opt-out, so 16 PEs looked impossible against the chip's 8 blocks —
+  until `rtl/pe_pair.sv` hand-instantiated `SB_MAC16` in dual-8×8 signed mode, fitting
+  *two* complete PE MACs per block (bit-exact vs. two `pe.sv`, verified cycle-accurate
+  against yosys's own primitive model). The last 10% came from `ABC_FLAGS := -abc9 -dff`
+  and a BRAM-backed `unified_buffer` — see [`docs/performance.md`](docs/performance.md) §2.
 - **K-dim tiling** — `accumulator.sv` holds a persistent per-row PSUM register that
   survives across separate `RUN`s (`tile_first`/`tile_last` control, `pass_done` status),
   so a matmul with K larger than the array can be tiled into multiple weight-reload
@@ -466,8 +483,8 @@ see §6's latency note for where the time actually goes.
   Verified in sim (`accumulator_tb`, `tpu_core_tb` Test 8,
   `tpu_sequencer_tb` Test 7) and on real pico2-ice hardware (`tpu_host.py`'s
   `TPU.matmul_tiled()`, `tests/hw_regression.py`'s randomized multi-tile stress case).
-- **Inference latency: 8.0 s → 64 ms/image (125x)** — measured on real hardware, in
-  six stacked steps: batched wire commands (`CMD_RUN_TILE`, then `CMD_STREAM_RUN`
+- **Inference latency: 8.0 s → 63.8 ms/image (125x)** — measured on real hardware, in
+  seven stacked steps: batched wire commands (`CMD_RUN_TILE`, then `CMD_STREAM_RUN`
   streaming a whole K-run per round trip, 3.3x), `-dsp` synthesis (PE multiplies onto
   hard `SB_MAC16` blocks, ~7x fewer LUTs/PE), the UART at 1 Mbaud instead of 115200
   (7.8x), the 2×4 array (1.3x), replacing the UART with an SPI host link
@@ -475,15 +492,17 @@ see §6's latency note for where the time actually goes.
   (2.7x), and offloading the whole matmul tiling loop onto the RP2350
   (`firmware/tpu_tile.c`'s `FW_MATMUL` bulk command: one USB round trip per
   network layer instead of one per tile frame, 1.5x — bit-identical to the
-  host-tiled path, A/B-verified in `tests/hw_regression.py`). The remaining
-  budget is genuinely wire-bound: mostly SPI tile traffic at the CLK/6-capped
-  4 MHz write clock, ~3% actual RTL compute.
+  host-tiled path, A/B-verified in `tests/hw_regression.py`), and the 4×4 array
+  via `pe_pair.sv` (flat on latency by design — wire bytes are shape-invariant in
+  W and 1/`NUM_COLS` in A — but 2x the compute density, and the headroom that makes
+  image batching worth doing). The remaining budget is genuinely wire-bound: mostly
+  SPI tile traffic at the CLK/6-capped 4 MHz write clock, ~3% actual RTL compute.
 - **MNIST** — `mnist/train_mnist.py` trains and quantizes a 144→64→10 MLP (12×12
   downsampled input, int8 weights/activations, int16 bias) sized and empirically
   verified against the accumulator's non-saturating int16 width (5% calibration
   safety margin, zero overflow across the full 10k-image test set); 97.50%
   quantized test accuracy in sim, 95.00% (19/20) on a real-hardware sample
-  (`mnist/infer.py --port ... --test-n 20`), at ~64 ms/image end-to-end over the
+  (`mnist/infer.py --port ... --test-n 20`), at ~63.8 ms/image end-to-end over the
   SPI link with firmware offload (see the latency bullet above).
 - **Interactive demo** — `mnist/draw_demo.py`: draw a digit, classify it end-to-end on
   real pico2-ice silicon via `mnist/infer.py`'s multi-layer `matmul_tiled()` driver, with
@@ -493,9 +512,10 @@ see §6's latency note for where the time actually goes.
 - **Future work** — a bigger/better MNIST model (current one is deliberately tiny to
   stay provably inside the accumulator's int16 width — see `mnist/train_mnist.py`'s
   header comment); batching `M_TILE` images per inference call in `mnist/infer.py` so a
-  single image stops wasting the padded activation rows; and wire-format ideas
+  single image stops wasting the padded activation rows (the highest-value item
+  left — projected ~17 ms/image at 4×4/M_TILE=4); and wire-format ideas
   like packed instruction headers and int4 payload packing (the latter gated on
-  a software-only accuracy experiment).
+  a software-only accuracy experiment). Full list: [`docs/backlog.md`](docs/backlog.md).
 - **DE1-SoC (Cyclone V) target** — in progress. The board-neutral `tpu_core`,
   the HPS Avalon-MM bridge (`rtl/hps_bridge.sv` + `rtl/tpu_top_hps.sv`), and the
   memory-mapped host transport (`tpu_host.py --link hps`, driven over `/dev/mem`
