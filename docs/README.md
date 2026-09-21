@@ -16,6 +16,7 @@ New to the repo, want to understand the design:
 1. [`architecture.md`](architecture.md) — the datapath and how it's parameterized.
 2. [`protocol.md`](protocol.md) — how the host talks to it.
 3. [`performance.md`](performance.md) — where the time and the LUTs go.
+4. [`utilization.md`](utilization.md) — how much of that the array actually uses.
 
 Working on the code:
 - [`repo-map.md`](repo-map.md) — file-by-file.
@@ -31,6 +32,7 @@ Working on the code:
 | [`pico2-ice.md`](pico2-ice.md) | iCE40UP5K target reference: build knobs, flash order, the five hard-won gotchas, the bisect ladder |
 | [`de1soc.md`](de1soc.md) | Cyclone V target: what's implemented, what's scaffolded, the cloud Quartus build plan |
 | [`performance.md`](performance.md) | Current measured numbers, the 8.0 s → 63.8 ms trail, LC/DSP budget, hardware vs. laptop |
+| [`utilization.md`](utilization.md) | Measured array utilization and wire composition, the unused double-buffering, and a command-interface / ISA design driven by both |
 | [`verification.md`](verification.md) | The four verification tiers and what each one actually proves |
 | [`mnist.md`](mnist.md) | The demo model: shape, quantization, the int16 accumulator constraint, accuracy |
 | [`repo-map.md`](repo-map.md) | Every directory and file, and what it's for |
