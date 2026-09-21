@@ -108,6 +108,12 @@ module mmu #(
             if (ARRAY_ROWS % 2 != 0) begin : gen_odd_rows_check
                 $error("USE_MAC16_PAIR requires even ARRAY_ROWS (got %0d)", ARRAY_ROWS);
             end
+            // SB_MAC16's accumulator/output register is a hard 16 bits, so the
+            // DSP-pair path cannot carry a wider partial sum. A wide build must
+            // use the generic pe.sv path (USE_MAC16_PAIR=0).
+            if (PSUM_WIDTH != 16) begin : gen_pair_width_check
+                $error("USE_MAC16_PAIR requires PSUM_WIDTH=16 (got %0d)", PSUM_WIDTH);
+            end
             for (r = 0; r < ARRAY_ROWS; r += 2) begin : gen_row
                 for (c = 0; c < NUM_COLS; c++) begin : gen_col
                     pe_pair pe_pair_inst (
@@ -147,7 +153,7 @@ module mmu #(
         end else begin : gen_pe_rows
             for (r = 0; r < ARRAY_ROWS; r++) begin : gen_row
                 for (c = 0; c < NUM_COLS; c++) begin : gen_col
-                    pe pe_inst (
+                    pe #(.PSUM_WIDTH(PSUM_WIDTH)) pe_inst (
                         .clk(clk),
                         .reset(reset),
 

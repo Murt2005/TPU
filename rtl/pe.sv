@@ -17,11 +17,15 @@
 //
 // Latency: one registered cycle on every output (activation right, weight down,
 // partial sum down). Synchronous active-high reset. Widths are fixed int8
-// data / int16 partial sum (the array-level modules parameterize these; the PE
-// is the hard-wired leaf). mmu.sv builds the ARRAY_ROWS x NUM_COLS grid from
-// these; the generic multiply on line ~55 is what yosys -dsp maps to an
-// SB_MAC16 (see pe_pair.sv for the two-PEs-per-DSP iCE40 variant).
-module pe (
+// data. The partial-sum width is PSUM_WIDTH (default 16, the historical
+// hard-wired value); mmu.sv threads it down from tpu_core so a build can widen
+// the reduction path without touching this file. mmu.sv builds the
+// ARRAY_ROWS x NUM_COLS grid from these; the generic multiply below is what
+// yosys -dsp maps to an SB_MAC16 (see pe_pair.sv for the two-PEs-per-DSP iCE40
+// variant, which is 16-bit only -- SB_MAC16's accumulator is a hard 16 bits).
+module pe #(
+    parameter int PSUM_WIDTH = 16
+) (
     input  logic                clk,
     input  logic                reset,
 
@@ -30,8 +34,8 @@ module pe (
     input  logic                in_activation_valid,
     output logic                out_activation_valid,
 
-    input  logic signed [15:0]  in_partial_sum,
-    output logic signed [15:0]  out_partial_sum,
+    input  logic signed [PSUM_WIDTH-1:0]  in_partial_sum,
+    output logic signed [PSUM_WIDTH-1:0]  out_partial_sum,
     input  logic                in_partial_sum_valid,
     output logic                out_partial_sum_valid,
 
@@ -43,13 +47,18 @@ module pe (
     output logic                out_weight_valid
 );
 
+    // Signed zero of the psum width. Deliberately not a bare '0: an unsigned
+    // literal in the MAC's ternary below would make the whole addition
+    // unsigned and silently break sign extension of the product.
+    localparam logic signed [PSUM_WIDTH-1:0] PSUM_ZERO = '0;
+
     logic signed [7:0] weight_reg;
 
     always_ff @(posedge clk) begin
         if (reset) begin
             out_activation        <= 8'sd0;
             out_activation_valid  <= 1'b0;
-            out_partial_sum       <= 16'sd0;
+            out_partial_sum       <= PSUM_ZERO;
             out_partial_sum_valid <= 1'b0;
             out_weight            <= 8'sd0;
             out_weight_valid      <= 1'b0;
@@ -73,7 +82,7 @@ module pe (
                 out_activation_valid <= in_activation_valid;
 
                 if (in_activation_valid) begin
-                    out_partial_sum       <= (weight_reg * in_activation) + (in_partial_sum_valid ? in_partial_sum : 16'sd0);
+                    out_partial_sum       <= (weight_reg * in_activation) + (in_partial_sum_valid ? in_partial_sum : PSUM_ZERO);
                     out_partial_sum_valid <= 1'b1;
                 end else begin
                     out_partial_sum       <= in_partial_sum;
@@ -82,7 +91,7 @@ module pe (
             end else begin
                 out_activation        <= 8'sd0;
                 out_activation_valid  <= 1'b0;
-                out_partial_sum       <= 16'sd0;
+                out_partial_sum       <= PSUM_ZERO;
                 out_partial_sum_valid <= 1'b0;
             end
             
