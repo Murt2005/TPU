@@ -21,6 +21,10 @@ module tpu_top #(
     parameter int NUM_COLS     = 2,
     parameter int M_TILE       = ARRAY_ROWS,
 
+    // Width of the accumulate/bias/result path; also the wire bytes per
+    // bias/result element (PSUM_WIDTH/8). Default 16 = every existing
+    // bitstream. A wider build must keep USE_MAC16_PAIR=0.
+    parameter int PSUM_WIDTH   = 16,
     parameter int USE_SPI      = 0,   // 0 = UART pins, 1 = SPI slave
 
     parameter int USE_MAC16_PAIR = 0
@@ -118,6 +122,7 @@ module tpu_top #(
         .ARRAY_ROWS     (ARRAY_ROWS),
         .NUM_COLS       (NUM_COLS),
         .M_TILE         (M_TILE),
+        .PSUM_WIDTH     (PSUM_WIDTH),
         .USE_MAC16_PAIR (USE_MAC16_PAIR)
     ) u_core (
         .clk      (clk),

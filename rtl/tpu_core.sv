@@ -33,6 +33,10 @@ module tpu_core #(
     parameter int ARRAY_ROWS   = 2,
     parameter int NUM_COLS     = 2,
     parameter int M_TILE       = ARRAY_ROWS,
+    // Width of the accumulate/bias/result path. Default 16 = every existing
+    // build. Widening it changes the host wire format (see tpu_sequencer.sv)
+    // and forces USE_MAC16_PAIR=0.
+    parameter int PSUM_WIDTH   = 16,
     parameter int USE_MAC16_PAIR = 0
 ) (
     input  logic clk,
@@ -68,14 +72,14 @@ module tpu_core #(
     logic              seq_ub_en;
 
     // bias
-    logic signed [NUM_COLS-1:0][15:0] seq_bias;
+    logic signed [NUM_COLS-1:0][PSUM_WIDTH-1:0] seq_bias;
 
     // K-tiling control (accumulator persistent-sum passes)
     logic seq_tile_first, seq_tile_last;
     logic accum_pass_done;
 
     // pipeline final output
-    logic signed [NUM_COLS-1:0][15:0] final_row_out;
+    logic signed [NUM_COLS-1:0][PSUM_WIDTH-1:0] final_row_out;
     logic               final_row_valid;
 
     // soft-reset from sequencer (CMD_RESET)
@@ -89,6 +93,7 @@ module tpu_core #(
         .ARRAY_ROWS   (ARRAY_ROWS),
         .NUM_COLS     (NUM_COLS),
         .M_TILE       (M_TILE),
+        .PSUM_WIDTH   (PSUM_WIDTH),
         .WAIT_TIMEOUT (200)
     ) u_seq (
         .clk              (clk),
@@ -140,15 +145,15 @@ module tpu_core #(
     logic        [NUM_COLS-1:0]      wf_col_valid;
 
     // MMU → accumulator
-    logic signed [NUM_COLS-1:0][15:0] accum_in_data;
+    logic signed [NUM_COLS-1:0][PSUM_WIDTH-1:0] accum_in_data;
     logic        [NUM_COLS-1:0]       accum_in_valid;
 
     // accumulator → bias
-    logic signed [NUM_COLS-1:0][15:0] acc_row_out;
+    logic signed [NUM_COLS-1:0][PSUM_WIDTH-1:0] acc_row_out;
     logic               acc_row_valid;
 
     // bias → activation
-    logic signed [NUM_COLS-1:0][15:0] biased_row;
+    logic signed [NUM_COLS-1:0][PSUM_WIDTH-1:0] biased_row;
     logic               biased_valid;
 
     // Activation write port tied off (single-layer mode)
@@ -204,7 +209,7 @@ module tpu_core #(
         .mmu_in_valid   (skewed_valid)
     );
 
-    mmu #(.ARRAY_ROWS(ARRAY_ROWS), .NUM_COLS(NUM_COLS),
+    mmu #(.ARRAY_ROWS(ARRAY_ROWS), .NUM_COLS(NUM_COLS), .PSUM_WIDTH(PSUM_WIDTH),
           .USE_MAC16_PAIR(USE_MAC16_PAIR)) u_mmu (
         .clk                   (clk),
         .reset                 (dp_reset),
@@ -220,7 +225,7 @@ module tpu_core #(
 
     // accumulator's ROWS_PER_PASS counts output rows per pass — that is M_TILE
     // (one output row per streamed activation row), not the systolic row count.
-    accumulator #(.NUM_COLS(NUM_COLS), .PSUM_WIDTH(16), .FIFO_DEPTH(FIFO_DEPTH), .ROWS_PER_PASS(M_TILE)) u_accum (
+    accumulator #(.NUM_COLS(NUM_COLS), .PSUM_WIDTH(PSUM_WIDTH), .FIFO_DEPTH(FIFO_DEPTH), .ROWS_PER_PASS(M_TILE)) u_accum (
         .clk                  (clk),
         .reset                (dp_reset),
         .in_partial_sum       (accum_in_data),
@@ -233,7 +238,7 @@ module tpu_core #(
         .any_fifo_full        ()
     );
 
-    bias #(.NUM_COLS(NUM_COLS), .PSUM_WIDTH(16)) u_bias (
+    bias #(.NUM_COLS(NUM_COLS), .PSUM_WIDTH(PSUM_WIDTH)) u_bias (
         .clk          (clk),
         .reset        (dp_reset),
         .in_row       (acc_row_out),
@@ -243,7 +248,7 @@ module tpu_core #(
         .out_row_valid(biased_valid)
     );
 
-    activation #(.NUM_COLS(NUM_COLS), .PSUM_WIDTH(16)) u_act (
+    activation #(.NUM_COLS(NUM_COLS), .PSUM_WIDTH(PSUM_WIDTH)) u_act (
         .clk          (clk),
         .reset        (dp_reset),
         .in_row       (biased_row),

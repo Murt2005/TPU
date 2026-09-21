@@ -18,6 +18,8 @@ module tpu_top_hps #(
     parameter int ARRAY_ROWS   = 2,
     parameter int NUM_COLS     = 2,
     parameter int M_TILE       = ARRAY_ROWS,
+    // See rtl/tpu_core.sv -- widening this changes the host wire format.
+    parameter int PSUM_WIDTH   = 16,
     parameter int USE_MAC16_PAIR = 0
 ) (
     input  logic clk,
@@ -77,6 +79,7 @@ module tpu_top_hps #(
         .ARRAY_ROWS     (ARRAY_ROWS),
         .NUM_COLS       (NUM_COLS),
         .M_TILE         (M_TILE),
+        .PSUM_WIDTH     (PSUM_WIDTH),
         .USE_MAC16_PAIR (USE_MAC16_PAIR)
     ) u_core (
         .clk      (clk),

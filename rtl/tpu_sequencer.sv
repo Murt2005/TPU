@@ -34,9 +34,10 @@ import tpu_pkg::*;
 //                             rows to the weight_fifo (see the staggered
 //                             loading contract in weight_fifo.sv).
 //
-//  0x02  LOAD_BIAS     LEN=2*NUM_COLS (4)
-//                             payload: NUM_COLS int16 LE values:
-//                             [b0_lo, b0_hi, b1_lo, b1_hi, ...]
+//  0x02  LOAD_BIAS     LEN=PSUM_BYTES*NUM_COLS (4 at the default
+//                             PSUM_WIDTH=16, where PSUM_BYTES=2)
+//                             payload: NUM_COLS signed LE values, PSUM_BYTES
+//                             bytes each: [b0_lo, b0_hi, b1_lo, b1_hi, ...]
 //
 //  0x03  LOAD_ACT      LEN=M_TILE*ARRAY_ROWS (4)
 //                             payload: activation rows in natural row-major
@@ -45,8 +46,9 @@ import tpu_pkg::*;
 //
 //  0x04  RUN           LEN=0  orchestrates the full pipeline; blocks until
 //                             all M_TILE output rows are collected, then sends:
-//                             STATUS=0xAA, LEN=2*M_TILE*NUM_COLS (8),
-//                             row-major int16 LE results:
+//                             STATUS=0xAA, LEN=PSUM_BYTES*M_TILE*NUM_COLS (8
+//                             at the default PSUM_WIDTH=16), row-major signed
+//                             LE results, PSUM_BYTES bytes per element:
 //                             [r0c0_lo, r0c0_hi, r0c1_lo, r0c1_hi, ...]
 //                      LEN=1  payload: [flags]  -- K-tiling variant:
 //                             flags[0] = TILE_FIRST (1 = overwrite the
@@ -151,6 +153,11 @@ import tpu_pkg::*;
 //  ARRAY_ROWS   — systolic rows = K-tile depth (weight rows; also the width
 //                 of one activation row streamed into the array)
 //  NUM_COLS     — systolic columns = N-tile width (weight columns)
+//  PSUM_WIDTH   — width of the accumulate/bias/result path, and therefore the
+//                 number of wire bytes per bias and result element
+//                 (PSUM_BYTES = PSUM_WIDTH/8). 16 is the historical value; a
+//                 wider build must use the generic pe.sv path, since
+//                 pe_pair.sv's SB_MAC16 accumulator is a hard 16 bits.
 //  M_TILE       — unified_buffer address depth = activation rows streamed per
 //                 RUN. Defaults to ARRAY_ROWS (the historical square case).
 //                 Must equal unified_buffer's ROWS and accumulator's
@@ -163,6 +170,11 @@ module tpu_sequencer #(
     parameter int ARRAY_ROWS   = 2,
     parameter int NUM_COLS     = 2,
     parameter int M_TILE       = ARRAY_ROWS,
+    // Width of the reduction/bias/result path. 16 is the historical value and
+    // what every pico2-ice bitstream is built with. Widening it changes the
+    // WIRE FORMAT: bias and result elements become PSUM_WIDTH/8 bytes LE each,
+    // so tpu_host.py must be told the same width. Must be a multiple of 8.
+    parameter int PSUM_WIDTH   = 16,
     parameter int WAIT_TIMEOUT = 200,
     // Derived; do not override. Address width of the unified_buffer
     // host-write / UB-read ports (matches unified_buffer's
@@ -199,7 +211,7 @@ module tpu_sequencer #(
     output logic        [UB_ADDR_W-1:0]        ub_read_addr,
     output logic                               ub_read_en,
 
-    output logic signed [NUM_COLS-1:0][15:0]   out_bias,
+    output logic signed [NUM_COLS-1:0][PSUM_WIDTH-1:0]   out_bias,
 
     // K-tiling control -- see CMD_RUN above and rtl/accumulator.sv. Held
     // stable for the full RUN orchestration sequence.
@@ -207,7 +219,7 @@ module tpu_sequencer #(
     output logic               tile_last,
     input  logic               accum_pass_done,
 
-    input  logic signed [NUM_COLS-1:0][15:0] final_row_out,
+    input  logic signed [NUM_COLS-1:0][PSUM_WIDTH-1:0] final_row_out,
     input  logic               final_row_valid,
 
     output logic               tpu_reset,
@@ -227,17 +239,31 @@ module tpu_sequencer #(
     // Frame payload sizes (bytes). The RX payload buffer must hold the
     // largest fixed-shape command (RUN_TILE: flags + weights + acts); floor
     // of 8 keeps headroom for short unknown commands at tiny geometries.
+    localparam int PSUM_BYTES    = PSUM_WIDTH / 8;          // wire bytes/element
     localparam int W_BYTES       = ARRAY_ROWS * NUM_COLS;   // LOAD_WEIGHTS
     localparam int A_BYTES       = M_TILE * ARRAY_ROWS;     // LOAD_ACT
-    localparam int B_BYTES       = 2 * NUM_COLS;            // LOAD_BIAS
+    localparam int B_BYTES       = PSUM_BYTES * NUM_COLS;   // LOAD_BIAS
     localparam int RT_BYTES      = 1 + W_BYTES + A_BYTES;   // RUN_TILE
     localparam int TILE_BYTES    = W_BYTES + A_BYTES;       // one STREAM_RUN tile
     localparam int MAX_RTB       = (RT_BYTES > B_BYTES) ? RT_BYTES : B_BYTES;
     localparam int PAYLOAD_BYTES = (MAX_RTB > 8) ? MAX_RTB : 8;
 
-    // RUN response: STATUS + LEN + int16 LE result matrix, row-major
-    localparam int RESULT_BYTES = 2 * M_TILE * NUM_COLS;
+    // RUN response: STATUS + LEN + PSUM_BYTES-wide LE result matrix, row-major
+    localparam int RESULT_BYTES = PSUM_BYTES * M_TILE * NUM_COLS;
     localparam int TX_BYTES     = 2 + RESULT_BYTES;
+
+    // LEN is a single byte, so both directions cap at 255 payload bytes
+    // (docs/protocol.md §1). Widening PSUM_WIDTH shrinks the largest shape
+    // that fits, so catch it at elaboration rather than as a truncated LEN.
+    if (PSUM_WIDTH % 8 != 0) begin : gen_psum_width_check
+        $error("PSUM_WIDTH must be a multiple of 8 (got %0d)", PSUM_WIDTH);
+    end
+    if (RESULT_BYTES > 255) begin : gen_result_bytes_check
+        $error("RESULT_BYTES=%0d exceeds the 255-byte LEN cap", RESULT_BYTES);
+    end
+    if (B_BYTES > 255) begin : gen_bias_bytes_check
+        $error("LOAD_BIAS payload=%0d exceeds the 255-byte LEN cap", B_BYTES);
+    end
 
     // Persistent register file (survives across commands)
     // reg_weights is stored in NATURAL row-major order (row 0 = top row);
@@ -246,12 +272,12 @@ module tpu_sequencer #(
     // §5).
     logic signed [7:0]  reg_weights [ARRAY_ROWS][NUM_COLS];
     logic signed [7:0]  reg_act     [M_TILE][ARRAY_ROWS];
-    logic signed [15:0] reg_bias    [NUM_COLS];
+    logic signed [PSUM_WIDTH-1:0] reg_bias    [NUM_COLS];
     logic               reg_tile_first;
     logic               reg_tile_last;
 
     // Results captured from pipeline, one row per final_row_valid pulse
-    logic signed [15:0] result_rows [M_TILE][NUM_COLS];
+    logic signed [PSUM_WIDTH-1:0] result_rows [M_TILE][NUM_COLS];
 
     // FSM states
     typedef enum logic [4:0] {
@@ -488,10 +514,12 @@ module tpu_sequencer #(
                             state         <= S_TX_STATUS;
                         end
 
-                        // LOAD_BIAS: unpack NUM_COLS signed 16-bit LE values
+                        // LOAD_BIAS: unpack NUM_COLS signed PSUM_WIDTH-bit
+                        // little-endian values (PSUM_BYTES bytes each)
                         CMD_LOAD_BIAS: begin
                             for (int c = 0; c < NUM_COLS; c++)
-                                reg_bias[c] <= signed'({payload[2*c+1], payload[2*c]});
+                                for (int b = 0; b < PSUM_BYTES; b++)
+                                    reg_bias[c][8*b +: 8] <= payload[PSUM_BYTES*c + b];
                             tx_payload[0] <= STATUS_OK;
                             tx_payload[1] <= 8'h00;
                             tx_len_reg    <= 8'd2;
@@ -655,14 +683,15 @@ module tpu_sequencer #(
                     if (reg_tile_last) begin
                         if (rows_got == ROWS_GOT_W'(M_TILE)) begin
                             stream_active <= 1'b0;
-                            // Pack response: STATUS_OK, LEN, row-major int16 LE
+                            // Pack response: STATUS_OK, LEN, row-major LE,
+                            // PSUM_BYTES bytes per element
                             tx_payload[0] <= STATUS_OK;
                             tx_payload[1] <= 8'(RESULT_BYTES);
                             for (int m = 0; m < M_TILE; m++)
-                                for (int c = 0; c < NUM_COLS; c++) begin
-                                    tx_payload[2 + 2*(m*NUM_COLS + c)]     <= result_rows[m][c][7:0];
-                                    tx_payload[2 + 2*(m*NUM_COLS + c) + 1] <= result_rows[m][c][15:8];
-                                end
+                                for (int c = 0; c < NUM_COLS; c++)
+                                    for (int b = 0; b < PSUM_BYTES; b++)
+                                        tx_payload[2 + PSUM_BYTES*(m*NUM_COLS + c) + b]
+                                            <= result_rows[m][c][8*b +: 8];
                             tx_len_reg    <= 8'(TX_BYTES);
                             tx_byte_idx   <= 8'd0;
                             state         <= S_TX_STATUS;
