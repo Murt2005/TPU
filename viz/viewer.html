@@ -1,0 +1,445 @@
+<title>Systolic Wavefront</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+  :root{
+    --bg:#F5F6F8; --surface:#FFFFFF; --sunken:#EDEFF3;
+    --ink:#171C24; --muted:#6B7684; --line:#DCE0E6; --line-strong:#C3C9D2;
+    --weight:#6B5BD2; --weight-soft:#EEEBFB;
+    --act:#C4661F;   --act-soft:#FBEEE1;
+    --psum:#127C7C;  --psum-soft:#DCF0EF;
+    --ok:#2F7D4F;
+    --sans:"IBM Plex Sans",ui-sans-serif,system-ui,sans-serif;
+    --mono:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,monospace;
+  }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      --bg:#12161C; --surface:#1A1F27; --sunken:#151A21;
+      --ink:#E4E8EE; --muted:#8C97A6; --line:#2A313B; --line-strong:#3C4552;
+      --weight:#A99BF2; --weight-soft:#272341;
+      --act:#E8A25E;   --act-soft:#3A2A19;
+      --psum:#4FC4C0;  --psum-soft:#12312F;
+      --ok:#6BC28C;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#12161C; --surface:#1A1F27; --sunken:#151A21;
+    --ink:#E4E8EE; --muted:#8C97A6; --line:#2A313B; --line-strong:#3C4552;
+    --weight:#A99BF2; --weight-soft:#272341;
+    --act:#E8A25E;   --act-soft:#3A2A19;
+    --psum:#4FC4C0;  --psum-soft:#12312F;
+    --ok:#6BC28C;
+  }
+
+  body{background:var(--bg);color:var(--ink);font-family:var(--sans);
+       padding-inline:16px;padding-block:24px 40px;line-height:1.5;}
+  .wrap{max-width:1180px;margin:0 auto;}
+
+  header{display:flex;flex-wrap:wrap;gap:12px 24px;align-items:baseline;
+         padding-bottom:16px;border-bottom:1px solid var(--line);margin-bottom:20px;}
+  h1{font-size:1.45rem;font-weight:600;margin:0;letter-spacing:-.01em;}
+  .sub{color:var(--muted);font-size:.875rem;max-width:62ch;margin:0;}
+
+  .legend{display:flex;flex-wrap:wrap;gap:6px 16px;margin-left:auto;font-size:.78rem;}
+  .key{display:flex;align-items:center;gap:6px;color:var(--muted);white-space:nowrap;}
+  .dot{width:9px;height:9px;border-radius:2px;flex:none;}
+
+  .cols{display:grid;grid-template-columns:minmax(0,260px) minmax(0,1fr);gap:24px;align-items:start;}
+  @media (max-width:860px){.cols{grid-template-columns:minmax(0,1fr);}}
+
+  .panel{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:16px;}
+  .panel + .panel{margin-top:16px;}
+  h2{font-size:.72rem;font-weight:600;text-transform:uppercase;letter-spacing:.09em;
+     color:var(--muted);margin:0 0 10px;}
+
+  .mx{display:grid;gap:4px;}
+  .mx input{width:100%;min-width:0;font-family:var(--mono);font-size:.82rem;text-align:center;
+            padding:6px 2px;border:1px solid var(--line);border-radius:4px;
+            background:var(--sunken);color:var(--ink);font-variant-numeric:tabular-nums;}
+  .mx input:focus{outline:2px solid var(--weight);outline-offset:-1px;}
+  .mx.w input:focus{outline-color:var(--weight);}
+  select{width:100%;font-family:var(--sans);font-size:.82rem;padding:7px 8px;
+         border:1px solid var(--line-strong);border-radius:6px;
+         background:var(--surface);color:var(--ink);}
+  select:focus-visible{outline:2px solid var(--act);outline-offset:2px;}
+  .rowlab{font-family:var(--mono);font-size:.68rem;color:var(--muted);}
+
+  .btns{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px;}
+  button{font-family:var(--sans);font-size:.82rem;font-weight:500;padding:7px 12px;
+         border:1px solid var(--line-strong);border-radius:6px;background:var(--surface);
+         color:var(--ink);cursor:pointer;}
+  button:hover{background:var(--sunken);}
+  button:focus-visible{outline:2px solid var(--act);outline-offset:2px;}
+  button.primary{background:var(--ink);color:var(--bg);border-color:var(--ink);}
+  button.primary:hover{opacity:.88;}
+
+  .stage{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:12px;}
+  .svgwrap{overflow-x:auto;}
+  svg{display:block;width:100%;height:auto;min-width:540px;}
+
+  .transport{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-top:12px;
+             padding-top:12px;border-top:1px solid var(--line);}
+  input[type=range]{flex:1 1 220px;min-width:160px;accent-color:var(--act);}
+  .readout{font-family:var(--mono);font-size:.82rem;color:var(--muted);
+           font-variant-numeric:tabular-nums;white-space:nowrap;}
+  .phase{font-family:var(--mono);font-size:.72rem;font-weight:500;padding:3px 8px;
+         border-radius:999px;border:1px solid var(--line-strong);white-space:nowrap;}
+  .phase[data-p="LOADING"]{background:var(--weight-soft);color:var(--weight);border-color:transparent;}
+  .phase[data-p="STREAM"]{background:var(--act-soft);color:var(--act);border-color:transparent;}
+  .phase[data-p="WAIT"]{background:var(--psum-soft);color:var(--psum);border-color:transparent;}
+
+  .note{font-size:.8rem;color:var(--muted);margin:10px 0 0;}
+  .note b{color:var(--ink);font-weight:500;}
+  .verdict{font-family:var(--mono);font-size:.78rem;margin-top:8px;}
+  .verdict.good{color:var(--ok);}
+
+  text{font-family:var(--mono);}
+  .lbl{font-family:var(--sans);font-size:10px;fill:var(--muted);
+       text-transform:uppercase;letter-spacing:.08em;}
+  @media (prefers-reduced-motion:reduce){*{transition:none!important;}}
+  .cell,.flowline,.chip{transition:fill .12s linear,opacity .12s linear,stroke .12s linear;}
+</style>
+
+<div class="wrap">
+<header>
+  <div>
+    <h1>Systolic Wavefront</h1>
+    <p class="sub">A weight-stationary systolic array, one <code>RUN_TILE</code> at a time. Pick a shape, edit the matrices, then step the clock and watch activations sweep right while partial sums fall.</p>
+  </div>
+  <div class="legend">
+    <span class="key"><span class="dot" style="background:var(--weight)"></span>stationary weight</span>
+    <span class="key"><span class="dot" style="background:var(--act)"></span>activation &rarr;</span>
+    <span class="key"><span class="dot" style="background:var(--psum)"></span>partial sum &darr;</span>
+  </div>
+</header>
+
+<div class="cols">
+  <div>
+    <div class="panel">
+      <h2><label for="shape">Array shape</label></h2>
+      <select id="shape">
+        <option value="2,2,2">2&times;2 &middot; M_TILE 2</option>
+        <option value="2,4,2">2&times;4 &middot; M_TILE 2</option>
+        <option value="4,2,3">4&times;2 &middot; M_TILE 3</option>
+        <option value="4,4,2">4&times;4 &middot; M_TILE 2</option>
+        <option value="4,4,4" selected>4&times;4 &middot; M_TILE 4</option>
+        <option value="8,8,4">8&times;8 &middot; M_TILE 4</option>
+      </select>
+      <h2 style="margin-top:14px" id="hw">Weights &middot; W</h2>
+      <div class="mx w" id="mw"></div>
+      <h2 style="margin-top:14px" id="ha">Activations &middot; A</h2>
+      <div class="mx" id="ma"></div>
+      <h2 style="margin-top:14px" id="hb">Bias</h2>
+      <div class="mx" id="mb"></div>
+      <div class="btns">
+        <button class="primary" id="run">Run</button>
+        <button id="rand">Randomize</button>
+        <button id="ident">Identity W</button>
+      </div>
+      <p class="note">int8 in, int16 accumulate. The accumulator <b>wraps</b> rather than saturating, so large values fold &mdash; that is the hardware, not a bug here.</p>
+    </div>
+    <div class="panel">
+      <h2>Result &middot; ReLU(A&middot;W + bias)</h2>
+      <div class="mx" id="mr"></div>
+      <div class="verdict" id="verdict"></div>
+    </div>
+  </div>
+
+  <div>
+    <div class="stage">
+      <div class="svgwrap"><svg id="svg" viewBox="0 0 660 470" role="img" aria-label="Datapath animation"></svg></div>
+      <div class="transport">
+        <button id="play">Play</button>
+        <button id="back" aria-label="Step back">&minus;1</button>
+        <button id="fwd" aria-label="Step forward">+1</button>
+        <input type="range" id="scrub" min="0" max="0" value="0" aria-label="Clock cycle">
+        <span class="readout" id="cyc">cycle 0</span>
+        <span class="phase" id="phase" data-p="IDLE">IDLE</span>
+      </div>
+      <p class="note" id="explain"></p>
+    </div>
+  </div>
+</div>
+</div>
+
+<script type="module">
+import { simulate, golden } from "./model.mjs";
+
+const SVG = "http://www.w3.org/2000/svg";
+const $ = (id) => document.getElementById(id);
+
+let R = 4, C = 4, M = 4;          // current shape
+let trace = null, frame = 0, timer = null;
+let cells, wTxt, aTxt, pTxt, rowIn, accChip, biasChip, actChip;
+
+/* ---------- matrix inputs ---------- */
+function fill(host, n, cols, vals, labelPrefix) {
+  host.style.gridTemplateColumns = `repeat(${cols},minmax(0,1fr))`;
+  host.innerHTML = "";
+  for (let i = 0; i < n; i++) {
+    const el = document.createElement("input");
+    el.type = "number";
+    el.value = vals[i];
+    el.id = `${host.id}_${i}`;
+    el.setAttribute("aria-label", `${labelPrefix} ${i}`);
+    host.appendChild(el);
+  }
+}
+const readVals = (host, n) =>
+  Array.from({ length: n }, (_, i) => {
+    const el = document.getElementById(`${host.id}_${i}`);
+    const v = parseInt(el ? el.value : "0", 10);
+    return Number.isFinite(v) ? Math.max(-128, Math.min(127, v)) : 0;
+  });
+
+/* A deterministic starting example, so every shape opens on real content
+   rather than zeros. Small values keep the int16 accumulator well clear of
+   wrapping, which would otherwise be the first thing a newcomer hit. */
+function seedW(r, c) { return ((r * 3 + c * 2) % 7) - 2; }
+function seedA(m, k) { return ((m * 2 + k * 3) % 5) - 1; }
+
+function buildMatrices() {
+  $("hw").innerHTML = `Weights &middot; W (${R}&times;${C})`;
+  $("ha").innerHTML = `Activations &middot; A (${M}&times;${R})`;
+  $("hb").innerHTML = `Bias (${C})`;
+  const w = [], a = [], b = [];
+  for (let r = 0; r < R; r++) for (let c = 0; c < C; c++) w.push(seedW(r, c));
+  for (let m = 0; m < M; m++) for (let k = 0; k < R; k++) a.push(seedA(m, k));
+  for (let c = 0; c < C; c++) b.push((c + 1) * 10);
+  fill($("mw"), R * C, C, w, "weight");
+  fill($("ma"), M * R, R, a, "activation");
+  fill($("mb"), C, C, b, "bias");
+}
+
+function showResult(mat) {
+  const host = $("mr");
+  host.style.gridTemplateColumns = `repeat(${C},minmax(0,1fr))`;
+  host.innerHTML = "";
+  for (let r = 0; r < M; r++)
+    for (let c = 0; c < C; c++) {
+      const el = document.createElement("input");
+      el.value = mat ? mat[r][c] : "";
+      el.readOnly = true; el.tabIndex = -1;
+      el.style.color = "var(--psum)";
+      host.appendChild(el);
+    }
+}
+
+/* ---------- SVG stage, sized from the shape ---------- */
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+function buildStage() {
+  const svg = $("svg");
+  svg.innerHTML = "";
+  cells = []; wTxt = []; aTxt = []; pTxt = []; rowIn = [];
+  accChip = []; biasChip = []; actChip = [];
+
+  // Cells shrink as the array grows so a big shape still fits one screen;
+  // the floors keep the numbers inside them legible.
+  const CW = clamp(Math.round(400 / C), 48, 112);
+  const CH = clamp(Math.round(300 / R), 42, 82);
+  const RAIL = 150;                       // left rail: skewed activations in
+  const GX = RAIL + 82, GY = 92;
+  const ACCY = GY + R * CH + 40;
+  const VW = GX + C * CW + 16;
+  const VH = ACCY + 96 + 16;
+  svg.setAttribute("viewBox", `0 0 ${VW} ${VH}`);
+  svg.style.minWidth = Math.min(VW, 560) + "px";
+
+  const fCell = clamp(Math.round(CW / 6), 10, 15);   // activation value
+  const fSmall = clamp(Math.round(CW / 9), 8, 11);   // weight + psum
+
+  const mk = (tag, attrs, parent = svg) => {
+    const e = document.createElementNS(SVG, tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]);
+    parent.appendChild(e);
+    return e;
+  };
+  const label = (x, y, s, anchor = "start") => {
+    const t = mk("text", { x, y, class: "lbl", "text-anchor": anchor });
+    t.textContent = s;
+    return t;
+  };
+
+  const defs = mk("defs", {});
+  const mrk = mk("marker", { id: "ar", viewBox: "0 0 8 8", refX: 7, refY: 4,
+                             markerWidth: 6, markerHeight: 6, orient: "auto" }, defs);
+  mk("path", { d: "M0 0 L8 4 L0 8 z", fill: "var(--line-strong)" }, mrk);
+
+  label(16, GY - 24, "Unified buffer \u2192 skew");
+  label(GX, GY - 24, `Systolic array \u00b7 ${R}\u00d7${C} PEs`);
+  label(GX, ACCY + 96 - 4, "Accumulator \u2192 bias \u2192 ReLU");
+
+  for (let r = 0; r < R; r++) {
+    const y = GY + r * CH, h = Math.min(34, CH - 8);
+    const cy = y + (CH - 8) / 2;
+    mk("rect", { x: RAIL - 58, y: cy - h / 2, width: 58, height: h, rx: 5,
+                 fill: "var(--sunken)", stroke: "var(--line)" });
+    const t = mk("text", { x: RAIL - 29, y: cy + fCell / 3, "text-anchor": "middle",
+                           "font-size": fCell, fill: "var(--muted)" });
+    t.textContent = "\u00b7";
+    rowIn.push(t);
+    mk("path", { d: `M${RAIL + 4} ${cy} H ${GX - 6}`, class: "flowline",
+                 stroke: "var(--line-strong)", "stroke-width": 1.4, fill: "none",
+                 "marker-end": "url(#ar)" });
+    const rl = mk("text", { x: RAIL - 66, y: cy + 3, "text-anchor": "end",
+                            "font-size": fSmall, fill: "var(--muted)" });
+    rl.textContent = `row ${r}`;
+  }
+
+  for (let r = 0; r < R; r++) {
+    cells.push([]); wTxt.push([]); aTxt.push([]); pTxt.push([]);
+    for (let c = 0; c < C; c++) {
+      const x = GX + c * CW, y = GY + r * CH;
+      const w = CW - 8, h = CH - 8;
+      cells[r].push(mk("rect", { x, y, width: w, height: h, rx: 5,
+                                 fill: "var(--sunken)", stroke: "var(--line)",
+                                 "stroke-width": 1, class: "cell" }));
+      const wt = mk("text", { x: x + 6, y: y + fSmall + 4, "font-size": fSmall,
+                              fill: "var(--weight)", "font-weight": 600 });
+      wt.textContent = "\u00b7"; wTxt[r].push(wt);
+      const at = mk("text", { x: x + w / 2, y: y + h / 2 + fCell / 3,
+                              "text-anchor": "middle", "font-size": fCell,
+                              fill: "var(--ink)", "font-weight": 500 });
+      at.textContent = ""; aTxt[r].push(at);
+      const pt = mk("text", { x: x + w - 5, y: y + h - 5, "text-anchor": "end",
+                              "font-size": fSmall, fill: "var(--psum)" });
+      pt.textContent = ""; pTxt[r].push(pt);
+    }
+  }
+
+  for (let c = 0; c < C; c++) {
+    const x = GX + c * CW, g = [];
+    [0, 30, 60].forEach((dy) => {
+      mk("rect", { x, y: ACCY + dy, width: CW - 8, height: 24, rx: 4,
+                   fill: "var(--sunken)", stroke: "var(--line)", class: "chip" });
+      const t = mk("text", { x: x + (CW - 8) / 2, y: ACCY + dy + 16,
+                             "text-anchor": "middle", "font-size": fSmall + 1,
+                             fill: "var(--muted)" });
+      t.textContent = "\u00b7"; g.push(t);
+    });
+    accChip.push(g[0]); biasChip.push(g[1]); actChip.push(g[2]);
+  }
+  ["PSUM", "+bias", "ReLU"].forEach((s2, i) =>
+    label(GX - 10, ACCY + i * 30 + 16, s2, "end"));
+}
+
+/* ---------- run + playback ---------- */
+function run() {
+  const wf = readVals($("mw"), R * C);
+  const af = readVals($("ma"), M * R);
+  const bf = readVals($("mb"), C);
+  const W = Array.from({ length: R }, (_, r) => wf.slice(r * C, r * C + C));
+  const A = Array.from({ length: M }, (_, m) => af.slice(m * R, m * R + R));
+  const shape = { rows: R, cols: C, m_tile: M };
+  trace = simulate(W, A, bf, shape);
+  const want = golden(W, A, bf, shape);
+  showResult(want);
+
+  const got = [];
+  for (const f of trace.cycles) if (f.act.valid) got.push(f.act.row.slice());
+  const ok = got.length === M && got.every((row, i) => row.every((v, j) => v === want[i][j]));
+  const v = $("verdict");
+  v.textContent = ok
+    ? `\u2713 array emitted all ${M} rows, matching the reference`
+    : `emitted ${got.length}/${M} rows`;
+  v.className = "verdict" + (ok ? " good" : "");
+
+  $("scrub").max = trace.cycles.length - 1;
+  const first = trace.cycles.findIndex((f) => f.pe.some((row) => row.some((pp) => pp.av)));
+  setFrame(first >= 0 ? Math.min(first + 3, trace.cycles.length - 1) : 0);
+}
+
+const EXPLAIN = {
+  IDLE:   "Idle \u2014 waiting for the command frame.",
+  LD_WF:  "Weights queued into the weight FIFO, bottom row first.",
+  LOADING:"<b>Loading phase.</b> Weight rows propagate down the columns, one per cycle, bottom-first \u2014 so each PE captures its own row's weight on the right cycle. The activation path is held idle.",
+  STREAM: "<b>Streaming.</b> Activation rows leave the unified buffer and are skewed: row <i>i</i> arrives <i>i</i> cycles late, so the diagonal wavefront meets the right weights.",
+  WAIT:   "<b>Draining.</b> The last activations sweep out; column FIFOs reassemble the time-skewed partial sums into whole rows, then bias and ReLU fire.",
+};
+
+function setFrame(i) {
+  if (!trace) return;
+  frame = Math.max(0, Math.min(i, trace.cycles.length - 1));
+  const f = trace.cycles[frame];
+  $("scrub").value = frame;
+  $("cyc").textContent = `cycle ${String(frame).padStart(2, " ")}`;
+  $("phase").textContent = f.state;
+  $("phase").dataset.p = f.state;
+  $("explain").innerHTML = EXPLAIN[f.state] || "";
+
+  for (let r = 0; r < R; r++) {
+    rowIn[r].textContent = f.sds.valid[r] ? f.sds.row[r] : "\u00b7";
+    rowIn[r].setAttribute("fill", f.sds.valid[r] ? "var(--act)" : "var(--muted)");
+    for (let c = 0; c < C; c++) {
+      const pp = f.pe[r][c], cell = cells[r][c];
+      wTxt[r][c].textContent = pp.w;
+      aTxt[r][c].textContent = pp.av ? pp.a : "";
+      pTxt[r][c].textContent = pp.pv ? pp.p : "";
+      cell.setAttribute("fill", pp.av ? "var(--act-soft)"
+                                      : pp.pv ? "var(--psum-soft)" : "var(--sunken)");
+      cell.setAttribute("stroke", pp.av ? "var(--act)"
+                                        : pp.pv ? "var(--psum)" : "var(--line)");
+      cell.setAttribute("stroke-width", pp.av || pp.pv ? 1.6 : 1);
+    }
+  }
+  const put = (chips, row, valid, color) => {
+    for (let c = 0; c < C; c++) {
+      chips[c].textContent = valid ? row[c] : "\u00b7";
+      chips[c].setAttribute("fill", valid ? color : "var(--muted)");
+      chips[c].setAttribute("font-weight", valid ? 600 : 400);
+    }
+  };
+  put(accChip, f.accum.row, f.accum.valid, "var(--psum)");
+  put(biasChip, f.bias.row, f.bias.valid, "var(--psum)");
+  put(actChip, f.act.row, f.act.valid, "var(--ok)");
+}
+
+function stop() {
+  if (timer) { clearInterval(timer); timer = null; }
+  $("play").textContent = "Play";
+}
+
+function reshape() {
+  const [r, c, m] = $("shape").value.split(",").map(Number);
+  R = r; C = c; M = m;
+  stop();
+  buildMatrices();
+  buildStage();
+  run();
+}
+
+$("play").onclick = () => {
+  if (timer) return stop();
+  $("play").textContent = "Pause";
+  timer = setInterval(() => {
+    if (frame >= trace.cycles.length - 1) return stop();
+    setFrame(frame + 1);
+  }, 260);
+};
+$("back").onclick = () => { stop(); setFrame(frame - 1); };
+$("fwd").onclick = () => { stop(); setFrame(frame + 1); };
+$("scrub").oninput = (e) => { stop(); setFrame(+e.target.value); };
+$("run").onclick = () => { stop(); run(); };
+$("shape").onchange = reshape;
+$("rand").onclick = () => {
+  const ri = () => Math.floor(Math.random() * 19) - 9;
+  fill($("mw"), R * C, C, Array.from({ length: R * C }, ri), "weight");
+  fill($("ma"), M * R, R, Array.from({ length: M * R }, ri), "activation");
+  fill($("mb"), C, C, Array.from({ length: C }, () => Math.floor(Math.random() * 80) - 20), "bias");
+  stop(); run();
+};
+$("ident").onclick = () => {
+  const w = [];
+  for (let r = 0; r < R; r++) for (let c = 0; c < C; c++) w.push(r === c ? 1 : 0);
+  fill($("mw"), R * C, C, w, "weight");
+  stop(); run();
+};
+document.addEventListener("keydown", (e) => {
+  if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
+  if (e.key === "ArrowRight") { stop(); setFrame(frame + 1); }
+  if (e.key === "ArrowLeft") { stop(); setFrame(frame - 1); }
+  if (e.key === " ") { e.preventDefault(); $("play").click(); }
+});
+
+reshape();
+</script>
