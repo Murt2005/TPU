@@ -263,15 +263,20 @@ lint: $(SB_MAC16_SIM)
 # the shipped shape, 4_4_2 kept as the M_TILE-axis variant. 8_8_8_uart is the
 # DE1-SoC scale-up shape (64 PEs, generic-fabric multiply) — sim-only proof
 # that the datapath parameterizes past the iCE40's 8-DSP ceiling.
+# A trailing 32 on the PHY field selects PSUM_WIDTH=32 (default 16): the wide
+# reduction path, whose bias/result elements are 4 wire bytes each. 8_8_4_uart32
+# is the shape a transformer-sized K needs -- M_TILE=4 keeps the result frame
+# at 128 bytes, inside the 1-byte LEN cap that 8x8/M_TILE=8 would blow at 256.
 VERILATE_SHAPES := 2_2_2_uart 2_4_2_uart 4_2_3_uart 2_4_2_spi 4_4_2_spipair 4_4_4_spipair \
-                   8_8_8_uart
+                   8_8_8_uart 2_2_2_uart32 4_4_2_spi32 8_8_4_uart32
 
 verilate-test: $(SB_MAC16_SIM) | $(SIM_DIR)
 	@set -e; for shape in $(VERILATE_SHAPES); do \
 		rows=$${shape%%_*}; rest=$${shape#*_}; \
 		cols=$${rest%%_*}; rest=$${rest#*_}; \
 		mt=$${rest%%_*}; phy=$${rest#*_}; \
-		objdir=$(SIM_DIR)/verilator/$${rows}x$${cols}m$${mt}_$${phy}; \
+		psum=16; case "$$phy" in *32) psum=32; phy=$${phy%32};; esac; \
+		objdir=$(SIM_DIR)/verilator/$${rows}x$${cols}m$${mt}_$${phy}p$${psum}; \
 		mkdir -p $$objdir; \
 		phyflags=""; phycflags=""; \
 		if [ "$$phy" = "spi" ]; then \
@@ -281,13 +286,13 @@ verilate-test: $(SB_MAC16_SIM) | $(SIM_DIR)
 		fi; \
 		fd=4; m=$$rows; [ $$mt -gt $$m ] && m=$$mt; \
 		while [ $$fd -lt $$m ]; do fd=$$((fd*2)); done; \
-		echo "=== verilate $${rows}x$${cols} M_TILE=$${mt} FIFO_DEPTH=$${fd} ($${phy}) ==="; \
+		echo "=== verilate $${rows}x$${cols} M_TILE=$${mt} FIFO_DEPTH=$${fd} PSUM=$${psum} ($${phy}) ==="; \
 		$(VERILATOR) --cc --exe --build -j 0 -Wall \
 			--Mdir $$objdir verilator.vlt \
 			--top-module tpu_top \
 			-GCLK_FREQ=12000000 -GBAUD_RATE=1000000 -GFIFO_DEPTH=$$fd \
-			-GARRAY_ROWS=$$rows -GNUM_COLS=$$cols -GM_TILE=$$mt $$phyflags \
-			-CFLAGS "-std=c++17 -DTB_ROWS=$$rows -DTB_COLS=$$cols -DTB_MTILE=$$mt $$phycflags" \
+			-GARRAY_ROWS=$$rows -GNUM_COLS=$$cols -GM_TILE=$$mt -GPSUM_WIDTH=$$psum $$phyflags \
+			-CFLAGS "-std=c++17 -DTB_ROWS=$$rows -DTB_COLS=$$cols -DTB_MTILE=$$mt -DTB_PSUM_WIDTH=$$psum $$phycflags" \
 			$(SB_MAC16_SIM) $(RTL_DIR)/*.sv $(TEST_DIR)/verilator/tb_tpu_top.cpp \
 			-o tb_tpu_top > /dev/null; \
 		$$objdir/tb_tpu_top; \

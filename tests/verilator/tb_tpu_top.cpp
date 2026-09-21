@@ -40,6 +40,9 @@
 #ifndef TB_MTILE
 #define TB_MTILE 2
 #endif
+#ifndef TB_PSUM_WIDTH
+#define TB_PSUM_WIDTH 16
+#endif
 
 // Must match the -GCLK_FREQ/-GBAUD_RATE the model was verilated with.
 static constexpr int TICKS_PER_BIT = 12;
@@ -47,10 +50,15 @@ static constexpr int TICKS_PER_BIT = 12;
 static constexpr int ROWS   = TB_ROWS;   // ARRAY_ROWS: K-tile depth
 static constexpr int COLS   = TB_COLS;   // NUM_COLS:   N-tile width
 static constexpr int MTILE  = TB_MTILE;  // M rows per RUN
+// PSUM_WIDTH the model was verilated with. Sets the wire bytes per bias and
+// result element, and the width the accumulator's non-saturating sum wraps
+// at -- both of which the golden model below has to match exactly.
+static constexpr int PSUM_W     = TB_PSUM_WIDTH;
+static constexpr int PSUM_BYTES = PSUM_W / 8;
 
 static constexpr int W_BYTES      = ROWS * COLS;
 static constexpr int A_BYTES      = MTILE * ROWS;
-static constexpr int RESULT_BYTES = 2 * MTILE * COLS;
+static constexpr int RESULT_BYTES = PSUM_BYTES * MTILE * COLS;
 static constexpr int TILE_BYTES   = W_BYTES + A_BYTES;
 static constexpr int MAX_STREAM_TILES = (255 - 2) / TILE_BYTES;
 
@@ -61,6 +69,16 @@ static constexpr uint8_t CMD_RUN          = 0x04;
 static constexpr uint8_t CMD_RESET        = 0x05;
 static constexpr uint8_t CMD_RUN_TILE     = 0x06;
 static constexpr uint8_t CMD_STREAM_RUN   = 0x07;
+
+static constexpr uint8_t FLAG_TILE_FIRST = 0x01;
+static constexpr uint8_t FLAG_TILE_LAST  = 0x02;
+static constexpr uint8_t FLAG_ACT_BYPASS = 0x04;
+
+static inline uint8_t mk_flags(bool first, bool last, bool bypass) {
+    return (uint8_t)((first ? FLAG_TILE_FIRST : 0) |
+                     (last ? FLAG_TILE_LAST : 0) |
+                     (bypass ? FLAG_ACT_BYPASS : 0));
+}
 
 static constexpr int STATUS_OK  = 0xAA;
 static constexpr int STATUS_ERR = 0xFF;
@@ -74,15 +92,31 @@ using Bytes = std::vector<uint8_t>;
 // accumulator/bias sum wraps silently at int16 (non-saturating), and ReLU is
 // applied AFTER that truncation.
 // ---------------------------------------------------------------------------
-static Mat golden(const Mat& a, const Mat& w, const Vec& bias) {
+// Wrap a sum into PSUM_W bits, signed -- the accumulator does not saturate.
+static long long wrap_psum(long long s) {
+    if (PSUM_W >= 64) return s;
+    const unsigned long long span = 1ULL << PSUM_W;
+    unsigned long long u = (unsigned long long)s & (span - 1);
+    return (u & (span >> 1)) ? (long long)u - (long long)span : (long long)u;
+}
+
+// What a 16-bit accumulator would have done with the same sum -- used only to
+// make the wide-PSUM test's message concrete.
+static long long wrap_psum_16(long long s) {
+    return (long long)(int16_t)(uint16_t)(s & 0xFFFF);
+}
+
+// relu=false models the flags[2] ACT_BYPASS path: the wrapped sum is returned
+// as-is, with no clamp.
+static Mat golden(const Mat& a, const Mat& w, const Vec& bias, bool relu = true) {
     size_t m = a.size(), k = w.size(), n = w[0].size();
     Mat out(m, std::vector<int>(n));
     for (size_t i = 0; i < m; i++) {
         for (size_t j = 0; j < n; j++) {
             long long s = bias[j];
             for (size_t x = 0; x < k; x++) s += (long long)a[i][x] * w[x][j];
-            int16_t wrapped = (int16_t)(uint16_t)(s & 0xFFFF);
-            out[i][j] = wrapped > 0 ? wrapped : 0;
+            long long wrapped = wrap_psum(s);
+            out[i][j] = (int)(relu && wrapped < 0 ? 0 : wrapped);
         }
     }
     return out;
@@ -224,12 +258,11 @@ struct Tb {
         return send_cmd(CMD_LOAD_WEIGHTS, p, resp) == STATUS_OK;
     }
 
-    bool load_bias(const Vec& b) {      // COLS int16 LE
+    bool load_bias(const Vec& b) {      // COLS signed LE, PSUM_BYTES each
         Bytes p;
         for (int c = 0; c < COLS; c++) {
-            uint16_t v = (uint16_t)(int16_t)b[c];
-            p.push_back(v & 0xFF);
-            p.push_back(v >> 8);
+            uint64_t v = (uint64_t)(int64_t)b[c];
+            for (int i = 0; i < PSUM_BYTES; i++) p.push_back((uint8_t)(v >> (8 * i)));
         }
         Bytes resp;
         return send_cmd(CMD_LOAD_BIAS, p, resp) == STATUS_OK;
@@ -247,17 +280,20 @@ struct Tb {
         Mat out(MTILE, std::vector<int>(COLS));
         for (int m = 0; m < MTILE; m++)
             for (int c = 0; c < COLS; c++) {
-                int idx = 2 * (m * COLS + c);
-                out[m][c] = (int16_t)(resp[idx] | (resp[idx + 1] << 8));
+                int idx = PSUM_BYTES * (m * COLS + c);
+                unsigned long long v = 0;
+                for (int i = 0; i < PSUM_BYTES; i++)
+                    v |= (unsigned long long)resp[idx + i] << (8 * i);
+                out[m][c] = (int)wrap_psum((long long)v);
             }
         return out;
     }
 
     // RUN with K-tiling flags; result valid only when last=true.
-    bool run(Mat& result, bool first = true, bool last = true) {
+    bool run(Mat& result, bool first = true, bool last = true,
+             bool bypass = false) {
         Bytes p;
-        if (!(first && last))
-            p.push_back((uint8_t)((first ? 1 : 0) | (last ? 2 : 0)));
+        if (!(first && last && !bypass)) p.push_back(mk_flags(first, last, bypass));
         Bytes resp;
         if (send_cmd(CMD_RUN, p, resp) != STATUS_OK) return false;
         if (!last) return true;
@@ -268,8 +304,8 @@ struct Tb {
 
     // RUN_TILE: weights in NATURAL row-major order on the wire.
     bool run_tile(const Mat& w, const Mat& a, Mat& result,
-                  bool first = true, bool last = true) {
-        Bytes p{(uint8_t)((first ? 1 : 0) | (last ? 2 : 0))};
+                  bool first = true, bool last = true, bool bypass = false) {
+        Bytes p{mk_flags(first, last, bypass)};
         for (int r = 0; r < ROWS; r++)
             for (int c = 0; c < COLS; c++) p.push_back((uint8_t)(int8_t)w[r][c]);
         for (int m = 0; m < MTILE; m++)
@@ -284,9 +320,8 @@ struct Tb {
 
     // STREAM_RUN: up to MAX_STREAM_TILES (w, a) tile pairs in one frame.
     bool stream_run(const std::vector<Mat>& w_tiles, const std::vector<Mat>& a_tiles,
-                    Mat& result, bool first, bool last) {
-        Bytes p{(uint8_t)((first ? 1 : 0) | (last ? 2 : 0)),
-                (uint8_t)w_tiles.size()};
+                    Mat& result, bool first, bool last, bool bypass = false) {
+        Bytes p{mk_flags(first, last, bypass), (uint8_t)w_tiles.size()};
         for (size_t t = 0; t < w_tiles.size(); t++) {
             for (int r = 0; r < ROWS; r++)
                 for (int c = 0; c < COLS; c++)
@@ -615,6 +650,85 @@ int main(int argc, char** argv) {
                  "stream boundaries: %d/5 K-runs (K_TILES 1,3,%d,%d,%d) matched golden",
                  5 - fails, MAX_STREAM_TILES, MAX_STREAM_TILES + 1, MAX_STREAM_TILES + 9);
         report(fails == 0, buf);
+    }
+
+    // 9) ACT_BYPASS (flags[2]): with the clamp off, a negative result must
+    //    survive to the host instead of reading back as 0. Runs the same
+    //    weights/activations both ways, so the only difference is the flag.
+    //    A strongly negative bias guarantees the pre-ReLU sum is negative.
+    {
+        std::mt19937 rng(11);
+        int fails = 0, negatives = 0;
+        for (int i = 0; i < 10; i++) {
+            Mat a = rand_mat(rng, MTILE, ROWS, 1, 20);
+            Mat w = rand_mat(rng, ROWS, COLS, 1, 20);
+            Vec b = rand_vec(rng, COLS, -8000, -4000);
+
+            Mat clamped, raw;
+            bool ok = tb.load_activations(a) && tb.load_weights(w) &&
+                      tb.load_bias(b) && tb.run(clamped, true, true, false) &&
+                      tb.run(raw, true, true, true);
+            if (!ok) { fails++; continue; }
+            if (!eq(clamped, golden(a, w, b, true)))  fails++;
+            if (!eq(raw, golden(a, w, b, false)))     fails++;
+            for (auto& row : raw) for (int v : row) if (v < 0) negatives++;
+        }
+        // The bypass path is only meaningful if it actually produced
+        // negatives -- otherwise the two modes are trivially equal.
+        char buf[128];
+        snprintf(buf, sizeof buf,
+                 "ACT_BYPASS: 10 pairs clamped/raw matched golden (%d negative values survived)",
+                 negatives);
+        report(fails == 0 && negatives > 0, buf);
+    }
+
+    // 10) ACT_BYPASS over the batched commands, so the flag is proven to
+    //     thread through RUN_TILE's payload[0] and STREAM_RUN's frame header
+    //     as well as bare RUN's optional flags byte.
+    {
+        std::mt19937 rng(12);
+        int fails = 0;
+        for (int i = 0; i < 5; i++) {
+            Mat a = rand_mat(rng, MTILE, ROWS, 1, 20);
+            Mat w = rand_mat(rng, ROWS, COLS, 1, 20);
+            Vec b = rand_vec(rng, COLS, -8000, -4000);
+            Mat expected = golden(a, w, b, false), got;
+            if (!(tb.load_bias(b) && tb.run_tile(w, a, got, true, true, true) &&
+                  eq(got, expected))) fails++;
+
+            std::vector<Mat> wt{w}, at{a};
+            Mat got2;
+            if (!(tb.load_bias(b) &&
+                  tb.stream_run(wt, at, got2, true, true, true) &&
+                  eq(got2, expected))) fails++;
+        }
+        report(fails == 0, "ACT_BYPASS via RUN_TILE and STREAM_RUN: 5/5 each matched golden");
+    }
+
+    // 11) The point of a widened PSUM: a sum past int16's range must come
+    //     back intact instead of wrapping. All-127 weights and activations
+    //     give ROWS*127*127, which exceeds 32767 once ROWS >= 3. At the
+    //     default PSUM_W=16 the same vector is a wraparound test instead,
+    //     which cases 5/6 above already cover, so only assert the wide claim.
+    {
+        Mat a(MTILE, std::vector<int>(ROWS, 127));
+        Mat w(ROWS, std::vector<int>(COLS, 127));
+        Vec b(COLS, 0);
+        long long exact = (long long)ROWS * 127 * 127;
+        Mat got;
+        bool ok = tb.matmul(a, w, b, got) && eq(got, golden(a, w, b));
+        char buf[160];
+        if (PSUM_W > 16 && exact > 32767) {
+            ok = ok && got[0][0] == (int)exact;
+            snprintf(buf, sizeof buf,
+                     "wide PSUM: %lld returned intact (int16 would wrap it to %lld)",
+                     exact, wrap_psum_16(exact));
+        } else {
+            snprintf(buf, sizeof buf,
+                     "PSUM_W=%d: ROWS*127*127=%lld matches golden", PSUM_W, exact);
+        }
+        report(ok, buf);
+        if (!ok) { dump("got", got); dump("expected", golden(a, w, b)); }
     }
 
     printf("=== %s: %d passed, %d failed (%llu cycles simulated) ===\n",
