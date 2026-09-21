@@ -24,7 +24,8 @@ Pure RTL changes need only a gateware reflash. Firmware reflash is rare.
 ```bash
 make test                 # all 22 testbenches (iverilog); make test-<name> for one
 make lint                 # verilator --lint-only, 4 configs (UART/SPI/4x4-pair/HPS)
-make verilate-test        # full-chip C++ sim, 7 shape+PHY combos
+make verilate-test        # full-chip C++ sim, 12 shape+PHY+width combos
+make sim-bridge           # build the model as a transport for --link sim
 make hw-test PORT=/dev/cu.usbmodemXXXX \
      ARRAY_ROWS=4 NUM_COLS=4 M_TILE=2 LINK=spi   # real silicon; args must match the bitstream
 make list                 # every registered test target
@@ -76,6 +77,7 @@ fpga/ice40/  yosys -> nextpnr-ice40 -> icepack; all build knobs live here
 fpga/de1soc/ Quartus scaffolding (in progress)
 firmware/    RP2350 bridge; pico-ice-sdk is a git submodule
 mnist/       144->64->10 int8 demo: train, infer, draw
+llm/         TinyStories-1M (GPT-Neo) on the array; needs PSUM_WIDTH=32
 tpu_host.py  host driver + CLI; UART / SPI / HPS-MMIO backends
 docs/        design reference (see below)
 olddocs/     pre-reorg archive, gitignored — do not edit or resurrect

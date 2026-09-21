@@ -75,6 +75,14 @@ DE1-SoC scale-up shape.
 `FIFO_DEPTH` is computed per shape as the next power of 2 ≥
 `max(ARRAY_ROWS, M_TILE)`.
 
+### Running the suite without a board
+
+`tests/hw_regression.py --link sim --port <make sim-bridge binary>` runs all
+14 cases against the Verilator model instead of silicon. That is not a
+substitute for Tier 4 — it validates the RTL, protocol and host driver, not
+the netlist — but it is the only way to exercise shapes and widths no
+bitstream has been built for. The `PSUM_WIDTH=32` path has no other coverage.
+
 ## Tier 4 — Real hardware (`make hw-test`)
 
 `tests/hw_regression.py` against a flashed board. **The only tier that
