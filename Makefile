@@ -114,7 +114,7 @@ TESTS := fifo pe pe_pair mmu accumulator systolic_data_setup weight_fifo bias ac
 # de-duplicate dep lists (modules shared via multiple paths, e.g. tpu_core -> fifo.sv)
 dedup = $(if $1,$(firstword $1) $(call dedup,$(filter-out $(firstword $1),$1)))
 
-.PHONY: all test lint verilate-test sim-bridge list clean hw-test $(foreach t,$(TESTS),test-$(t) build-$(t) wave-$(t))
+.PHONY: all test lint verilate-test sim-bridge sim-trace viz-check viz-check-all list clean hw-test $(foreach t,$(TESTS),test-$(t) build-$(t) wave-$(t))
 
 all: test
 
