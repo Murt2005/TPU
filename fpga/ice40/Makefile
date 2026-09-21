@@ -57,6 +57,13 @@ M_TILE     ?= $(ARRAY_ROWS)
 # slave on the RP2350<->iCE40 config bus pins (rtl/spi_slave.sv; needs the
 # matching SPI-bridge firmware). See docs/pico2-ice.md and tpu_top.pcf's SPI
 # pin-mapping comment.
+# PSUM_WIDTH: width of the accumulate/bias/result path. 16 is what every
+# validated bitstream here uses; widening it costs LCs across the whole
+# reduction path and changes the host wire format (tpu_host.py --psum-width
+# must match), and is incompatible with USE_MAC16_PAIR below, whose SB_MAC16
+# accumulator is a hard 16 bits. See docs/architecture.md §3.
+PSUM_WIDTH ?= 16
+
 USE_SPI ?= 0
 
 # DSP mapping strategy: 0 = yosys -dsp inference over pe.sv's multiplies
@@ -117,6 +124,7 @@ $(TOP).json: $(RTL)
 		chparam -set ARRAY_ROWS $(ARRAY_ROWS) $(TOP); \
 		chparam -set NUM_COLS $(NUM_COLS) $(TOP); \
 		chparam -set M_TILE $(M_TILE) $(TOP); \
+		chparam -set PSUM_WIDTH $(PSUM_WIDTH) $(TOP); \
 		chparam -set USE_SPI $(USE_SPI) $(TOP); \
 		chparam -set USE_MAC16_PAIR $(USE_MAC16_PAIR) $(TOP); \
 		synth_ice40 -top $(TOP) $(DSP_FLAG) $(ABC_FLAGS) -json $@"
@@ -136,6 +144,7 @@ stat: $(RTL)
 		chparam -set ARRAY_ROWS $(ARRAY_ROWS) $(TOP); \
 		chparam -set NUM_COLS $(NUM_COLS) $(TOP); \
 		chparam -set M_TILE $(M_TILE) $(TOP); \
+		chparam -set PSUM_WIDTH $(PSUM_WIDTH) $(TOP); \
 		chparam -set USE_SPI $(USE_SPI) $(TOP); \
 		chparam -set USE_MAC16_PAIR $(USE_MAC16_PAIR) $(TOP); \
 		synth_ice40 -top $(TOP) $(DSP_FLAG) $(ABC_FLAGS)" 2>&1 \

@@ -18,13 +18,14 @@
 
 ## The parameterization pattern
 
-Three parameters thread through every module. Nothing is hardcoded to 2×2.
+Four parameters thread through every module. Nothing is hardcoded to 2×2.
 
 | Parameter | Meaning | Constraint |
 |---|---|---|
 | `ARRAY_ROWS` | K-tile depth (systolic rows) | even if `USE_MAC16_PAIR=1` |
 | `NUM_COLS` | N-tile width (systolic columns) | — |
 | `M_TILE` | activation rows streamed per `RUN` | — |
+| `PSUM_WIDTH` | accumulate/bias/result width | multiple of 8; 16 if `USE_MAC16_PAIR=1` |
 | `FIFO_DEPTH` | `tpu_top.sv` only | power of 2, ≥ `max(ARRAY_ROWS, M_TILE)` |
 
 Rules when touching parameterized code:
@@ -38,7 +39,7 @@ Rules when touching parameterized code:
   coincidence there.
 - Sizes derive from parameters, never from literals: weight frames are
   `ARRAY_ROWS*NUM_COLS`, activation frames `M_TILE*ARRAY_ROWS`, results
-  `2*M_TILE*NUM_COLS`.
+  `PSUM_BYTES*M_TILE*NUM_COLS` (`PSUM_BYTES = PSUM_WIDTH/8`).
 
 ## Latency is a contract
 

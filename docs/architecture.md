@@ -46,7 +46,7 @@ Weight-stationary systolic array, in dataflow order:
 | `pe_pair.sv` | Two PEs in one hand-instantiated `SB_MAC16` (dual-8×8 signed mode). iCE40-only; bit-exact vs. two `pe.sv` | 1 cy |
 | `accumulator.sv` | Reassembles the MMU's time-skewed per-column partial sums into whole rows, and holds a persistent PSUM across K-tiles | 2 cy |
 | `bias.sv` | Registered per-column int16 add | 1 cy |
-| `activation.sv` | Registered ReLU clamp. Applied unconditionally on every layer — there is no bypass | 1 cy |
+| `activation.sv` | Registered ReLU clamp, bypassable per pass via the command frame's `flags[2]` (same latency either way) | 1 cy |
 | `fifo.sv` | Generic synchronous circular queue; used by `accumulator` and `weight_fifo` | — |
 
 **End-to-end per-row latency**, row entering SDS → result valid: **7 cycles**
@@ -55,14 +55,15 @@ cycle apart — the pipeline runs at full throughput once primed.
 
 ## 3. Parameterization
 
-Three parameters define the shape. Every module takes them; nothing is
-hardcoded to 2×2.
+Three parameters define the shape, and a fourth the datapath width. Every
+module takes them; nothing is hardcoded to 2×2.
 
 | Parameter | Meaning | Constraint |
 |---|---|---|
 | `ARRAY_ROWS` | K-tile depth — how much of the reduction dimension one pass covers | even if `USE_MAC16_PAIR=1` |
 | `NUM_COLS` | N-tile width — output columns computed per pass | — |
 | `M_TILE` | Activation rows streamed per `RUN` | — |
+| `PSUM_WIDTH` | Width of the accumulate/bias/result path | multiple of 8; `PSUM_BYTES*M_TILE*NUM_COLS` ≤ 255; must be 16 if `USE_MAC16_PAIR=1` |
 | `FIFO_DEPTH` | `tpu_top.sv` only | power of 2, ≥ `max(ARRAY_ROWS, M_TILE)` |
 
 One `RUN` computes `Y = ReLU(A @ W + bias)` for an `M_TILE × ARRAY_ROWS`
@@ -95,9 +96,15 @@ flags carried in the command frame:
 
 A K-run is therefore `first=1,last=0` → `0,0` → … → `0,last=1`.
 
-**The PSUM register is 16 bits wide and does not saturate — it wraps.** This
-is true regardless of tiling depth, and it is the constraint that sizes the
-MNIST model (see [`mnist.md`](mnist.md)).
+**The PSUM register does not saturate — it wraps.** This is true regardless
+of tiling depth, and at the default `PSUM_WIDTH=16` it is the constraint that
+sizes the MNIST model (see [`mnist.md`](mnist.md)).
+
+`PSUM_WIDTH` is a build knob, so the ceiling can be raised — at the cost of
+LCs across the whole reduction path, a wider wire format, and the `SB_MAC16`
+pair path, whose accumulator is a hard 16 bits. Every bitstream validated on
+hardware so far is 16; wider builds are exercised in simulation only
+(`make verilate-test`'s `*32` shapes).
 
 ## 5. Two structural details worth knowing
 

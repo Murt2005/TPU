@@ -26,7 +26,7 @@ Byte counts below are for a generic `ARRAY_ROWS × NUM_COLS` array with
 | CMD | Name | LEN | Payload |
 |---|---|---|---|
 | `0x01` | `LOAD_WEIGHTS` | `ARRAY_ROWS*NUM_COLS` (4) | weight rows **bottom-first**, `NUM_COLS` int8 each |
-| `0x02` | `LOAD_BIAS` | `2*NUM_COLS` (4) | `NUM_COLS` int16 LE |
+| `0x02` | `LOAD_BIAS` | `PSUM_BYTES*NUM_COLS` (4) | `NUM_COLS` signed LE, `PSUM_BYTES` each |
 | `0x03` | `LOAD_ACT` | `M_TILE*ARRAY_ROWS` (4) | activation rows, natural row-major, int8 |
 | `0x04` | `RUN` | 0 or 1 | empty, or `[flags]` |
 | `0x05` | `RESET` | 0 | — |
@@ -38,15 +38,24 @@ Byte counts below are for a generic `ARRAY_ROWS × NUM_COLS` array with
 datapath activity happens until a `RUN`-family command.
 
 **`RUN` response** on a `TILE_LAST` pass: `STATUS=0xAA`,
-`LEN=2*M_TILE*NUM_COLS` (8), row-major int16 LE. On a non-last pass: bare
-`STATUS=0xAA, LEN=0`.
+`LEN=PSUM_BYTES*M_TILE*NUM_COLS` (8), row-major signed LE. On a non-last
+pass: bare `STATUS=0xAA, LEN=0`.
+
+`PSUM_BYTES` is `PSUM_WIDTH/8`, **2 in every bitstream built so far**. It is
+a synthesis-time constant like the shape, so a host that disagrees gets a
+frame-length error rather than a wrong answer — and because `LEN` caps a
+frame at 255 bytes, a wider build also caps `M_TILE*NUM_COLS` (at 63 when
+`PSUM_WIDTH=32`). The sequencer refuses to elaborate past that.
 
 ### The flags byte
 
 `flags[0]=TILE_FIRST`, `flags[1]=TILE_LAST` — threaded straight into
-`accumulator.sv`. `RUN` with `LEN=0` is equivalent to
-`flags=TILE_FIRST|TILE_LAST`, i.e. the original single-shot behaviour, so a
-host that never sends the byte still works. See
+`accumulator.sv`. `flags[2]=ACT_BYPASS` skips the ReLU clamp for this pass,
+returning the biased sum unchanged; it is only observable on a `TILE_LAST`
+pass, since that is the only one activation fires on. `RUN` with `LEN=0` is
+equivalent to `flags=TILE_FIRST|TILE_LAST`, i.e. the original single-shot
+behaviour, so a host that never sends the byte still works. Bit positions
+are named in `rtl/tpu_pkg.sv` and mirrored in `tpu_host.py`. See
 [`architecture.md`](architecture.md) §4 for the accumulation semantics.
 
 ## 3. The batched commands
@@ -120,7 +129,8 @@ in `tests/hw_regression.py`.
 
 `tpu_host.py` (repo root) implements all of the above:
 
-- `TPU(rows, cols, m_tile)` — frame sizes are derived from the shape.
+- `TPU(rows, cols, m_tile, psum_width=16)` — frame sizes are derived from
+  the shape and the PSUM width.
 - `load_weights` / `load_bias` / `load_activations` / `run` / `reset` —
   the legacy one-command-at-a-time API.
 - `run_tile()` — `RUN_TILE`.
@@ -128,8 +138,11 @@ in `tests/hw_regression.py`.
   chained `STREAM_RUN`, slices the result. Offloads to `FW_MATMUL` by
   default when the firmware probes as supporting it; `offload=False` /
   `--no-offload` forces the host-tiled path.
+- `act_bypass=` on `run`/`run_tile`/`stream_run`/`matmul_tiled` sets
+  `flags[2]`. `FW_MATMUL` cannot carry it (nor a widened PSUM), so
+  `matmul_tiled` falls back to the host-tiled path in either case.
 - CLI: `--port`, `--link {uart,spi,hps}`, `--rows/--cols/--m-tile`,
-  `--selftest`, `--weights/--activations/--bias`, `--reset`.
+  `--psum-width`, `--selftest`, `--weights/--activations/--bias`, `--reset`.
 
 `tests/hw_regression.py` drives the same protocol for the full regression.
 

@@ -37,8 +37,11 @@ K=64 were chosen against that ceiling and then **empirically verified: zero
 overflow across the full 10,000-image test set, with a 5% calibration safety
 margin.**
 
-Growing the model means either proving the wider sum still fits, or widening
-`PSUM_WIDTH` in the RTL (and the wire format, and the host).
+Growing the model means either proving the wider sum still fits, or raising
+`PSUM_WIDTH`. That is now a build knob rather than an RTL edit — it widens
+the wire format with it, and `tpu_host.py --psum-width` must agree — but no
+bitstream has been built or hardware-validated with it. The committed MNIST
+model is sized for `PSUM_WIDTH=16` and is unaffected.
 
 ## 3. Three quantization details the RTL forces
 

@@ -41,8 +41,8 @@ make clean
 ```
 
 Build knobs (all `chparam`'d in at synthesis; hosts must be told the same):
-`CLK_FREQ` `BAUD_RATE` `ARRAY_ROWS` `NUM_COLS` `M_TILE` `USE_SPI`
-`USE_MAC16_PAIR` `ABC_FLAGS`.
+`CLK_FREQ` `BAUD_RATE` `ARRAY_ROWS` `NUM_COLS` `M_TILE` `PSUM_WIDTH`
+`USE_SPI` `USE_MAC16_PAIR` `ABC_FLAGS`.
 
 **No hosted CI, by deliberate choice.** Quality gates are local `make`
 targets. Never add `.github/workflows`.
