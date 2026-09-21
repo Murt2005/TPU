@@ -52,12 +52,15 @@
      color:var(--muted);margin:0 0 10px;}
 
   .mx{display:grid;gap:4px;}
-  .mx.c4{grid-template-columns:repeat(4,1fr);}
   .mx input{width:100%;min-width:0;font-family:var(--mono);font-size:.82rem;text-align:center;
             padding:6px 2px;border:1px solid var(--line);border-radius:4px;
             background:var(--sunken);color:var(--ink);font-variant-numeric:tabular-nums;}
   .mx input:focus{outline:2px solid var(--weight);outline-offset:-1px;}
   .mx.w input:focus{outline-color:var(--weight);}
+  select{width:100%;font-family:var(--sans);font-size:.82rem;padding:7px 8px;
+         border:1px solid var(--line-strong);border-radius:6px;
+         background:var(--surface);color:var(--ink);}
+  select:focus-visible{outline:2px solid var(--act);outline-offset:2px;}
   .rowlab{font-family:var(--mono);font-size:.68rem;color:var(--muted);}
 
   .btns{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px;}
@@ -100,7 +103,7 @@
 <header>
   <div>
     <h1>Systolic Wavefront</h1>
-    <p class="sub">A 4&times;4 weight-stationary array, one <code>RUN_TILE</code> at a time. Edit the matrices, then step the clock and watch activations sweep right while partial sums fall.</p>
+    <p class="sub">A weight-stationary systolic array, one <code>RUN_TILE</code> at a time. Pick a shape, edit the matrices, then step the clock and watch activations sweep right while partial sums fall.</p>
   </div>
   <div class="legend">
     <span class="key"><span class="dot" style="background:var(--weight)"></span>stationary weight</span>
@@ -112,12 +115,21 @@
 <div class="cols">
   <div>
     <div class="panel">
-      <h2>Weights &middot; W (4&times;4)</h2>
-      <div class="mx c4 w" id="mw"></div>
-      <h2 style="margin-top:14px">Activations &middot; A (4&times;4)</h2>
-      <div class="mx c4" id="ma"></div>
-      <h2 style="margin-top:14px">Bias (4)</h2>
-      <div class="mx c4" id="mb"></div>
+      <h2><label for="shape">Array shape</label></h2>
+      <select id="shape">
+        <option value="2,2,2">2&times;2 &middot; M_TILE 2</option>
+        <option value="2,4,2">2&times;4 &middot; M_TILE 2</option>
+        <option value="4,2,3">4&times;2 &middot; M_TILE 3</option>
+        <option value="4,4,2">4&times;4 &middot; M_TILE 2</option>
+        <option value="4,4,4" selected>4&times;4 &middot; M_TILE 4</option>
+        <option value="8,8,4">8&times;8 &middot; M_TILE 4</option>
+      </select>
+      <h2 style="margin-top:14px" id="hw">Weights &middot; W</h2>
+      <div class="mx w" id="mw"></div>
+      <h2 style="margin-top:14px" id="ha">Activations &middot; A</h2>
+      <div class="mx" id="ma"></div>
+      <h2 style="margin-top:14px" id="hb">Bias</h2>
+      <div class="mx" id="mb"></div>
       <div class="btns">
         <button class="primary" id="run">Run</button>
         <button id="rand">Randomize</button>
@@ -127,7 +139,7 @@
     </div>
     <div class="panel">
       <h2>Result &middot; ReLU(A&middot;W + bias)</h2>
-      <div class="mx c4" id="mr"></div>
+      <div class="mx" id="mr"></div>
       <div class="verdict" id="verdict"></div>
     </div>
   </div>
@@ -152,37 +164,55 @@
 <script type="module">
 import { simulate, golden } from "./model.mjs";
 
-const SHAPE = { rows: 4, cols: 4, m_tile: 4 };
-const R = SHAPE.rows, C = SHAPE.cols, M = SHAPE.m_tile;
 const SVG = "http://www.w3.org/2000/svg";
 const $ = (id) => document.getElementById(id);
 
+let R = 4, C = 4, M = 4;          // current shape
+let trace = null, frame = 0, timer = null;
+let cells, wTxt, aTxt, pTxt, rowIn, accChip, biasChip, actChip;
+
 /* ---------- matrix inputs ---------- */
-function buildInputs(host, n, vals, cls) {
+function fill(host, n, cols, vals, labelPrefix) {
+  host.style.gridTemplateColumns = `repeat(${cols},minmax(0,1fr))`;
   host.innerHTML = "";
   for (let i = 0; i < n; i++) {
     const el = document.createElement("input");
-    el.type = "number"; el.value = vals[i]; el.id = `${host.id}_${i}`;
-    el.setAttribute("aria-label", `${cls} ${i}`);
+    el.type = "number";
+    el.value = vals[i];
+    el.id = `${host.id}_${i}`;
+    el.setAttribute("aria-label", `${labelPrefix} ${i}`);
     host.appendChild(el);
   }
 }
 const readVals = (host, n) =>
   Array.from({ length: n }, (_, i) => {
-    const v = parseInt(document.getElementById(`${host.id}_${i}`).value, 10);
+    const el = document.getElementById(`${host.id}_${i}`);
+    const v = parseInt(el ? el.value : "0", 10);
     return Number.isFinite(v) ? Math.max(-128, Math.min(127, v)) : 0;
   });
 
-const W0 = [1,2,3,4, 5,6,7,8, 1,0,0,1, 2,2,2,2];
-const A0 = [1,1,1,1, 2,0,0,2, 0,1,1,0, 3,3,3,3];
-const B0 = [10,20,30,40];
-buildInputs($("mw"), 16, W0, "weight");
-buildInputs($("ma"), 16, A0, "activation");
-buildInputs($("mb"), 4, B0, "bias");
+/* A deterministic starting example, so every shape opens on real content
+   rather than zeros. Small values keep the int16 accumulator well clear of
+   wrapping, which would otherwise be the first thing a newcomer hit. */
+function seedW(r, c) { return ((r * 3 + c * 2) % 7) - 2; }
+function seedA(m, k) { return ((m * 2 + k * 3) % 5) - 1; }
 
-/* result readout is display-only */
+function buildMatrices() {
+  $("hw").innerHTML = `Weights &middot; W (${R}&times;${C})`;
+  $("ha").innerHTML = `Activations &middot; A (${M}&times;${R})`;
+  $("hb").innerHTML = `Bias (${C})`;
+  const w = [], a = [], b = [];
+  for (let r = 0; r < R; r++) for (let c = 0; c < C; c++) w.push(seedW(r, c));
+  for (let m = 0; m < M; m++) for (let k = 0; k < R; k++) a.push(seedA(m, k));
+  for (let c = 0; c < C; c++) b.push((c + 1) * 10);
+  fill($("mw"), R * C, C, w, "weight");
+  fill($("ma"), M * R, R, a, "activation");
+  fill($("mb"), C, C, b, "bias");
+}
+
 function showResult(mat) {
   const host = $("mr");
+  host.style.gridTemplateColumns = `repeat(${C},minmax(0,1fr))`;
   host.innerHTML = "";
   for (let r = 0; r < M; r++)
     for (let c = 0; c < C; c++) {
@@ -194,118 +224,135 @@ function showResult(mat) {
     }
 }
 
-/* ---------- static SVG scaffold ---------- */
-const GX = 232, GY = 96, CW = 86, CH = 68;   // grid origin + cell size
-const svg = $("svg");
-const cells = [], wTxt = [], aTxt = [], pTxt = [], rowIn = [], colOut = [];
-let accChip = [], biasChip = [], actChip = [];
+/* ---------- SVG stage, sized from the shape ---------- */
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
-function mk(tag, attrs, parent = svg) {
-  const e = document.createElementNS(SVG, tag);
-  for (const k in attrs) e.setAttribute(k, attrs[k]);
-  parent.appendChild(e);
-  return e;
-}
-function label(x, y, s, anchor = "start") {
-  const t = mk("text", { x, y, class: "lbl", "text-anchor": anchor });
-  t.textContent = s; return t;
-}
+function buildStage() {
+  const svg = $("svg");
+  svg.innerHTML = "";
+  cells = []; wTxt = []; aTxt = []; pTxt = []; rowIn = [];
+  accChip = []; biasChip = []; actChip = [];
 
-label(16, GY - 26, "Unified buffer → skew");
-label(GX, GY - 26, "Systolic array · 4×4 PEs");
-label(GX, GY + R * CH + 34, "Accumulator → bias → ReLU");
+  // Cells shrink as the array grows so a big shape still fits one screen;
+  // the floors keep the numbers inside them legible.
+  const CW = clamp(Math.round(400 / C), 48, 112);
+  const CH = clamp(Math.round(300 / R), 42, 82);
+  const RAIL = 150;                       // left rail: skewed activations in
+  const GX = RAIL + 82, GY = 92;
+  const ACCY = GY + R * CH + 40;
+  const VW = GX + C * CW + 16;
+  const VH = ACCY + 96 + 16;
+  svg.setAttribute("viewBox", `0 0 ${VW} ${VH}`);
+  svg.style.minWidth = Math.min(VW, 560) + "px";
 
-/* incoming activation chips, one per array row (left rail) */
-for (let r = 0; r < R; r++) {
-  const y = GY + r * CH;
-  mk("rect", { x: 96, y: y + 16, width: 58, height: 34, rx: 5,
-               fill: "var(--sunken)", stroke: "var(--line)" });
-  const t = mk("text", { x: 125, y: y + 38, "text-anchor": "middle",
-                         "font-size": 13, fill: "var(--muted)" });
-  t.textContent = "·";
-  rowIn.push(t);
-  mk("path", { d: `M158 ${y + 33} H ${GX - 6}`, class: "flowline",
-               stroke: "var(--line-strong)", "stroke-width": 1.5, fill: "none",
-               "marker-end": "url(#ar)" });
-  const rl = mk("text", { x: 88, y: y + 38, "text-anchor": "end",
-                          "font-size": 10, fill: "var(--muted)" });
-  rl.textContent = `row ${r}`;
-}
+  const fCell = clamp(Math.round(CW / 6), 10, 15);   // activation value
+  const fSmall = clamp(Math.round(CW / 9), 8, 11);   // weight + psum
 
-const defs = mk("defs", {});
-const mrk = mk("marker", { id: "ar", viewBox: "0 0 8 8", refX: 7, refY: 4,
-                           markerWidth: 6, markerHeight: 6, orient: "auto" }, defs);
-mk("path", { d: "M0 0 L8 4 L0 8 z", fill: "var(--line-strong)" }, mrk);
+  const mk = (tag, attrs, parent = svg) => {
+    const e = document.createElementNS(SVG, tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]);
+    parent.appendChild(e);
+    return e;
+  };
+  const label = (x, y, s, anchor = "start") => {
+    const t = mk("text", { x, y, class: "lbl", "text-anchor": anchor });
+    t.textContent = s;
+    return t;
+  };
 
-/* PE grid */
-for (let r = 0; r < R; r++) {
-  cells.push([]); wTxt.push([]); aTxt.push([]); pTxt.push([]);
-  for (let c = 0; c < C; c++) {
-    const x = GX + c * CW, y = GY + r * CH;
-    const rect = mk("rect", { x, y, width: CW - 8, height: CH - 8, rx: 6,
-                              fill: "var(--sunken)", stroke: "var(--line)",
-                              "stroke-width": 1, class: "cell" });
-    cells[r].push(rect);
-    const w = mk("text", { x: x + 8, y: y + 16, "font-size": 10,
-                           fill: "var(--weight)", "font-weight": 600 });
-    w.textContent = "·"; wTxt[r].push(w);
-    const a = mk("text", { x: x + (CW - 8) / 2, y: y + 38, "text-anchor": "middle",
-                           "font-size": 15, fill: "var(--ink)", "font-weight": 500 });
-    a.textContent = ""; aTxt[r].push(a);
-    const p = mk("text", { x: x + (CW - 8) - 8, y: y + 54, "text-anchor": "end",
-                           "font-size": 10, fill: "var(--psum)" });
-    p.textContent = ""; pTxt[r].push(p);
+  const defs = mk("defs", {});
+  const mrk = mk("marker", { id: "ar", viewBox: "0 0 8 8", refX: 7, refY: 4,
+                             markerWidth: 6, markerHeight: 6, orient: "auto" }, defs);
+  mk("path", { d: "M0 0 L8 4 L0 8 z", fill: "var(--line-strong)" }, mrk);
+
+  label(16, GY - 24, "Unified buffer \u2192 skew");
+  label(GX, GY - 24, `Systolic array \u00b7 ${R}\u00d7${C} PEs`);
+  label(GX, ACCY + 96 - 4, "Accumulator \u2192 bias \u2192 ReLU");
+
+  for (let r = 0; r < R; r++) {
+    const y = GY + r * CH, h = Math.min(34, CH - 8);
+    const cy = y + (CH - 8) / 2;
+    mk("rect", { x: RAIL - 58, y: cy - h / 2, width: 58, height: h, rx: 5,
+                 fill: "var(--sunken)", stroke: "var(--line)" });
+    const t = mk("text", { x: RAIL - 29, y: cy + fCell / 3, "text-anchor": "middle",
+                           "font-size": fCell, fill: "var(--muted)" });
+    t.textContent = "\u00b7";
+    rowIn.push(t);
+    mk("path", { d: `M${RAIL + 4} ${cy} H ${GX - 6}`, class: "flowline",
+                 stroke: "var(--line-strong)", "stroke-width": 1.4, fill: "none",
+                 "marker-end": "url(#ar)" });
+    const rl = mk("text", { x: RAIL - 66, y: cy + 3, "text-anchor": "end",
+                            "font-size": fSmall, fill: "var(--muted)" });
+    rl.textContent = `row ${r}`;
   }
+
+  for (let r = 0; r < R; r++) {
+    cells.push([]); wTxt.push([]); aTxt.push([]); pTxt.push([]);
+    for (let c = 0; c < C; c++) {
+      const x = GX + c * CW, y = GY + r * CH;
+      const w = CW - 8, h = CH - 8;
+      cells[r].push(mk("rect", { x, y, width: w, height: h, rx: 5,
+                                 fill: "var(--sunken)", stroke: "var(--line)",
+                                 "stroke-width": 1, class: "cell" }));
+      const wt = mk("text", { x: x + 6, y: y + fSmall + 4, "font-size": fSmall,
+                              fill: "var(--weight)", "font-weight": 600 });
+      wt.textContent = "\u00b7"; wTxt[r].push(wt);
+      const at = mk("text", { x: x + w / 2, y: y + h / 2 + fCell / 3,
+                              "text-anchor": "middle", "font-size": fCell,
+                              fill: "var(--ink)", "font-weight": 500 });
+      at.textContent = ""; aTxt[r].push(at);
+      const pt = mk("text", { x: x + w - 5, y: y + h - 5, "text-anchor": "end",
+                              "font-size": fSmall, fill: "var(--psum)" });
+      pt.textContent = ""; pTxt[r].push(pt);
+    }
+  }
+
+  for (let c = 0; c < C; c++) {
+    const x = GX + c * CW, g = [];
+    [0, 30, 60].forEach((dy) => {
+      mk("rect", { x, y: ACCY + dy, width: CW - 8, height: 24, rx: 4,
+                   fill: "var(--sunken)", stroke: "var(--line)", class: "chip" });
+      const t = mk("text", { x: x + (CW - 8) / 2, y: ACCY + dy + 16,
+                             "text-anchor": "middle", "font-size": fSmall + 1,
+                             fill: "var(--muted)" });
+      t.textContent = "\u00b7"; g.push(t);
+    });
+    accChip.push(g[0]); biasChip.push(g[1]); actChip.push(g[2]);
+  }
+  ["PSUM", "+bias", "ReLU"].forEach((s2, i) =>
+    label(GX - 10, ACCY + i * 30 + 16, s2, "end"));
 }
 
-/* accumulator / bias / relu chips under each column */
-const ACCY = GY + R * CH + 44;
-for (let c = 0; c < C; c++) {
-  const x = GX + c * CW;
-  const g = [];
-  [["acc", 0], ["bias", 30], ["relu", 60]].forEach(([, dy], i) => {
-    mk("rect", { x, y: ACCY + dy, width: CW - 8, height: 24, rx: 4,
-                 fill: "var(--sunken)", stroke: "var(--line)", class: "chip" });
-    const t = mk("text", { x: x + (CW - 8) / 2, y: ACCY + dy + 16,
-                           "text-anchor": "middle", "font-size": 11,
-                           fill: "var(--muted)" });
-    t.textContent = "·"; g.push(t);
-  });
-  accChip.push(g[0]); biasChip.push(g[1]); actChip.push(g[2]);
-}
-["PSUM", "+bias", "ReLU"].forEach((s, i) => label(GX - 10, ACCY + i * 30 + 16, s, "end"));
-
-/* ---------- trace + playback ---------- */
-let trace = null, frame = 0, timer = null;
-
+/* ---------- run + playback ---------- */
 function run() {
-  const wf = readVals($("mw"), 16), af = readVals($("ma"), 16), bf = readVals($("mb"), 4);
+  const wf = readVals($("mw"), R * C);
+  const af = readVals($("ma"), M * R);
+  const bf = readVals($("mb"), C);
   const W = Array.from({ length: R }, (_, r) => wf.slice(r * C, r * C + C));
   const A = Array.from({ length: M }, (_, m) => af.slice(m * R, m * R + R));
-  trace = simulate(W, A, bf, SHAPE);
-  const want = golden(W, A, bf, SHAPE);
+  const shape = { rows: R, cols: C, m_tile: M };
+  trace = simulate(W, A, bf, shape);
+  const want = golden(W, A, bf, shape);
   showResult(want);
 
-  // What the datapath actually emitted, collected from the ReLU stage.
   const got = [];
   for (const f of trace.cycles) if (f.act.valid) got.push(f.act.row.slice());
   const ok = got.length === M && got.every((row, i) => row.every((v, j) => v === want[i][j]));
   const v = $("verdict");
   v.textContent = ok
-    ? `✓ array emitted all ${M} rows, matching the reference`
+    ? `\u2713 array emitted all ${M} rows, matching the reference`
     : `emitted ${got.length}/${M} rows`;
   v.className = "verdict" + (ok ? " good" : "");
 
   $("scrub").max = trace.cycles.length - 1;
-  // Open mid-wavefront: the first cycle where the array is actually computing.
-  const first = trace.cycles.findIndex((f) => f.pe.some((row) => row.some((p) => p.av)));
+  const first = trace.cycles.findIndex((f) => f.pe.some((row) => row.some((pp) => pp.av)));
   setFrame(first >= 0 ? Math.min(first + 3, trace.cycles.length - 1) : 0);
 }
 
 const EXPLAIN = {
-  IDLE:   "Idle — waiting for the command frame.",
+  IDLE:   "Idle \u2014 waiting for the command frame.",
   LD_WF:  "Weights queued into the weight FIFO, bottom row first.",
-  LOADING:"<b>Loading phase.</b> Weight rows propagate down the columns, one per cycle, bottom-first — so each PE captures its own row's weight on the right cycle. The activation path is held idle.",
+  LOADING:"<b>Loading phase.</b> Weight rows propagate down the columns, one per cycle, bottom-first \u2014 so each PE captures its own row's weight on the right cycle. The activation path is held idle.",
   STREAM: "<b>Streaming.</b> Activation rows leave the unified buffer and are skewed: row <i>i</i> arrives <i>i</i> cycles late, so the diagonal wavefront meets the right weights.",
   WAIT:   "<b>Draining.</b> The last activations sweep out; column FIFOs reassemble the time-skewed partial sums into whole rows, then bias and ReLU fire.",
 };
@@ -321,25 +368,23 @@ function setFrame(i) {
   $("explain").innerHTML = EXPLAIN[f.state] || "";
 
   for (let r = 0; r < R; r++) {
-    rowIn[r].textContent = f.sds.valid[r] ? f.sds.row[r] : "·";
+    rowIn[r].textContent = f.sds.valid[r] ? f.sds.row[r] : "\u00b7";
     rowIn[r].setAttribute("fill", f.sds.valid[r] ? "var(--act)" : "var(--muted)");
     for (let c = 0; c < C; c++) {
-      const p = f.pe[r][c], cell = cells[r][c];
-      wTxt[r][c].textContent = p.w;
-      aTxt[r][c].textContent = p.av ? p.a : "";
-      pTxt[r][c].textContent = p.pv ? p.p : "";
-      // Fill encodes the dominant role this cycle: carrying an activation,
-      // holding a partial sum, or just storing its weight.
-      cell.setAttribute("fill", p.av ? "var(--act-soft)"
-                                     : p.pv ? "var(--psum-soft)" : "var(--sunken)");
-      cell.setAttribute("stroke", p.av ? "var(--act)"
-                                       : p.pv ? "var(--psum)" : "var(--line)");
-      cell.setAttribute("stroke-width", p.av || p.pv ? 1.6 : 1);
+      const pp = f.pe[r][c], cell = cells[r][c];
+      wTxt[r][c].textContent = pp.w;
+      aTxt[r][c].textContent = pp.av ? pp.a : "";
+      pTxt[r][c].textContent = pp.pv ? pp.p : "";
+      cell.setAttribute("fill", pp.av ? "var(--act-soft)"
+                                      : pp.pv ? "var(--psum-soft)" : "var(--sunken)");
+      cell.setAttribute("stroke", pp.av ? "var(--act)"
+                                        : pp.pv ? "var(--psum)" : "var(--line)");
+      cell.setAttribute("stroke-width", pp.av || pp.pv ? 1.6 : 1);
     }
   }
   const put = (chips, row, valid, color) => {
     for (let c = 0; c < C; c++) {
-      chips[c].textContent = valid ? row[c] : "·";
+      chips[c].textContent = valid ? row[c] : "\u00b7";
       chips[c].setAttribute("fill", valid ? color : "var(--muted)");
       chips[c].setAttribute("font-weight", valid ? 600 : 400);
     }
@@ -349,7 +394,20 @@ function setFrame(i) {
   put(actChip, f.act.row, f.act.valid, "var(--ok)");
 }
 
-function stop() { if (timer) { clearInterval(timer); timer = null; } $("play").textContent = "Play"; }
+function stop() {
+  if (timer) { clearInterval(timer); timer = null; }
+  $("play").textContent = "Play";
+}
+
+function reshape() {
+  const [r, c, m] = $("shape").value.split(",").map(Number);
+  R = r; C = c; M = m;
+  stop();
+  buildMatrices();
+  buildStage();
+  run();
+}
+
 $("play").onclick = () => {
   if (timer) return stop();
   $("play").textContent = "Pause";
@@ -362,23 +420,26 @@ $("back").onclick = () => { stop(); setFrame(frame - 1); };
 $("fwd").onclick = () => { stop(); setFrame(frame + 1); };
 $("scrub").oninput = (e) => { stop(); setFrame(+e.target.value); };
 $("run").onclick = () => { stop(); run(); };
+$("shape").onchange = reshape;
 $("rand").onclick = () => {
   const ri = () => Math.floor(Math.random() * 19) - 9;
-  buildInputs($("mw"), 16, Array.from({ length: 16 }, ri), "weight");
-  buildInputs($("ma"), 16, Array.from({ length: 16 }, ri), "activation");
-  buildInputs($("mb"), 4, Array.from({ length: 4 }, () => Math.floor(Math.random() * 80) - 20), "bias");
+  fill($("mw"), R * C, C, Array.from({ length: R * C }, ri), "weight");
+  fill($("ma"), M * R, R, Array.from({ length: M * R }, ri), "activation");
+  fill($("mb"), C, C, Array.from({ length: C }, () => Math.floor(Math.random() * 80) - 20), "bias");
   stop(); run();
 };
 $("ident").onclick = () => {
-  buildInputs($("mw"), 16, [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1], "weight");
+  const w = [];
+  for (let r = 0; r < R; r++) for (let c = 0; c < C; c++) w.push(r === c ? 1 : 0);
+  fill($("mw"), R * C, C, w, "weight");
   stop(); run();
 };
 document.addEventListener("keydown", (e) => {
-  if (e.target.tagName === "INPUT") return;
+  if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
   if (e.key === "ArrowRight") { stop(); setFrame(frame + 1); }
   if (e.key === "ArrowLeft") { stop(); setFrame(frame - 1); }
   if (e.key === " ") { e.preventDefault(); $("play").click(); }
 });
 
-run();
+reshape();
 </script>

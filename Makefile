@@ -275,18 +275,23 @@ VIZ_MTILE ?= 4
 VIZ_DIR   := $(SIM_DIR)/verilator/trace
 SIM_TRACE := $(VIZ_DIR)/trace_tb
 
+# FIFO_DEPTH must be a power of 2 >= max(ARRAY_ROWS, M_TILE), same rule the
+# verilate-test matrix uses -- derived here so a shape sweep cannot forget it.
 sim-trace: $(SB_MAC16_SIM) | $(SIM_DIR)
 	@mkdir -p $(VIZ_DIR)
-	@$(VERILATOR) --cc --exe --build -j 0 --trace \
+	@set -e; fd=4; m=$(VIZ_ROWS); \
+	[ $(VIZ_MTILE) -gt $$m ] && m=$(VIZ_MTILE); \
+	while [ $$fd -lt $$m ]; do fd=$$((fd*2)); done; \
+	$(VERILATOR) --cc --exe --build -j 0 --trace \
 		--Mdir $(VIZ_DIR) verilator.vlt \
 		--top-module tpu_core \
-		-GFIFO_DEPTH=4 -GARRAY_ROWS=$(VIZ_ROWS) -GNUM_COLS=$(VIZ_COLS) \
+		-GFIFO_DEPTH=$$fd -GARRAY_ROWS=$(VIZ_ROWS) -GNUM_COLS=$(VIZ_COLS) \
 		-GM_TILE=$(VIZ_MTILE) \
 		-CFLAGS "-std=c++17 -DTB_ROWS=$(VIZ_ROWS) -DTB_COLS=$(VIZ_COLS) \
 		         -DTB_MTILE=$(VIZ_MTILE)" \
 		$(SB_MAC16_SIM) $(RTL_DIR)/*.sv viz/trace_tb.cpp \
-		-o trace_tb > /dev/null
-	@echo "sim-trace: $(SIM_TRACE) ($(VIZ_ROWS)x$(VIZ_COLS) M_TILE=$(VIZ_MTILE))"
+		-o trace_tb > /dev/null; \
+	echo "sim-trace: $(SIM_TRACE) ($(VIZ_ROWS)x$(VIZ_COLS) M_TILE=$(VIZ_MTILE) FIFO_DEPTH=$$fd)"
 
 # make viz-check: prove viz/model.mjs (the viewer's JavaScript datapath
 # model) still matches the real RTL, cycle for cycle, on random matrices.
@@ -294,7 +299,21 @@ sim-trace: $(SB_MAC16_SIM) | $(SIM_DIR)
 # as long as this passes.
 VIZ_CHECK_N ?= 40
 viz-check: sim-trace
-	@node viz/check_model.mjs --n $(VIZ_CHECK_N)
+	@node viz/check_model.mjs --n $(VIZ_CHECK_N) \
+		--rows $(VIZ_ROWS) --cols $(VIZ_COLS) --m-tile $(VIZ_MTILE)
+
+# make viz-check-all: the same equivalence check across every shape the
+# viewer offers, rebuilding the RTL harness for each. Shapes with all three
+# axes distinct (4x2 M_TILE=3) are the ones that catch a row/column mixup --
+# see rtl/CLAUDE.md.
+VIZ_SHAPES ?= 2_2_2 4_4_4 4_2_3 2_4_2 4_4_2 8_8_4
+viz-check-all:
+	@set -e; for sh in $(VIZ_SHAPES); do \
+		r=$${sh%%_*}; rest=$${sh#*_}; c=$${rest%%_*}; m=$${rest#*_}; \
+		echo "=== $${r}x$${c} M_TILE=$${m} ==="; \
+		$(MAKE) --no-print-directory sim-trace VIZ_ROWS=$$r VIZ_COLS=$$c VIZ_MTILE=$$m >/dev/null; \
+		node viz/check_model.mjs --n $(VIZ_CHECK_N) --rows $$r --cols $$c --m-tile $$m; \
+	done; echo "viz-check-all: every shape matched"
 
 verilate-test: $(SB_MAC16_SIM) | $(SIM_DIR)
 	@set -e; for shape in $(VERILATE_SHAPES); do \

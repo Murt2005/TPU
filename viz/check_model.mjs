@@ -45,7 +45,11 @@ function rnd() {
 }
 const randInt = (lo, hi) => lo + Math.floor(rnd() * (hi - lo + 1));
 
-const SHAPE = { rows: 4, cols: 4, m_tile: 4 };
+const SHAPE = {
+  rows: parseInt(argOf("--rows", "4"), 10),
+  cols: parseInt(argOf("--cols", "4"), 10),
+  m_tile: parseInt(argOf("--m-tile", "4"), 10),
+};
 const { rows: R, cols: C, m_tile: M } = SHAPE;
 
 function firstLoading(cycles) {
@@ -140,5 +144,6 @@ try {
   rmSync(dir, { recursive: true, force: true });
 }
 
-console.log(`\nviz model vs RTL: ${pass}/${pass + fail} cases matched cycle-for-cycle`);
+console.log(`\nviz model vs RTL @ ${R}x${C} M_TILE=${M}: ` +
+            `${pass}/${pass + fail} cases matched cycle-for-cycle`);
 process.exit(fail === 0 ? 0 : 1);
