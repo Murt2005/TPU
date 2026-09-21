@@ -267,8 +267,13 @@ lint: $(SB_MAC16_SIM)
 # reduction path, whose bias/result elements are 4 wire bytes each. 8_8_4_uart32
 # is the shape a transformer-sized K needs -- M_TILE=4 keeps the result frame
 # at 128 bytes, inside the 1-byte LEN cap that 8x8/M_TILE=8 would blow at 256.
+# The `direct` PHY verilates tpu_core instead of tpu_top and injects bytes
+# straight at the sequencer's rx_data/rx_valid, skipping the bit-level PHY.
+# Same protocol, same golden checks, ~50x fewer simulated cycles per byte --
+# which is what makes transformer-sized workloads tractable in simulation.
 VERILATE_SHAPES := 2_2_2_uart 2_4_2_uart 4_2_3_uart 2_4_2_spi 4_4_2_spipair 4_4_4_spipair \
-                   8_8_8_uart 2_2_2_uart32 4_4_2_spi32 8_8_4_uart32
+                   8_8_8_uart 2_2_2_uart32 4_4_2_spi32 8_8_4_uart32 \
+                   2_2_2_direct 8_8_4_direct32
 
 verilate-test: $(SB_MAC16_SIM) | $(SIM_DIR)
 	@set -e; for shape in $(VERILATE_SHAPES); do \
@@ -279,18 +284,21 @@ verilate-test: $(SB_MAC16_SIM) | $(SIM_DIR)
 		objdir=$(SIM_DIR)/verilator/$${rows}x$${cols}m$${mt}_$${phy}p$${psum}; \
 		mkdir -p $$objdir; \
 		phyflags=""; phycflags=""; \
+		topmod=tpu_top; clkflags="-GCLK_FREQ=12000000 -GBAUD_RATE=1000000"; \
 		if [ "$$phy" = "spi" ]; then \
 			phyflags="-GUSE_SPI=1"; phycflags="-DTB_SPI"; \
 		elif [ "$$phy" = "spipair" ]; then \
 			phyflags="-GUSE_SPI=1 -GUSE_MAC16_PAIR=1"; phycflags="-DTB_SPI"; \
+		elif [ "$$phy" = "direct" ]; then \
+			topmod=tpu_core; clkflags=""; phycflags="-DTB_DIRECT"; \
 		fi; \
 		fd=4; m=$$rows; [ $$mt -gt $$m ] && m=$$mt; \
 		while [ $$fd -lt $$m ]; do fd=$$((fd*2)); done; \
 		echo "=== verilate $${rows}x$${cols} M_TILE=$${mt} FIFO_DEPTH=$${fd} PSUM=$${psum} ($${phy}) ==="; \
 		$(VERILATOR) --cc --exe --build -j 0 -Wall \
 			--Mdir $$objdir verilator.vlt \
-			--top-module tpu_top \
-			-GCLK_FREQ=12000000 -GBAUD_RATE=1000000 -GFIFO_DEPTH=$$fd \
+			--top-module $$topmod \
+			$$clkflags -GFIFO_DEPTH=$$fd \
 			-GARRAY_ROWS=$$rows -GNUM_COLS=$$cols -GM_TILE=$$mt -GPSUM_WIDTH=$$psum $$phyflags \
 			-CFLAGS "-std=c++17 -DTB_ROWS=$$rows -DTB_COLS=$$cols -DTB_MTILE=$$mt -DTB_PSUM_WIDTH=$$psum $$phycflags" \
 			$(SB_MAC16_SIM) $(RTL_DIR)/*.sv $(TEST_DIR)/verilator/tb_tpu_top.cpp \

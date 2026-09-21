@@ -28,7 +28,18 @@
 #include <random>
 #include <vector>
 
+#if defined(TB_DIRECT)
+// Direct-injection mode verilates tpu_core, not tpu_top: the core exposes the
+// byte-stream interface (rx_data/rx_valid/tx_data/tx_valid) that every PHY
+// converts some transport into, so the bench can hand the sequencer bytes
+// without paying for a bit-level UART or SPI shift. No board pins, and no
+// power-on-reset generator -- reset is a plain synchronous input here.
+#include "Vtpu_core.h"
+using Dut = Vtpu_core;
+#else
 #include "Vtpu_top.h"
+using Dut = Vtpu_top;
+#endif
 #include "verilated.h"
 
 #ifndef TB_ROWS
@@ -126,11 +137,27 @@ static Mat golden(const Mat& a, const Mat& w, const Vec& bias, bool relu = true)
 // UART bus-functional model around the verilated tpu_top
 // ---------------------------------------------------------------------------
 struct Tb {
-    std::unique_ptr<Vtpu_top> dut{new Vtpu_top};
+    std::unique_ptr<Dut> dut{new Dut};
     uint64_t cycles = 0;
+#ifdef TB_DIRECT
+    Bytes tx_seen;          // every byte the sequencer pulsed tx_valid for
+#endif
 
     Tb() {
         dut->clk = 0;
+#ifdef TB_DIRECT
+        dut->reset    = 1;
+        dut->rx_data  = 0;
+        dut->rx_valid = 0;
+        dut->rx_error = 0;
+        // No PHY, so nothing is ever busy: the sequencer may push TX bytes
+        // as fast as its own FSM allows and the collector below catches them.
+        dut->tx_busy  = 0;
+        dut->eval();
+        cycle(8);
+        dut->reset = 0;
+        cycle(4);
+#else
         dut->reset_n = 1;
         dut->rx_pin = 1;  // UART idle high
 #ifdef TB_SPI
@@ -142,17 +169,104 @@ struct Tb {
         // tpu_top's power-on-reset generator holds internal reset for the
         // first 256 cycles; give it slack before talking.
         cycle(300);
+#endif
     }
 
     void cycle(int n = 1) {
         for (int i = 0; i < n; i++) {
             dut->clk = 1; dut->eval();
+#ifdef TB_DIRECT
+            // tx_valid is a registered one-cycle pulse per byte (the TX FSM
+            // re-arms only once tx_valid is low again), so sampling right
+            // after the posedge collects each byte exactly once.
+            if (dut->tx_valid) tx_seen.push_back((uint8_t)dut->tx_data);
+#endif
             dut->clk = 0; dut->eval();
             cycles++;
         }
     }
 
-#ifndef TB_SPI
+#if defined(TB_DIRECT)
+    // ---------------- Direct byte-stream injection ----------------
+    // Between tiles of a STREAM_RUN the sequencer spends one full pipeline
+    // pass NOT consuming rx bytes (docs/protocol.md §3's timing assumption);
+    // the real links cover that window with their byte cadence. With no PHY
+    // there is no cadence and no backpressure signal to wait on, so the gap
+    // is inserted explicitly, once per tile rather than once per byte.
+    // PASS_CYCLES models it: UB write + activation stream (2*M_TILE), weight
+    // drain + vertical propagation (2*ARRAY_ROWS), column skew (NUM_COLS) and
+    // ~16 cycles of fixed pipeline latency. Measured by sweep at 8x8/M_TILE=4,
+    // where the suite fails at a 40-cycle gap and passes at 48 against a
+    // predicted 47 -- so the 2x here is real margin, not a guess. Too short
+    // shows up as golden-model mismatches, never as a quiet pass.
+    // The pass costs roughly 2*M_TILE (UB write + stream) + 2*ARRAY_ROWS
+    // (weight-FIFO drain + vertical propagation) + NUM_COLS (column skew)
+    // + ~15 fixed pipeline latency, so it grows with the shape. Scale
+    // generously: this is still ~25x cheaper than a bit-level PHY byte.
+    static constexpr int PASS_CYCLES = 2 * MTILE + 2 * ROWS + COLS + 16;
+    static constexpr int STREAM_TILE_GAP = 2 * PASS_CYCLES;
+
+    // After the sequencer pulses tx_valid for the last response byte its TX
+    // FSM still needs a couple of cycles to fall back to S_IDLE. A real PHY
+    // hides that behind its byte cadence; injecting directly does not, and a
+    // CMD byte arriving early is silently dropped -- which desyncs the frame
+    // so the LEN byte is then parsed as the next CMD. Cost is per command,
+    // not per byte, so it is noise against the pipeline pass.
+    static constexpr int CMD_SETTLE_GAP = 32;
+
+    void send_byte(uint8_t v, bool good_stop = true) {
+        if (!good_stop) {
+            // Model a PHY framing error: uart_rx raises rx_error and does NOT
+            // pulse rx_valid for the corrupted byte.
+            dut->rx_error = 1; cycle(); dut->rx_error = 0; cycle();
+            return;
+        }
+        dut->rx_data = v; dut->rx_valid = 1; cycle();
+        dut->rx_valid = 0; cycle();
+    }
+
+    // Pops the next collected TX byte, running the clock until one shows up.
+    int recv_byte(uint64_t timeout_cycles = 500000) {
+        while (tx_seen.empty()) {
+            cycle();
+            if (--timeout_cycles == 0) return -1;
+        }
+        int v = tx_seen.front();
+        tx_seen.erase(tx_seen.begin());
+        return v;
+    }
+
+    int send_cmd(uint8_t cmd, const Bytes& payload, Bytes& resp) {
+        // Settle BEFORE the CMD byte, not after the response: the framing-error
+        // and NOP tests drive send_byte/recv_byte raw, so a trailing gap would
+        // not cover them. Whatever the previous interaction was, the sequencer
+        // is back in S_IDLE by the time the next CMD byte lands.
+        cycle(CMD_SETTLE_GAP);
+        send_byte(cmd);
+        send_byte((uint8_t)payload.size());
+        for (size_t i = 0; i < payload.size(); i++) {
+            send_byte(payload[i]);
+            // STREAM_RUN payload is [flags, K_TILES, tile0, tile1, ...]; a
+            // tile ends whenever (i-1) is a multiple of TILE_BYTES.
+            if (cmd == CMD_STREAM_RUN && i >= 2 && ((i - 1) % TILE_BYTES) == 0)
+                cycle(STREAM_TILE_GAP);
+        }
+        int status = recv_byte();
+        if (status < 0) return status;
+        int len = recv_byte();
+        if (len < 0) return len;
+        resp.clear();
+        for (int i = 0; i < len; i++) {
+            int b = recv_byte();
+            if (b < 0) return b;
+            resp.push_back((uint8_t)b);
+        }
+        // ...and on the way out too, so the tests that drive send_byte /
+        // recv_byte raw (NOP filler, framing error) also start from S_IDLE.
+        cycle(CMD_SETTLE_GAP);
+        return status;
+    }
+#elif !defined(TB_SPI)
     // ---------------- UART master BFM ----------------
     void send_bit(int b) { dut->rx_pin = b; cycle(TICKS_PER_BIT); }
 
@@ -505,7 +619,10 @@ static std::vector<std::tuple<const char*, Mat, Mat, Vec>> build_cases() {
 
 int main(int argc, char** argv) {
     Verilated::commandArgs(argc, argv);
-#ifdef TB_SPI
+#if defined(TB_DIRECT)
+    printf("=== tb_tpu_top: %dx%d array, M_TILE=%d, PSUM=%d (direct injection into tpu_core) ===\n",
+           ROWS, COLS, MTILE, PSUM_W);
+#elif defined(TB_SPI)
     printf("=== tb_tpu_top: %dx%d array, M_TILE=%d (SPI PHY) ===\n",
            ROWS, COLS, MTILE);
 #else
