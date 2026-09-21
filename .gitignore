@@ -36,3 +36,8 @@ __pycache__/
 
 # Pre-reorganization docs, kept locally for reference only (superseded by docs/)
 olddocs/
+
+# TinyStories weights + tokenizer (llm/fetch.sh downloads and quantizes
+# these; ~16MB, same rationale as mnist/data/ above -- reproducible, not
+# tracked). The scripts that build them ARE tracked.
+llm/model/
