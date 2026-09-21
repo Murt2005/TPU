@@ -26,6 +26,7 @@
 #include <cstdio>
 #include <memory>
 #include <random>
+#include <string>
 #include <vector>
 
 #if defined(TB_DIRECT)
@@ -617,8 +618,70 @@ static std::vector<std::tuple<const char*, Mat, Mat, Vec>> build_cases() {
     };
 }
 
+#ifdef TB_DIRECT
+// --------------------------------------------------------------------------
+// Bridge mode (--bridge): act as a transport rather than a test.
+//
+// Reads host->FPGA frames on stdin and writes FPGA->host frames on stdout,
+// byte for byte, so tpu_host.py can drive the simulated core exactly as it
+// drives a serial port or /dev/mem. This is what makes the Python stack --
+// matmul_tiled's padding, K-tiling and STREAM_RUN chaining -- usable against
+// a simulation, and means the same driver code later runs on real silicon
+// with only --link changing.
+//
+// Framing mirrors send_cmd(): CMD, LEN, LEN payload bytes, with the inter-tile
+// gap inserted on STREAM_RUN and the settle gap around every command. CMD_NOP
+// is passed through and draws no response, exactly as the sequencer treats it.
+// --------------------------------------------------------------------------
+static int bridge_main(Tb& tb) {
+    setvbuf(stdout, nullptr, _IONBF, 0);
+    for (;;) {
+        int c = getchar();
+        if (c == EOF) return 0;
+        uint8_t cmd = (uint8_t)c;
+        tb.cycle(Tb::CMD_SETTLE_GAP);
+        if (cmd == 0xFF) { tb.send_byte(cmd); continue; }   // NOP: no response
+
+        int l = getchar();
+        if (l == EOF) return 0;
+        uint8_t len = (uint8_t)l;
+        tb.send_byte(cmd);
+        tb.send_byte(len);
+        for (int i = 0; i < len; i++) {
+            int b = getchar();
+            if (b == EOF) return 0;
+            tb.send_byte((uint8_t)b);
+            if (cmd == CMD_STREAM_RUN && i >= 2 && ((i - 1) % TILE_BYTES) == 0)
+                tb.cycle(Tb::STREAM_TILE_GAP);
+        }
+
+        int status = tb.recv_byte();
+        if (status < 0) return 1;                 // DUT never answered
+        int rlen = tb.recv_byte();
+        if (rlen < 0) return 1;
+        putchar(status);
+        putchar(rlen);
+        for (int i = 0; i < rlen; i++) {
+            int b = tb.recv_byte();
+            if (b < 0) return 1;
+            putchar(b);
+        }
+        fflush(stdout);
+        tb.cycle(Tb::CMD_SETTLE_GAP);
+    }
+}
+#endif
+
 int main(int argc, char** argv) {
     Verilated::commandArgs(argc, argv);
+#ifdef TB_DIRECT
+    for (int i = 1; i < argc; i++) {
+        if (std::string(argv[i]) == "--bridge") {
+            Tb bridge_tb;
+            return bridge_main(bridge_tb);
+        }
+    }
+#endif
 #if defined(TB_DIRECT)
     printf("=== tb_tpu_top: %dx%d array, M_TILE=%d, PSUM=%d (direct injection into tpu_core) ===\n",
            ROWS, COLS, MTILE, PSUM_W);

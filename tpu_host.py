@@ -54,7 +54,9 @@ without support forwards them to the FPGA, which rejects the unknown CMD):
 import argparse
 import mmap
 import os
+import select
 import struct
+import subprocess
 import sys
 import time
 
@@ -211,6 +213,80 @@ class MmioLink:
             os.close(self._fd)
 
 
+class SimLink:
+    """Duck-typed drop-in for serial.Serial that drives a Verilator model of
+    tpu_core, run as a subprocess in bridge mode
+    (tests/verilator/tb_tpu_top.cpp --bridge, built by `make sim-bridge`).
+
+    The byte-level wire protocol is identical to the UART/SPI/HPS links, so
+    everything above this -- matmul_tiled's zero-padding, K-tiling and
+    STREAM_RUN chaining -- is the same code that drives real silicon. Only
+    --link changes. That is the point: a model debugged here runs on the
+    board without touching the driver.
+
+    The bridge answers one frame at a time and never volunteers bytes, so
+    reads are framed exactly like the hardware links'. Simulation is slow
+    (a STREAM_RUN frame is tens of thousands of simulated cycles), hence the
+    much larger default timeout.
+    """
+
+    def __init__(self, port, timeout=120.0):
+        self.timeout = timeout
+        self.baudrate = 10 ** 9      # sentinel: makes UART-era pacing math ~0
+        if not os.path.exists(port):
+            raise TPUError(
+                f"sim bridge binary not found: {port}\n"
+                f"Build it with:  make sim-bridge"
+            )
+        self._p = subprocess.Popen(
+            [os.path.abspath(port), "--bridge"],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, bufsize=0)
+
+    def _alive(self):
+        return self._p.poll() is None
+
+    def write(self, data):
+        if not self._alive():
+            raise TPUError("sim bridge exited (the DUT stopped answering)")
+        self._p.stdin.write(bytes(data))
+        self._p.stdin.flush()
+        return len(data)
+
+    def read(self, n):
+        out = bytearray()
+        deadline = time.time() + self.timeout
+        while len(out) < n:
+            left = deadline - time.time()
+            if left <= 0:
+                break
+            r, _, _ = select.select([self._p.stdout], [], [], left)
+            if not r:
+                break
+            chunk = self._p.stdout.read(n - len(out))   # bufsize=0: may be short
+            if not chunk:
+                break
+            out += chunk
+        return bytes(out)
+
+    def reset_input_buffer(self):
+        # The resync filler in _resync_and_probe_shape provokes a STATUS_ERR
+        # per bogus frame; drain them so the next real response is not read
+        # from the middle of that chatter.
+        while True:
+            r, _, _ = select.select([self._p.stdout], [], [], 0.5)
+            if not r:
+                return
+            if not self._p.stdout.read(65536):
+                return
+
+    def close(self):
+        try:
+            self._p.stdin.close()
+            self._p.wait(timeout=5)
+        except Exception:
+            self._p.kill()
+
+
 def _flags(first, last, act_bypass=False):
     """Pack the RUN-family flags byte (see FLAG_* above)."""
     return ((FLAG_TILE_FIRST if first else 0)
@@ -242,8 +318,9 @@ class TPU:
         self.psum_width = psum_width
         self.psum_bytes = psum_width // 8
         self.psum_dtype = _PSUM_DTYPE[psum_width]
-        if link not in ("uart", "spi", "hps"):
-            raise ValueError(f"link must be 'uart', 'spi', or 'hps', got {link!r}")
+        if link not in ("uart", "spi", "hps", "sim"):
+            raise ValueError(
+                f"link must be 'uart', 'spi', 'hps', or 'sim', got {link!r}")
         self.link = link            # see the SPI_WIRE_HZ comment above
         self.result_bytes = self.psum_bytes * self.m_tile * self.cols
         self.stream_tile_bytes = self.rows * self.cols + self.m_tile * self.rows
@@ -252,6 +329,10 @@ class TPU:
         # uart/spi: a real serial device. MmioLink is a serial.Serial stand-in.
         if link == "hps":
             self.ser = MmioLink(port, timeout=timeout)
+        elif link == "sim":
+            # Simulated cycles are far slower than wall-clock serial; give the
+            # model room rather than inheriting the 2 s hardware default.
+            self.ser = SimLink(port, timeout=max(timeout, 120.0))
         else:
             self.ser = serial.Serial(port, baud, timeout=timeout)
         # cmd byte -> [call count, wire bytes tx (incl. CMD/LEN header), wire bytes rx]
@@ -293,13 +374,19 @@ class TPU:
         so comparing it against this driver's expectation catches a
         mismatched bitstream before any real traffic is sent. Note it cannot
         tell WHICH of the four disagrees, only that the product does."""
-        filler = bytes(258)  # max LEN(255) + CMD/LEN header margin
-        byte_s = 10 / self.ser.baudrate
-        for i in range(0, len(filler), BRIDGE_CHUNK_BYTES):
-            self.ser.write(filler[i:i + BRIDGE_CHUNK_BYTES])
-            time.sleep(BRIDGE_CHUNK_BYTES * byte_s * 1.1)
-        time.sleep(0.1)                   # let the error-response chatter land
-        self.ser.reset_input_buffer()     # ...and throw it away
+        # The sim link spawns a fresh Verilator process whose DUT comes up
+        # reset, so it cannot be mid-frame and there is nothing to resync
+        # from. Skipping the filler also avoids paying ~129 bogus frames'
+        # worth of simulated cycles on every connect. The shape probe below
+        # still runs -- that is the part worth having.
+        if self.link != "sim":
+            filler = bytes(258)  # max LEN(255) + CMD/LEN header margin
+            byte_s = 10 / self.ser.baudrate
+            for i in range(0, len(filler), BRIDGE_CHUNK_BYTES):
+                self.ser.write(filler[i:i + BRIDGE_CHUNK_BYTES])
+                time.sleep(BRIDGE_CHUNK_BYTES * byte_s * 1.1)
+            time.sleep(0.1)               # let the error-response chatter land
+            self.ser.reset_input_buffer() # ...and throw it away
         self.reset()
         resp = self._send_cmd(CMD_RUN)    # zeroed regs post-reset: result is junk,
         if len(resp) != self.result_bytes:  # only its LENGTH matters here
@@ -348,7 +435,7 @@ class TPU:
 
     def _send_cmd(self, cmd, payload=b""):
         wire_tx = bytes([cmd, len(payload)]) + payload
-        if self.link in ("spi", "hps") or len(wire_tx) <= BRIDGE_FIFO_BYTES:
+        if self.link in ("spi", "hps", "sim") or len(wire_tx) <= BRIDGE_FIFO_BYTES:
             # spi/hps have no USB-CDC bridge FIFO to pace against; write directly.
             self.ser.write(wire_tx)
         else:
@@ -714,12 +801,14 @@ def main():
                     help="PSUM_WIDTH the bitstream was built with (default 16). "
                          "Sets the wire bytes per bias/result element; a "
                          "mismatch is a frame-length error, not a wrong answer")
-    p.add_argument("--link", choices=("uart", "spi", "hps"), default="uart",
+    p.add_argument("--link", choices=("uart", "spi", "hps", "sim"), default="uart",
                     help="host-link PHY the board is running: uart (default), "
                          "spi (USE_SPI=1 gateware + TPU_LINK_SPI firmware; "
                          "disables UART-era write pacing), or hps (DE1-SoC "
                          "tpu_top_hps gateware, driven over /dev/mem from the "
-                         "board's ARM Linux -- run tpu_host.py on the board)")
+                         "board's ARM Linux -- run tpu_host.py on the board), "
+                         "or sim (Verilator model of tpu_core as a subprocess; "
+                         "--port is the binary from `make sim-bridge`)")
     p.add_argument("--selftest", action="store_true",
                     help="run a known-good W/A/bias combo and check against the "
                          "expected result")

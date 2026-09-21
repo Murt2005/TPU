@@ -28,25 +28,36 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from tpu_host import TPU, DEFAULT_BAUD  # noqa: E402
 
-PSUM_WIDTH = 16  # rtl/tpu_top.sv: accumulator + bias adder width (no saturation)
+# Default accumulator/bias width (rtl/tpu_sequencer.sv's PSUM_WIDTH, no
+# saturation). Overridden from the CLI when the model/bitstream is wider --
+# set once in main() so golden() stays a pure function of its arguments.
+PSUM_WIDTH = 16
 
 
-def golden(a, w, bias):
+def golden(a, w, bias, psum_width=None, relu=True):
     """Reference model matching the hardware's fixed-width datapath exactly.
 
-    The accumulator/bias sum is a PSUM_WIDTH-bit signed value with silent
+    The accumulator/bias sum is a psum_width-bit signed value with silent
     (non-saturating) overflow -- ReLU is applied *after* that truncation, not
     on the mathematically-exact product. This only matters once |A@W + bias|
-    exceeds int16 range; every value the pipeline actually produces along the
-    way is representable in wider precision, so truncating once at the end
-    (rather than after every add) yields the identical bit pattern.
+    exceeds the accumulator's range; every value the pipeline actually
+    produces along the way is representable in wider precision, so truncating
+    once at the end (rather than after every add) yields the identical bit
+    pattern.
+
+    relu=False models the flags[2] ACT_BYPASS path, where activation.sv
+    passes the biased sum through unclamped.
     """
+    pw = PSUM_WIDTH if psum_width is None else psum_width
     a = np.asarray(a, dtype=np.int64)
     w = np.asarray(w, dtype=np.int64)
     bias = np.asarray(bias, dtype=np.int64)
     r = a @ w + bias
-    r16 = r.astype(np.int16)
-    return np.maximum(r16, 0).astype(np.int16)
+    # Wrap into pw bits, signed. int8/16/32/64 have numpy dtypes; anything
+    # else would need explicit masking, and the RTL requires a byte multiple.
+    dt = {8: np.int8, 16: np.int16, 32: np.int32, 64: np.int64}[pw]
+    rw = r.astype(dt)
+    return (np.maximum(rw, 0) if relu else rw).astype(dt)
 
 
 # Test vectors mirrored from tests/tpu_sequencer_tb.sv Test 1/2/5/6 so a pass
@@ -290,16 +301,26 @@ def main():
                     help="NUM_COLS the flashed bitstream was built with (default 2)")
     p.add_argument("--m-tile", type=int, default=None,
                     help="M_TILE the flashed bitstream was built with (default: --rows)")
-    p.add_argument("--link", choices=("uart", "spi"), default="uart",
-                    help="host-link PHY the board is running (see tpu_host.py --help)")
+    p.add_argument("--link", choices=("uart", "spi", "sim"), default="uart",
+                    help="host-link PHY the board is running, or sim to run the "
+                         "whole suite against the Verilator model instead of a "
+                         "board (--port is the `make sim-bridge` binary)")
+    p.add_argument("--psum-width", type=int, default=16, choices=(8, 16, 32, 64),
+                    help="PSUM_WIDTH the bitstream/model was built with")
     p.add_argument("--stress-n", type=int, default=200,
                     help="number of randomized matmuls to run (default 200)")
     p.add_argument("--seed", type=int, default=0, help="RNG seed for the stress test")
     args = p.parse_args()
 
+    # golden() must wrap at the same width the device accumulates at, or every
+    # result past int16 reads as a mismatch when the device is in fact right.
+    global PSUM_WIDTH
+    PSUM_WIDTH = args.psum_width
+
     results = []
     with TPU(args.port, args.baud, rows=args.rows, cols=args.cols,
-             m_tile=args.m_tile, link=args.link) as tpu:
+             m_tile=args.m_tile, link=args.link,
+             psum_width=args.psum_width) as tpu:
         cases = build_cases(tpu.rows, tpu.cols, tpu.m_tile)
         for name, a, w, bias in cases:
             results.append(run_case(tpu, name, a, w, bias))

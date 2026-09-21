@@ -114,7 +114,7 @@ TESTS := fifo pe pe_pair mmu accumulator systolic_data_setup weight_fifo bias ac
 # de-duplicate dep lists (modules shared via multiple paths, e.g. tpu_core -> fifo.sv)
 dedup = $(if $1,$(firstword $1) $(call dedup,$(filter-out $(firstword $1),$1)))
 
-.PHONY: all test lint verilate-test list clean hw-test $(foreach t,$(TESTS),test-$(t) build-$(t) wave-$(t))
+.PHONY: all test lint verilate-test sim-bridge list clean hw-test $(foreach t,$(TESTS),test-$(t) build-$(t) wave-$(t))
 
 all: test
 
@@ -274,6 +274,34 @@ lint: $(SB_MAC16_SIM)
 VERILATE_SHAPES := 2_2_2_uart 2_4_2_uart 4_2_3_uart 2_4_2_spi 4_4_2_spipair 4_4_4_spipair \
                    8_8_8_uart 2_2_2_uart32 4_4_2_spi32 8_8_4_uart32 \
                    2_2_2_direct 8_8_4_direct32
+
+# make sim-bridge: build the direct bench as a transport binary for
+# tpu_host.py --link sim. Shape knobs are independent of the test matrix
+# above so a model's K/N can pick the array it wants; the defaults are the
+# transformer shape (PSUM=32 for a reduction past int16, M_TILE=4 to keep
+# the result frame inside the 255-byte LEN cap).
+SIM_ROWS  ?= 8
+SIM_COLS  ?= 8
+SIM_MTILE ?= 4
+SIM_PSUM  ?= 32
+SIM_FD    ?= 8
+SIM_BRIDGE_DIR := $(SIM_DIR)/verilator/bridge
+SIM_BRIDGE     := $(SIM_BRIDGE_DIR)/tb_tpu_top
+
+sim-bridge: $(SB_MAC16_SIM) | $(SIM_DIR)
+	@mkdir -p $(SIM_BRIDGE_DIR)
+	@$(VERILATOR) --cc --exe --build -j 0 -Wall \
+		--Mdir $(SIM_BRIDGE_DIR) verilator.vlt \
+		--top-module tpu_core \
+		-GFIFO_DEPTH=$(SIM_FD) -GARRAY_ROWS=$(SIM_ROWS) -GNUM_COLS=$(SIM_COLS) \
+		-GM_TILE=$(SIM_MTILE) -GPSUM_WIDTH=$(SIM_PSUM) \
+		-CFLAGS "-std=c++17 -DTB_ROWS=$(SIM_ROWS) -DTB_COLS=$(SIM_COLS) \
+		         -DTB_MTILE=$(SIM_MTILE) -DTB_PSUM_WIDTH=$(SIM_PSUM) -DTB_DIRECT" \
+		$(SB_MAC16_SIM) $(RTL_DIR)/*.sv $(TEST_DIR)/verilator/tb_tpu_top.cpp \
+		-o tb_tpu_top > /dev/null
+	@echo "sim-bridge: $(SIM_BRIDGE) ($(SIM_ROWS)x$(SIM_COLS) M_TILE=$(SIM_MTILE) PSUM=$(SIM_PSUM))"
+	@echo "  use: python3 tpu_host.py --link sim --port $(SIM_BRIDGE) \
+--rows $(SIM_ROWS) --cols $(SIM_COLS) --m-tile $(SIM_MTILE) --psum-width $(SIM_PSUM) --selftest"
 
 verilate-test: $(SB_MAC16_SIM) | $(SIM_DIR)
 	@set -e; for shape in $(VERILATE_SHAPES); do \
