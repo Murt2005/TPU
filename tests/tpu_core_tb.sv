@@ -141,6 +141,7 @@ module tpu_core_tb;
     );
 
     activation #(.NUM_COLS(2), .PSUM_WIDTH(16)) u_act (
+        .bypass(1'b0),   // ReLU always on in this bench
         .clk(clk), .reset(reset),
         .in_row(biased_row), .in_row_valid(biased_valid),
         .out_row(final_row_out), .out_row_valid(final_row_valid)

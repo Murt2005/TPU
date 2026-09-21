@@ -22,7 +22,7 @@
 //   mmu              (ARRAY_ROWS x NUM_COLS systolic array)
 //   accumulator      (column-FIFO row reassembler + K-tiling running sum)
 //   bias             (per-column stationary bias add)
-//   activation       (ReLU)
+//   activation       (ReLU, bypassable per RUN via the flags byte)
 module tpu_core #(
     parameter int WEIGHT_WIDTH = 8,
     parameter int FIFO_DEPTH   = 4,   // must be a power of 2, >= ARRAY_ROWS
@@ -76,6 +76,7 @@ module tpu_core #(
 
     // K-tiling control (accumulator persistent-sum passes)
     logic seq_tile_first, seq_tile_last;
+    logic seq_act_bypass;
     logic accum_pass_done;
 
     // pipeline final output
@@ -123,6 +124,7 @@ module tpu_core #(
         // K-tiling control
         .tile_first         (seq_tile_first),
         .tile_last          (seq_tile_last),
+        .act_bypass         (seq_act_bypass),
         .accum_pass_done    (accum_pass_done),
         // pipeline result
         .final_row_out      (final_row_out),
@@ -251,6 +253,7 @@ module tpu_core #(
     activation #(.NUM_COLS(NUM_COLS), .PSUM_WIDTH(PSUM_WIDTH)) u_act (
         .clk          (clk),
         .reset        (dp_reset),
+        .bypass       (seq_act_bypass),
         .in_row       (biased_row),
         .in_row_valid (biased_valid),
         .out_row      (final_row_out),

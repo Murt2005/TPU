@@ -97,6 +97,7 @@ module bias_activation_tb;
         .NUM_COLS(NUM_COLS),
         .PSUM_WIDTH(PSUM_WIDTH)
     ) u_act (
+        .bypass(1'b0),   // ReLU always on in this bench
         .clk         (clk),
         .reset       (reset),
         .in_row      (biased_row),

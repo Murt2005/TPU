@@ -56,6 +56,7 @@ module tpu_sequencer_4x2_tb;
     logic              seq_ub_en;
     logic signed [NUM_COLS-1:0][15:0] seq_bias;
     logic               seq_tile_first, seq_tile_last;
+    logic               seq_act_bypass;
     logic               accum_pass_done;
     logic signed [NUM_COLS-1:0][15:0] final_row_out;
     logic               final_row_valid;
@@ -97,7 +98,7 @@ module tpu_sequencer_4x2_tb;
         .host_write_valid(seq_hw_valid),
         .ub_read_addr(seq_ub_addr), .ub_read_en(seq_ub_en),
         .out_bias(seq_bias),
-        .tile_first(seq_tile_first), .tile_last(seq_tile_last),
+        .tile_first(seq_tile_first), .tile_last(seq_tile_last), .act_bypass(seq_act_bypass),
         .accum_pass_done(accum_pass_done),
         .final_row_out(final_row_out), .final_row_valid(final_row_valid),
         .tpu_reset(seq_tpu_reset), .busy(busy)
@@ -153,6 +154,7 @@ module tpu_sequencer_4x2_tb;
     );
 
     activation #(.NUM_COLS(NUM_COLS), .PSUM_WIDTH(16)) u_act (
+        .bypass(seq_act_bypass),
         .clk(clk), .reset(dp_reset),
         .in_row(biased_row), .in_row_valid(biased_valid),
         .out_row(final_row_out), .out_row_valid(final_row_valid)

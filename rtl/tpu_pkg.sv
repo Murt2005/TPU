@@ -29,6 +29,15 @@ package tpu_pkg;
     // 0xFF as a command; unknown-command tests use other bytes.)
     localparam logic [7:0] CMD_NOP          = 8'hFF;
 
+    // --- RUN-family flags byte ---
+    // Bit positions within the optional flags byte carried by CMD_RUN
+    // (LEN=1), CMD_RUN_TILE (payload[0]) and CMD_STREAM_RUN (frame header
+    // byte 0). Mirrored by tpu_host.py. See tpu_sequencer.sv's header and
+    // docs/protocol.md §2.
+    localparam int FLAG_TILE_FIRST = 0;   // overwrite the accumulator's sum
+    localparam int FLAG_TILE_LAST  = 1;   // forward through bias/activation
+    localparam int FLAG_ACT_BYPASS = 2;   // skip the ReLU clamp this pass
+
     // --- FPGA -> Host status byte (response byte [0]) ---
     localparam logic [7:0] STATUS_OK  = 8'hAA;   // command accepted / completed
     localparam logic [7:0] STATUS_ERR = 8'hFF;   // unknown CMD / framing error

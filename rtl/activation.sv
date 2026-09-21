@@ -13,6 +13,13 @@
 // non-linearity and is fused into the same pipeline stage as the bias add
 // (here split into two composable modules for clarity and testability).
 //
+// `bypass` makes the clamp optional: when high the row passes through
+// unchanged, still with the same one cycle of registered latency, so the
+// pipeline timing the sequencer replays is identical either way. A network
+// whose layers are not all ReLU -- anything with a linear output projection,
+// for instance -- needs this; the host selects it per RUN via the command
+// frame's flags byte (flags[2], see rtl/tpu_sequencer.sv).
+//
 // Interface contract (identical to bias.sv):
 //   - One cycle of registered latency: out_row_valid fires the cycle AFTER
 //     in_row_valid is sampled.
@@ -31,6 +38,10 @@ module activation #(
 ) (
     input  logic clk,
     input  logic reset,
+
+    // 0 = clamp negatives to zero (ReLU), 1 = pass the row through unchanged.
+    // Held stable by the sequencer for the whole pipeline pass.
+    input  logic bypass,
 
     input  logic signed [NUM_COLS-1:0][PSUM_WIDTH-1:0] in_row,
     input  logic                         in_row_valid,
@@ -54,7 +65,7 @@ module activation #(
                     // cast -- Icarus Verilog 13.0 drops the signed attribute on a
                     // word select out of a packed 2D array, so a bare
                     // `in_row[c] < 0` always reads as unsigned (never negative).
-                    out_row[c] <= ($signed(in_row[c]) < 0) ? '0 : in_row[c];
+                    out_row[c] <= (!bypass && $signed(in_row[c]) < 0) ? '0 : in_row[c];
                 end
             end
         end

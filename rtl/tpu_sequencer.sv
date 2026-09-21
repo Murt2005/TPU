@@ -60,6 +60,13 @@ import tpu_pkg::*;
 //                               return the usual result bytes; 0 = update
 //                               the running sum only -- bias/activation
 //                               never fire, response is STATUS=0xAA, LEN=0)
+//                             flags[2] = ACT_BYPASS (1 = skip the ReLU
+//                               clamp on this pass, returning the biased
+//                               sum unchanged; 0 = clamp as usual). Only
+//                               observable when TILE_LAST=1, since that is
+//                               the only pass activation fires on. Needed
+//                               by any layer that is not ReLU-terminated --
+//                               a linear output projection, say.
 //                             LEN=0 is equivalent to flags=TILE_FIRST|TILE_LAST
 //                             (single-shot behavior, unchanged for existing
 //                             hosts that never send the byte).
@@ -217,6 +224,9 @@ module tpu_sequencer #(
     // stable for the full RUN orchestration sequence.
     output logic               tile_first,
     output logic               tile_last,
+    // ReLU bypass for this pass (flags[FLAG_ACT_BYPASS]). Like tile_first/
+    // tile_last, held stable for the whole RUN orchestration sequence.
+    output logic               act_bypass,
     input  logic               accum_pass_done,
 
     input  logic signed [NUM_COLS-1:0][PSUM_WIDTH-1:0] final_row_out,
@@ -275,6 +285,7 @@ module tpu_sequencer #(
     logic signed [PSUM_WIDTH-1:0] reg_bias    [NUM_COLS];
     logic               reg_tile_first;
     logic               reg_tile_last;
+    logic               reg_act_bypass;
 
     // Results captured from pipeline, one row per final_row_valid pulse
     logic signed [PSUM_WIDTH-1:0] result_rows [M_TILE][NUM_COLS];
@@ -332,6 +343,7 @@ module tpu_sequencer #(
     logic       stream_active;   // diverts S_WAIT's exit back to the next tile
     logic       stream_first;    // frame flags[0]: TILE_FIRST for this frame's tile 0
     logic       stream_last;     // frame flags[1]: TILE_LAST for this frame's final tile
+    logic       stream_act_bypass; // frame flags[2]: ACT_BYPASS for this frame
     logic [7:0] k_tiles_reg;
     logic [7:0] tile_idx;
     logic [7:0] sr_row, sr_col;
@@ -350,12 +362,13 @@ module tpu_sequencer #(
     logic rx_error_prev;
     wire  rx_error_rise = rx_error && !rx_error_prev;
 
-    // Drive out_bias / tile_first / tile_last to the datapath at all times
+    // Drive out_bias / tile_first / tile_last / act_bypass at all times
     always_comb begin
         for (int c = 0; c < NUM_COLS; c++)
             out_bias[c] = reg_bias[c];
         tile_first = reg_tile_first;
         tile_last  = reg_tile_last;
+        act_bypass = reg_act_bypass;
     end
 
     always_ff @(posedge clk) begin
@@ -375,6 +388,7 @@ module tpu_sequencer #(
                 reg_bias[c] <= '0;
             reg_tile_first    <= 1'b1;
             reg_tile_last     <= 1'b1;
+            reg_act_bypass    <= 1'b0;
             for (int m = 0; m < M_TILE; m++)
                 for (int c = 0; c < NUM_COLS; c++)
                     result_rows[m][c] <= '0;
@@ -398,6 +412,7 @@ module tpu_sequencer #(
             stream_active      <= 1'b0;
             stream_first       <= 1'b0;
             stream_last        <= 1'b0;
+            stream_act_bypass  <= 1'b0;
             k_tiles_reg        <= '0;
             tile_idx           <= '0;
             sr_row             <= '0;
@@ -548,11 +563,13 @@ module tpu_sequencer #(
                             wait_cnt  <= '0;
                             run_cnt   <= '0;
                             if (len_reg == 8'd1) begin
-                                reg_tile_first <= payload[0][0];
-                                reg_tile_last  <= payload[0][1];
+                                reg_tile_first <= payload[0][FLAG_TILE_FIRST];
+                                reg_tile_last  <= payload[0][FLAG_TILE_LAST];
+                                reg_act_bypass <= payload[0][FLAG_ACT_BYPASS];
                             end else begin
                                 reg_tile_first <= 1'b1;
                                 reg_tile_last  <= 1'b1;
+                                reg_act_bypass <= 1'b0;
                             end
                             state     <= S_WR_UB;
                         end
@@ -571,8 +588,9 @@ module tpu_sequencer #(
                         // contract either way. Bias is NOT part of this
                         // frame (LOAD_BIAS is once-per-output-block).
                         CMD_RUN_TILE: begin
-                            reg_tile_first <= payload[0][0];
-                            reg_tile_last  <= payload[0][1];
+                            reg_tile_first <= payload[0][FLAG_TILE_FIRST];
+                            reg_tile_last  <= payload[0][FLAG_TILE_LAST];
+                            reg_act_bypass <= payload[0][FLAG_ACT_BYPASS];
                             for (int r = 0; r < ARRAY_ROWS; r++)
                                 for (int c = 0; c < NUM_COLS; c++)
                                     reg_weights[r][c]
@@ -742,8 +760,9 @@ module tpu_sequencer #(
                         tx_byte_idx   <= 8'd0;
                         state         <= S_TX_STATUS;
                     end else if (rx_valid) begin
-                        stream_first <= rx_data[0];
-                        stream_last  <= rx_data[1];
+                        stream_first      <= rx_data[FLAG_TILE_FIRST];
+                        stream_last       <= rx_data[FLAG_TILE_LAST];
+                        stream_act_bypass <= rx_data[FLAG_ACT_BYPASS];
                         state        <= S_SR_KT;
                     end
                 end
@@ -822,6 +841,7 @@ module tpu_sequencer #(
                                     sr_act_phase   <= 1'b0;
                                     reg_tile_first <= (tile_idx == 8'd0) && stream_first;
                                     reg_tile_last  <= (tile_idx == k_tiles_reg - 8'd1) && stream_last;
+                                    reg_act_bypass <= stream_act_bypass;
                                     rows_got       <= '0;
                                     wait_cnt       <= '0;
                                     run_cnt        <= '0;

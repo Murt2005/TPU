@@ -12,6 +12,8 @@
 //   Test 7 – Invalid input (in_row_valid=0) produces no out_row_valid pulse.
 //   Test 8 – Reset mid-stream: out_row_valid stays low while reset is held,
 //             then module recovers and operates correctly afterward.
+//   Test 9 – bypass=1 passes negatives through unclamped, and dropping bypass
+//             back to 0 clamps again (the mode is combinational, not latched).
 //
 
 module activation_tb;
@@ -27,13 +29,17 @@ module activation_tb;
     logic signed [NUM_COLS-1:0][PSUM_WIDTH-1:0] out_row;
     logic                         out_row_valid;
 
+    logic                         bypass;
+
     int errors       = 0;
     int rows_checked = 0;
+
 
     activation #(
         .NUM_COLS(NUM_COLS),
         .PSUM_WIDTH(PSUM_WIDTH)
     ) dut (
+        .bypass       (bypass),
         .clk          (clk),
         .reset        (reset),
         .in_row       (in_row),
@@ -94,6 +100,7 @@ module activation_tb;
         in_row[0]    = '0;
         in_row[1]    = '0;
         in_row_valid = 1'b0;
+        bypass       = 1'b0;
 
         #15 reset = 0;
         @(posedge clk); #1;
@@ -243,6 +250,19 @@ module activation_tb;
 
             check_row(16'sd7, -16'sd3, 16'sd7, 16'sd0, "Test8 post-reset recovery");
         end
+
+        // -------------------------------------------------------------------
+        // Test 9: bypass. With bypass=1 the clamp is skipped entirely, so a
+        // negative row survives to the output -- this is what a layer with a
+        // linear (non-ReLU) output projection needs. Dropping bypass back to 0
+        // must clamp again on the very next row: the mode is read combinationally
+        // per row, not latched at reset or on the first valid.
+        $display(" Test 9: bypass passes negatives through ");
+        bypass = 1'b1;
+        check_row(-16'sd5,   16'sd20,  -16'sd5,   16'sd20,  "Test9 bypass negative passthrough");
+        check_row(-16'sd32768, 16'sd32767, -16'sd32768, 16'sd32767, "Test9 bypass extremes");
+        bypass = 1'b0;
+        check_row(-16'sd5,   16'sd20,   16'sd0,   16'sd20,  "Test9 clamp restored after bypass");
 
         // -------------------------------------------------------------------
         $display("\n=== SIMULATION COMPLETE ===\n");
