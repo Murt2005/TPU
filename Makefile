@@ -266,6 +266,36 @@ lint: $(SB_MAC16_SIM)
 VERILATE_SHAPES := 2_2_2_uart 2_4_2_uart 4_2_3_uart 2_4_2_spi 4_4_2_spipair 4_4_4_spipair \
                    8_8_8_uart
 
+# make sim-trace: build viz/trace_tb.cpp, the VCD trace harness behind the
+# datapath visualizer. Separate from sim-bridge because it needs --trace (much
+# slower, but it records every internal signal, which is the whole point).
+VIZ_ROWS  ?= 4
+VIZ_COLS  ?= 4
+VIZ_MTILE ?= 4
+VIZ_DIR   := $(SIM_DIR)/verilator/trace
+SIM_TRACE := $(VIZ_DIR)/trace_tb
+
+sim-trace: $(SB_MAC16_SIM) | $(SIM_DIR)
+	@mkdir -p $(VIZ_DIR)
+	@$(VERILATOR) --cc --exe --build -j 0 --trace \
+		--Mdir $(VIZ_DIR) verilator.vlt \
+		--top-module tpu_core \
+		-GFIFO_DEPTH=4 -GARRAY_ROWS=$(VIZ_ROWS) -GNUM_COLS=$(VIZ_COLS) \
+		-GM_TILE=$(VIZ_MTILE) \
+		-CFLAGS "-std=c++17 -DTB_ROWS=$(VIZ_ROWS) -DTB_COLS=$(VIZ_COLS) \
+		         -DTB_MTILE=$(VIZ_MTILE)" \
+		$(SB_MAC16_SIM) $(RTL_DIR)/*.sv viz/trace_tb.cpp \
+		-o trace_tb > /dev/null
+	@echo "sim-trace: $(SIM_TRACE) ($(VIZ_ROWS)x$(VIZ_COLS) M_TILE=$(VIZ_MTILE))"
+
+# make viz-check: prove viz/model.mjs (the viewer's JavaScript datapath
+# model) still matches the real RTL, cycle for cycle, on random matrices.
+# Run this after ANY datapath change -- the viewer is only trustworthy for
+# as long as this passes.
+VIZ_CHECK_N ?= 40
+viz-check: sim-trace
+	@node viz/check_model.mjs --n $(VIZ_CHECK_N)
+
 verilate-test: $(SB_MAC16_SIM) | $(SIM_DIR)
 	@set -e; for shape in $(VERILATE_SHAPES); do \
 		rows=$${shape%%_*}; rest=$${shape#*_}; \
