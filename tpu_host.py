@@ -8,16 +8,17 @@ get back Y = ReLU(A @ W + bias) as an (m_tile x cols) int16 matrix.
 
 Protocol (8-N-1, host-initiates everything -- see rtl/tpu_sequencer.sv).
 All payload sizes derive from the array shape: W_BYTES = rows*cols,
-A_BYTES = m_tile*rows, B_BYTES = 2*cols, RESULT_BYTES = 2*m_tile*cols
+A_BYTES = m_tile*rows, B_BYTES = psum_bytes*cols,
+RESULT_BYTES = psum_bytes*m_tile*cols  (psum_bytes = PSUM_WIDTH/8, default 2)
 (the LEN values shown are for the default 2x2/M_TILE=2 shape):
 
     Host -> FPGA:  [CMD][LEN][payload[LEN]]
     FPGA -> Host:  [STATUS][LEN][payload[LEN]]   (STATUS: 0xAA=OK, 0xFF=ERR)
 
     0x01 LOAD_WEIGHTS  LEN=W_BYTES(4)  int8, rows bottom-first, row-major within
-    0x02 LOAD_BIAS     LEN=B_BYTES(4)  per-column int16 LE
+    0x02 LOAD_BIAS     LEN=B_BYTES(4)  per-column signed LE, psum_bytes each
     0x03 LOAD_ACT      LEN=A_BYTES(4)  int8, row-major
-    0x04 RUN           LEN=0  -> RESULT_BYTES(8) int16 LE, row-major
+    0x04 RUN           LEN=0  -> RESULT_BYTES(8) signed LE, row-major
                or       LEN=1  [flags] -- K-tiling variant, see TPU.run()
     0x05 RESET         LEN=0
     0x06 RUN_TILE      LEN=1+W_BYTES+A_BYTES(9)  [flags, w bytes, a bytes] --
@@ -69,6 +70,16 @@ CMD_RUN = 0x04
 CMD_RESET = 0x05
 CMD_RUN_TILE = 0x06
 CMD_STREAM_RUN = 0x07
+
+# RUN-family flags byte (CMD_RUN LEN=1, CMD_RUN_TILE payload[0],
+# CMD_STREAM_RUN frame header byte 0). Mirrors tpu_pkg's FLAG_* localparams.
+FLAG_TILE_FIRST = 0x01   # overwrite the accumulator's running sum
+FLAG_TILE_LAST = 0x02    # forward the final sum through bias/activation
+FLAG_ACT_BYPASS = 0x04   # skip the ReLU clamp on this pass
+
+# PSUM_WIDTH -> the numpy dtype one bias/result element takes on the wire.
+# Must match the bitstream's PSUM_WIDTH (rtl/tpu_sequencer.sv's parameter).
+_PSUM_DTYPE = {8: "<i1", 16: "<i2", 32: "<i4", 64: "<i8"}
 
 FW_MATMUL = 0xF0
 FW_PROBE = 0xF1
@@ -200,6 +211,13 @@ class MmioLink:
             os.close(self._fd)
 
 
+def _flags(first, last, act_bypass=False):
+    """Pack the RUN-family flags byte (see FLAG_* above)."""
+    return ((FLAG_TILE_FIRST if first else 0)
+            | (FLAG_TILE_LAST if last else 0)
+            | (FLAG_ACT_BYPASS if act_bypass else 0))
+
+
 class TPU:
     """One systolic-array TPU core, reachable over a UART link.
 
@@ -211,14 +229,23 @@ class TPU:
 
     def __init__(self, port, baud=DEFAULT_BAUD, timeout=2.0,
                  rows=2, cols=2, m_tile=None, probe=True, link="uart",
-                 offload=True):
+                 offload=True, psum_width=16):
         self.rows = rows            # ARRAY_ROWS: K-tile depth
         self.cols = cols            # NUM_COLS:   N-tile width
         self.m_tile = rows if m_tile is None else m_tile  # M rows per RUN
+        # PSUM_WIDTH: bias and result elements are psum_bytes LE each on the
+        # wire. Must match the bitstream's PSUM_WIDTH (fpga/ice40/Makefile);
+        # a mismatch is a frame-length error, not a wrong answer.
+        if psum_width not in _PSUM_DTYPE:
+            raise ValueError(f"psum_width must be one of "
+                             f"{sorted(_PSUM_DTYPE)}, got {psum_width}")
+        self.psum_width = psum_width
+        self.psum_bytes = psum_width // 8
+        self.psum_dtype = _PSUM_DTYPE[psum_width]
         if link not in ("uart", "spi", "hps"):
             raise ValueError(f"link must be 'uart', 'spi', or 'hps', got {link!r}")
         self.link = link            # see the SPI_WIRE_HZ comment above
-        self.result_bytes = 2 * self.m_tile * self.cols
+        self.result_bytes = self.psum_bytes * self.m_tile * self.cols
         self.stream_tile_bytes = self.rows * self.cols + self.m_tile * self.rows
         self.max_stream_tiles = (255 - 2) // self.stream_tile_bytes
         # hps: memory-mapped bridge on the DE1-SoC (runs on the board's ARM);
@@ -262,9 +289,10 @@ class TPU:
         datapath.
 
         Shape probe: a LEN=0 RUN's response LEN is the device's
-        2*M_TILE*NUM_COLS -- a synthesis-time constant -- so comparing it
-        against this driver's expectation catches a mismatched bitstream
-        before any real traffic is sent."""
+        PSUM_BYTES*M_TILE*NUM_COLS -- all three synthesis-time constants --
+        so comparing it against this driver's expectation catches a
+        mismatched bitstream before any real traffic is sent. Note it cannot
+        tell WHICH of the four disagrees, only that the product does."""
         filler = bytes(258)  # max LEN(255) + CMD/LEN header margin
         byte_s = 10 / self.ser.baudrate
         for i in range(0, len(filler), BRIDGE_CHUNK_BYTES):
@@ -277,10 +305,12 @@ class TPU:
         if len(resp) != self.result_bytes:  # only its LENGTH matters here
             raise TPUError(
                 f"array-shape mismatch: the flashed bitstream returns "
-                f"{len(resp)}-byte results (2*M_TILE*NUM_COLS), but "
-                f"rows={self.rows}/cols={self.cols}/m_tile={self.m_tile} "
-                f"expects {self.result_bytes}. Pass --rows/--cols/--m-tile "
-                f"matching the fpga/Makefile ARRAY_ROWS/NUM_COLS/M_TILE the "
+                f"{len(resp)}-byte results "
+                f"(PSUM_BYTES*M_TILE*NUM_COLS), but rows={self.rows}/"
+                f"cols={self.cols}/m_tile={self.m_tile}/"
+                f"psum_width={self.psum_width} expects {self.result_bytes}. "
+                f"Pass --rows/--cols/--m-tile/--psum-width matching the "
+                f"fpga/Makefile ARRAY_ROWS/NUM_COLS/M_TILE/PSUM_WIDTH the "
                 f"bitstream was built with."
             )
 
@@ -404,7 +434,7 @@ class TPU:
         if len(resp) != self.result_bytes:
             raise TPUError(f"{what} response had {len(resp)} data bytes, "
                            f"expected {self.result_bytes}")
-        return np.frombuffer(resp, dtype="<i2").reshape(self.m_tile, self.cols)
+        return np.frombuffer(resp, dtype=self.psum_dtype).reshape(self.m_tile, self.cols)
 
     def load_weights(self, w):
         """w: (rows x cols) array-like, standard row-major, int8 signed.
@@ -414,18 +444,18 @@ class TPU:
         self._send_cmd(CMD_LOAD_WEIGHTS, np.ascontiguousarray(w[::-1]).tobytes())
 
     def load_bias(self, b):
-        """b: length-cols array-like, per-output-column int16 bias."""
-        b = np.asarray(b, dtype=np.int16)
+        """b: length-cols array-like, per-output-column bias, psum_width-wide."""
+        b = np.asarray(b, dtype=self.psum_dtype)
         if b.shape != (self.cols,):
             raise ValueError(f"bias must have shape ({self.cols},), got {b.shape}")
-        self._send_cmd(CMD_LOAD_BIAS, b.astype("<i2").tobytes())
+        self._send_cmd(CMD_LOAD_BIAS, b.astype(self.psum_dtype).tobytes())
 
     def load_activations(self, a):
         """a: (m_tile x rows) array-like, standard row-major, int8 signed."""
         a = self._check_a(a)
         self._send_cmd(CMD_LOAD_ACT, a.tobytes())
 
-    def run(self, first=True, last=True):
+    def run(self, first=True, last=True, act_bypass=False):
         """Executes one RUN pass; returns an (m_tile x cols) int16 matrix,
         or None.
 
@@ -440,17 +470,16 @@ class TPU:
         the original single-shot matmul, sent as LEN=0 for wire
         compatibility with hosts that never send the flags byte.
         """
-        if first and last:
+        if first and last and not act_bypass:
             payload = b""
         else:
-            flags = (0x01 if first else 0) | (0x02 if last else 0)
-            payload = bytes([flags])
+            payload = bytes([_flags(first, last, act_bypass)])
         resp = self._send_cmd(CMD_RUN, payload)
         if not last:
             return None
         return self._parse_result(resp, "RUN")
 
-    def run_tile(self, w, a, first=True, last=True):
+    def run_tile(self, w, a, first=True, last=True, act_bypass=False):
         """One K-tile pass -- LOAD_WEIGHTS + LOAD_ACT + RUN folded into a
         single CMD_RUN_TILE round trip (3x fewer transactions per tile; see
         docs/protocol.md §3). w is (rows x cols), a is
@@ -462,13 +491,13 @@ class TPU:
         load_bias() once per output block."""
         w = self._check_w(w)
         a = self._check_a(a)
-        flags = (0x01 if first else 0) | (0x02 if last else 0)
+        flags = _flags(first, last, act_bypass)
         resp = self._send_cmd(CMD_RUN_TILE, bytes([flags]) + w.tobytes() + a.tobytes())
         if not last:
             return None
         return self._parse_result(resp, "RUN_TILE")
 
-    def stream_run(self, w_tiles, a_tiles, first=True, last=True):
+    def stream_run(self, w_tiles, a_tiles, first=True, last=True, act_bypass=False):
         """A whole K-run (or a chunk of one) in a single CMD_STREAM_RUN
         round trip: up to self.max_stream_tiles (w, a) tile pairs,
         accumulated tile-by-tile in the datapath
@@ -483,8 +512,7 @@ class TPU:
         k_tiles = len(w_tiles)
         if not 1 <= k_tiles <= self.max_stream_tiles:
             raise ValueError(f"K_TILES must be 1..{self.max_stream_tiles}, got {k_tiles}")
-        flags = (0x01 if first else 0) | (0x02 if last else 0)
-        payload = bytearray([flags, k_tiles])
+        payload = bytearray([_flags(first, last, act_bypass), k_tiles])
         for w, a in zip(w_tiles, a_tiles):
             payload += self._check_w(w).tobytes() + self._check_a(a).tobytes()
         resp = self._send_cmd(CMD_STREAM_RUN, bytes(payload))
@@ -502,7 +530,7 @@ class TPU:
         self.load_bias(np.zeros(self.cols, dtype=np.int16) if bias is None else bias)
         return self.run()
 
-    def matmul_tiled(self, a, w, bias=None, offload=None):
+    def matmul_tiled(self, a, w, bias=None, offload=None, act_bypass=False):
         """Y = ReLU(A @ W + bias) for shapes beyond the raw hardware tile.
         a: (M,K) int8 array-like, w: (K,N) int8 array-like, bias: (N,)
         int16 array-like (defaults to zero). Any M, K, N -- dimensions that
@@ -535,15 +563,28 @@ class TPU:
         k2, n = w.shape
         if k != k2:
             raise ValueError(f"inner dimensions must match: a is {a.shape}, w is {w.shape}")
-        bias = np.zeros(n, dtype=np.int16) if bias is None else np.asarray(bias, dtype=np.int16)
+        bias = (np.zeros(n, dtype=self.psum_dtype) if bias is None
+                else np.asarray(bias, dtype=self.psum_dtype))
         if bias.shape != (n,):
             raise ValueError(f"bias must have shape ({n},), got {bias.shape}")
 
-        if offload is True and not self.offload:
-            raise TPUError("firmware matmul offload requested but not "
-                           "available (needs --link spi + TPU_LINK_SPI "
-                           "firmware with FW_MATMUL support)")
-        use_offload = self.offload if offload is None else offload
+        # FW_MATMUL's tiling loop is compiled into the firmware with a
+        # 16-bit result element and no flags-byte plumbing, so neither a
+        # widened PSUM nor a ReLU bypass can go through it.
+        offload_blocked = None
+        if self.psum_bytes != 2:
+            offload_blocked = f"psum_width={self.psum_width} (firmware is int16-only)"
+        elif act_bypass:
+            offload_blocked = "act_bypass=True (firmware always applies ReLU)"
+        if offload is True:
+            if not self.offload:
+                raise TPUError("firmware matmul offload requested but not "
+                               "available (needs --link spi + TPU_LINK_SPI "
+                               "firmware with FW_MATMUL support)")
+            if offload_blocked:
+                raise TPUError(f"firmware matmul offload requested but "
+                               f"incompatible with {offload_blocked}")
+        use_offload = (self.offload if offload is None else offload) and not offload_blocked
         # Degenerate/oversize shapes stay on the host path (the u16 wire
         # dims cap at 65535; M*K etc. of 0 make an empty result anyway).
         if use_offload and 0 < min(m, k, n) and max(m, k, n) <= 0xFFFF:
@@ -558,7 +599,7 @@ class TPU:
             w = np.pad(w, ((0, kp - k), (0, np_ - n)))
             bias = np.pad(bias, (0, np_ - n))
 
-        out = np.zeros((mp, np_), dtype=np.int16)
+        out = np.zeros((mp, np_), dtype=self.psum_dtype)
         num_k_tiles = kp // self.rows
         for m0 in range(0, mp, self.m_tile):
             for n0 in range(0, np_, self.cols):
@@ -572,7 +613,8 @@ class TPU:
                     c1 = min(c0 + self.max_stream_tiles, num_k_tiles)
                     result = self.stream_run(w_tiles[c0:c1], a_tiles[c0:c1],
                                              first=(c0 == 0),
-                                             last=(c1 == num_k_tiles))
+                                             last=(c1 == num_k_tiles),
+                                             act_bypass=act_bypass)
                 out[m0:m0 + self.m_tile, n0:n0 + self.cols] = result
         return out[:m, :n]
 
@@ -668,6 +710,10 @@ def main():
                     help="NUM_COLS the bitstream was built with (default 2)")
     p.add_argument("--m-tile", type=int, default=None,
                     help="M_TILE the bitstream was built with (default: same as --rows)")
+    p.add_argument("--psum-width", type=int, default=16, choices=(8, 16, 32, 64),
+                    help="PSUM_WIDTH the bitstream was built with (default 16). "
+                         "Sets the wire bytes per bias/result element; a "
+                         "mismatch is a frame-length error, not a wrong answer")
     p.add_argument("--link", choices=("uart", "spi", "hps"), default="uart",
                     help="host-link PHY the board is running: uart (default), "
                          "spi (USE_SPI=1 gateware + TPU_LINK_SPI firmware; "
@@ -688,7 +734,8 @@ def main():
     args = p.parse_args()
 
     with TPU(args.port, args.baud, rows=args.rows, cols=args.cols,
-             m_tile=args.m_tile, link=args.link) as tpu:
+             m_tile=args.m_tile, link=args.link,
+             psum_width=args.psum_width) as tpu:
         if args.reset:
             tpu.reset()
             print("Reset OK")
