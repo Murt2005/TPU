@@ -26,7 +26,7 @@
 module tpu_core #(
     parameter int WEIGHT_WIDTH = 8,
     parameter int FIFO_DEPTH   = 4,   // must be a power of 2, >= ARRAY_ROWS
-    // Array geometry (see docs/architecture.md §3):
+    // Array geometry (see docs/architecture.md §5):
     //   ARRAY_ROWS — systolic rows = K-tile depth
     //   NUM_COLS   — systolic columns = N-tile width
     //   M_TILE     — activation rows streamed per RUN (UB address depth)

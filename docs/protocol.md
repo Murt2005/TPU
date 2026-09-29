@@ -56,7 +56,7 @@ pass, since that is the only one activation fires on. `RUN` with `LEN=0` is
 equivalent to `flags=TILE_FIRST|TILE_LAST`, i.e. the original single-shot
 behaviour, so a host that never sends the byte still works. Bit positions
 are named in `rtl/tpu_pkg.sv` and mirrored in `tpu_host.py`. See
-[`architecture.md`](architecture.md) §4 for the accumulation semantics.
+[`architecture.md`](architecture.md) §6 for the accumulation semantics.
 
 ## 3. The batched commands
 

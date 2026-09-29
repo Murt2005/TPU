@@ -279,7 +279,7 @@ module tpu_sequencer #(
     // reg_weights is stored in NATURAL row-major order (row 0 = top row);
     // the bottom-first wire order of LOAD_WEIGHTS is undone at unpack time,
     // and S_LD_WF re-derives it at presentation time (see docs/architecture.md
-    // §5).
+    // §3.1).
     logic signed [7:0]  reg_weights [ARRAY_ROWS][NUM_COLS];
     logic signed [7:0]  reg_act     [M_TILE][ARRAY_ROWS];
     logic signed [PSUM_WIDTH-1:0] reg_bias    [NUM_COLS];

@@ -482,7 +482,7 @@ class TPU:
     def estimated_rtl_seconds(self, clk_freq=FPGA_CLK_FREQ):
         """Estimated wall-clock time actually spent inside tpu_core's
         datapath (no UART, no USB) -- RUN costs 21 cycles dispatch-to-result
-        (docs/architecture.md §2, cycle-accurate from the RTL);
+        (docs/architecture.md §3, cycle-accurate from the RTL);
         LOAD_*/RESET just latch a register file and ACK, budgeted at a
         conservative 2 cycles since that path isn't cycle-counted in the docs
         the way RUN is. clk_freq defaults to the 12 MHz this repo's firmware

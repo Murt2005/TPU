@@ -47,11 +47,11 @@ The datapath has **no handshakes or backpressure** beyond fixed registered
 latencies, and `tpu_sequencer.sv` replays an exact cycle sequence against
 them. **Changing any module's latency breaks the sequencer silently.** If you
 add or remove a register stage, update the sequencer's states and the latency
-table in the module header and in `docs/architecture.md` §2.
+table in the module header and in `docs/architecture.md` §3.
 
 Current: UB write 1 · UB read 2 · SDS row *i*: *i* · WF drain 1 · PE 1 ·
-MMU col *c*: 2+*c* · accumulator 2 · bias 1 · activation 1. End-to-end
-per-row: **7 cycles**.
+MMU col *c*: `ARRAY_ROWS`+*c* · accumulator 2 · bias 1 · activation 1.
+End-to-end per-row: **`ARRAY_ROWS + NUM_COLS + 3` cycles** (7 at 2×2).
 
 ## Testbench conventions
 

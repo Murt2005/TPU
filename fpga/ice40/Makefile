@@ -44,7 +44,7 @@ CLK_FREQ ?= 12000000
 # (TICKS_PER_BIT = 13, +0.16% error, still within the mid-bit sample margin).
 BAUD_RATE ?= 1000000
 
-# Array geometry (see docs/architecture.md §3): ARRAY_ROWS = K-tile
+# Array geometry (see docs/architecture.md §5): ARRAY_ROWS = K-tile
 # depth, NUM_COLS = N-tile width, M_TILE = activation rows per RUN. The RTL
 # is fully parameterized; these must match what tpu_host.py is invoked with
 # (--rows/--cols/--m-tile). FIFO_DEPTH in tpu_top.sv must stay a power of 2
@@ -61,7 +61,7 @@ M_TILE     ?= $(ARRAY_ROWS)
 # validated bitstream here uses; widening it costs LCs across the whole
 # reduction path and changes the host wire format (tpu_host.py --psum-width
 # must match), and is incompatible with USE_MAC16_PAIR below, whose SB_MAC16
-# accumulator is a hard 16 bits. See docs/architecture.md §3.
+# accumulator is a hard 16 bits. See docs/architecture.md §5.
 PSUM_WIDTH ?= 16
 
 USE_SPI ?= 0
