@@ -7,14 +7,15 @@
 ```bash
 python3 mnist/infer.py --port /dev/cu.usbmodemXXXX --test-n 20     # accuracy on silicon
 python3 mnist/infer.py --port ... --compare --test-n 20            # hw vs local numpy
-python3 mnist/infer.py --port ... --timing-breakdown               # where the time goes
+python3 mnist/infer.py --port ... --no-offload --test-n 20        # force the host-tiled path
 python3 mnist/infer.py --offline --test-n 20                       # no board needed
 python3 mnist/draw_demo.py --port ... --led-port ...               # draw a digit
 python3 mnist/train_mnist.py                                       # retrain + requantize
 ```
 
-All three scripts take `--rows/--cols/--m-tile` and `--link`, which **must
-match the flashed bitstream**.
+`infer.py` and `draw_demo.py` take `--rows/--cols/--m-tile` and `--link
+{uart,spi}`, which **must match the flashed bitstream** (no `hps` or `sim`
+link yet).
 
 ## The hard constraint: a 16-bit non-saturating accumulator
 
@@ -29,17 +30,21 @@ against that ceiling and empirically verified: zero overflow across the full
 10k-image test set, with a 5% calibration safety margin.
 
 **This is why the model is tiny — accuracy was never the limiter.** Growing it
-means either proving the wider sum still fits, or widening `PSUM_WIDTH` in the
-RTL *and* the wire format *and* the host.
+means either proving the wider sum still fits, or building with a wider
+`PSUM_WIDTH`. That is a build knob now (it widens the wire format, and the
+host needs `--psum-width` to match), but no bitstream has been built with it,
+and `FW_MATMUL` offload is int16-only.
 
 ## Three quantization details the RTL forces
 
 Don't "fix" these to look like a normal quantization script:
 
-- **ReLU is applied on every layer, including the output.**
-  `rtl/activation.sv` has no bypass. The net is therefore *trained* with ReLU
-  on the output logits, so the loss landscape matches argmax-over-ReLU'd-
+- **ReLU is applied on every layer, including the output.** When the model
+  was trained, `rtl/activation.sv` had no bypass, so the net is *trained* with
+  ReLU on the output logits — the loss landscape matches argmax-over-ReLU'd-
   scores rather than hoping ReLU doesn't move the decision boundary later.
+  A per-pass bypass exists now (`act_bypass=`), but this model doesn't use it;
+  don't add it to `infer.py` without retraining.
 - **There is no on-chip requantization.** `unified_buffer` stores int8, but a
   layer's output arrives int16 post-ReLU. The **host** rescales each layer's
   output down to int8 for the next layer; `train_mnist.py` calibrates that

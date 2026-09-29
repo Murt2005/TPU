@@ -9,9 +9,10 @@ this is the complete one.
 |---|---|
 | `README.md` | Entry point: quick start, toolchain, architecture walkthrough, status |
 | `CONTRIBUTING.md` | Dev setup, local quality gates, how to register a testbench, RTL house style |
-| `Makefile` | Simulation + lint + hardware-test automation; single-sources the RTL dependency graph `run_tests.sh` uses |
-| `run_tests.sh` | Builds and runs every (or a named subset of) testbench, printing a pass/fail summary |
-| `tpu_host.py` | Host driver + CLI: the wire protocol, `matmul_tiled()`, and the three link backends (UART / SPI / HPS MMIO) |
+| `Makefile` | Simulation, lint, Verilator suite, sim bridge, visualizer check, and hardware-test automation; single-sources the RTL dependency graph `run_tests.sh` uses |
+| `run_tests.sh` | Builds and runs every (or a named subset of) testbench, printing a pass/fail summary. Keeps its own `ALL_TESTS` name list — currently missing `hps_bridge` |
+| `CLAUDE.md` | Agent steering file; nested ones in `rtl/`, `firmware/`, `fpga/de1soc/`, `mnist/` |
+| `tpu_host.py` | Host driver + CLI: the wire protocol, `matmul_tiled()`, and the four link backends (UART / SPI / HPS MMIO / Verilator sim) |
 | `verilator.vlt` | Verilator lint waivers |
 | `requirements.txt` | `pyserial`, `numpy` |
 | `.gitmodules` | Pins `firmware/pico-ice-sdk` to tinyvision-ai-inc's SDK |
@@ -32,10 +33,10 @@ documented further.
 | `mmu.sv` | The `ARRAY_ROWS`×`NUM_COLS` systolic array; instantiates `pe` or `pe_pair` |
 | `systolic_data_setup.sv` | Skews an activation row in time to match the array's diagonal wavefront |
 | `weight_fifo.sv` | Ping-pong weight store; drains the active bank while the next streams into the shadow |
-| `unified_buffer.sv` | Double-banked activation SRAM, BRAM-inferred; keeps layer-to-layer data on chip |
-| `accumulator.sv` | Reassembles time-skewed column partial sums into rows; persistent non-saturating int16 PSUM for K-tiling |
-| `bias.sv` | Registered per-column int16 add |
-| `activation.sv` | Registered ReLU; no bypass mode |
+| `unified_buffer.sv` | Double-banked activation SRAM, BRAM-inferred. Its layer-to-layer write-back port exists but is tied off in `tpu_core` |
+| `accumulator.sv` | Reassembles time-skewed column partial sums into rows; persistent non-saturating `PSUM_WIDTH` PSUM for K-tiling |
+| `bias.sv` | Registered per-column `PSUM_WIDTH` add |
+| `activation.sv` | Registered ReLU, bypassable per pass (`flags[2]`) |
 | `fifo.sv` | Generic synchronous circular queue used by `accumulator` and `weight_fifo` |
 
 **Control and host interface**
@@ -57,7 +58,7 @@ documented further.
 | `tpu_top.sv` | pico2-ice: PHY + sequencer + core, plus the power-on-reset counter |
 | `tpu_top_hps.sv` | DE1-SoC: `hps_bridge` + sequencer + core |
 
-## `tests/` — 22 testbenches + hardware regression
+## `tests/` — 23 testbenches + hardware regression
 
 **Unit** — `fifo_tb`, `pe_tb`, `pe_pair_tb`, `mmu_tb`, `bias_tb`,
 `activation_tb`, `accumulator_tb`, `unified_buffer_tb`,
@@ -74,7 +75,7 @@ axes distinct), `_2x4_tb`, `_4x4_tb` (through the `SB_MAC16` netlist path).
 | File | What |
 |---|---|
 | `hw_regression.py` | 14-case regression against real silicon over `tpu_host.py` |
-| `verilator/tb_tpu_top.cpp` | C++ full-chip bench driving `tpu_top`'s real host pins across 7 shape/PHY combos |
+| `verilator/tb_tpu_top.cpp` | C++ full-chip bench: drives `tpu_top`'s real host pins (or injects bytes into `tpu_core` directly) across 12 shape/PHY/width combos; with `--bridge` it is the `--link sim` transport (`make sim-bridge`) |
 
 See [`verification.md`](verification.md).
 
@@ -110,18 +111,45 @@ See [`verification.md`](verification.md).
 | Path | What |
 |---|---|
 | `train_mnist.py` | Train + quantize the 144→64→10 int8 MLP |
-| `infer.py` | Multi-layer driver: hardware and offline backends, `--compare`, `--timing-breakdown` |
+| `infer.py` | Multi-layer driver: hardware and offline backends, `--compare`, `--no-offload` |
 | `draw_demo.py` | Tkinter draw-a-digit demo |
 | `model/mnist_2x2_int8.npz` | Committed pre-trained weights (~5 KB) |
 | `data/` | Downloaded IDX files (gitignored) |
 
 See [`mnist.md`](mnist.md).
 
+## `llm/` — a transformer on the array
+
+| File | What |
+|---|---|
+| `README.md` | Quick start, what runs where, quantization, cost |
+| `fetch.sh` | Download TinyStories-1M and quantize it |
+| `torch_bin.py` | Read a PyTorch `.bin` without PyTorch |
+| `export.py` | Per-output-channel int8 quantization → `.npz` |
+| `tokenizer.py` | GPT-2 byte-level BPE, pure Python |
+| `infer.py` | Forward pass, backends (array / exact int8 emulation / float), `--compare`, CLI |
+| `model/` | Downloaded + generated artifacts (gitignored) |
+
+Needs `PSUM_WIDTH=32`, so it runs against `make sim-bridge` today.
+
+## `viz/` — datapath visualizer
+
+| File | What |
+|---|---|
+| `README.md` | How the pieces fit, and how the model is kept honest |
+| `trace_tb.cpp` | Verilator `--trace` harness on `tpu_core`: one `RUN_TILE`, every internal signal dumped (`make sim-trace`) |
+| `vcd_to_trace.py` | VCD → per-cycle JSON timeline |
+| `model.mjs` | Cycle-accurate JavaScript port of the datapath |
+| `check_model.mjs` | Compares `model.mjs` to an RTL trace, cycle by cycle (`make viz-check`) |
+| `viewer.html` | The interactive page |
+
 ## `sim/` — generated
 
 `sim/sb_mac16_sim.v` is yosys's own `SB_MAC16` model, extracted at build time
 so `pe_pair_tb` and the Verilator builds check against a single source of
-truth. `sim/verilator/` holds per-shape object dirs. Entirely gitignored.
+truth. `sim/verilator/` holds per-shape object dirs, plus `bridge/` (the
+`--link sim` binary) and `trace/` (the visualizer harness). Entirely
+gitignored.
 
 ## `docs/` and `olddocs/`
 

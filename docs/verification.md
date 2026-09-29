@@ -5,11 +5,15 @@ cannot. A change is trusted when the tiers it can reach are green.
 
 ## Tier 1 — SystemVerilog testbenches (`make test`)
 
-22 testbenches under `tests/`, run through Icarus Verilog, printing a
+23 testbenches under `tests/`, run through Icarus Verilog, printing a
 pass/fail summary. Fast; the inner development loop.
 
+> `make test` currently runs **22** of them: `run_tests.sh`'s `ALL_TESTS`
+> list is missing `hps_bridge`, which passes when run directly with
+> `make test-hps_bridge`.
+
 ```bash
-make test                 # all of them
+make test                 # the run_tests.sh list (see note above)
 make test-mmu             # one
 make build-mmu            # compile only
 make wave-mmu             # run + open the VCD in gtkwave
@@ -33,8 +37,12 @@ precisely so a row/column index confusion cannot pass by coincidence. This is
 how the `unified_buffer` ROWS/COLS indexing bug — harmless while `ROWS==COLS`
 — was caught.
 
-Registering a new bench: add it to `TESTS` and the dependency graph in the
-`Makefile`; `run_tests.sh` reads both.
+Registering a new bench takes **four** edits: in the `Makefile`, a
+`DEPS_<name>` line, an entry in `TESTS`, and a `build-<name>` +
+`$(SIM_DIR)/<name>.vvp` rule pair; then the same name in `run_tests.sh`'s
+`ALL_TESTS`. The script gets dependencies from the Makefile but keeps its own
+list of names, so skipping the last step silently drops the bench from
+`make test` — which is how `hps_bridge` fell out.
 
 ## Tier 2 — Verilator lint (`make lint`)
 
@@ -54,18 +62,25 @@ build time, not ours to lint.
 
 `tests/verilator/tb_tpu_top.cpp` drives `tpu_top` through its **real host
 pins** — a bit-level UART at the hardware's 12 MHz / 1 Mbaud ratio, or real
-SPI transactions — across ten shape/PHY/width combinations:
+SPI transactions — across twelve shape/PHY/width combinations:
 
 ```
 2_2_2_uart  2_4_2_uart  4_2_3_uart  2_4_2_spi
 4_4_2_spipair  4_4_4_spipair  8_8_8_uart
 2_2_2_uart32  4_4_2_spi32  8_8_4_uart32
+2_2_2_direct  8_8_4_direct32
 ```
 
-A trailing `32` selects `PSUM_WIDTH=32`. Those three are the only coverage
-the widened reduction path has — no hardware has ever been built with it.
+A trailing `32` selects `PSUM_WIDTH=32`; no hardware has ever been built with
+it, so these shapes (plus the sim link below) are its only coverage.
 `8_8_4_uart32` uses `M_TILE=4` because 8×8 at 4 bytes per element would need
 a 256-byte result frame, one past the `LEN` cap.
+
+The `direct` shapes verilate `tpu_core` instead of `tpu_top` and inject bytes
+straight into the sequencer's `rx_data`/`rx_valid`, skipping the bit-level
+PHY. Same protocol, same golden checks, ~50× fewer simulated cycles per
+byte — which is what makes transformer-sized workloads tractable, and what
+`make sim-bridge` builds.
 
 This is the tier that catches PHY-level framing and protocol bugs without a
 board. `8_8_8_uart` (64 PEs, generic-fabric multiply) is a sim-only proof
@@ -77,11 +92,23 @@ DE1-SoC scale-up shape.
 
 ### Running the suite without a board
 
-`tests/hw_regression.py --link sim --port <make sim-bridge binary>` runs all
-14 cases against the Verilator model instead of silicon. That is not a
-substitute for Tier 4 — it validates the RTL, protocol and host driver, not
-the netlist — but it is the only way to exercise shapes and widths no
-bitstream has been built for. The `PSUM_WIDTH=32` path has no other coverage.
+`make sim-bridge` builds the `direct` bench as a transport binary
+(`sim/verilator/bridge/tb_tpu_top`; shape set by `SIM_ROWS`/`SIM_COLS`/
+`SIM_MTILE`/`SIM_PSUM`, default 8×8/M_TILE=4/PSUM=32), and
+`tests/hw_regression.py --link sim --port <that binary>` runs the hardware
+suite against it instead of silicon. That is not a substitute for Tier 4 — it
+validates the RTL, protocol and host driver, not the netlist — but it is the
+only way to run the host-side programs (`hw_regression.py`, `llm/infer.py`)
+at shapes and widths no bitstream has been built for.
+
+### The visualizer check (`make viz-check`)
+
+Not a tier of its own, but it follows the same idea: `viz/model.mjs`, the
+JavaScript port of `tpu_core` behind the datapath viewer, is compared
+register by register and cycle by cycle against Verilator traces of the real
+RTL (`make viz-check` at 4×4/M_TILE=4, `make viz-check-all` over six shapes).
+Run it after any datapath change, or the viewer stops being trustworthy. See
+`viz/README.md`.
 
 ## Tier 4 — Real hardware (`make hw-test`)
 
@@ -98,10 +125,16 @@ make hw-test PORT=/dev/cu.usbmodemXXXX \
 14 cases: every simulation vector replayed, int8/int16 boundary cases, a
 randomized multi-tile stress run, and the `FW_MATMUL` offload A/B (30
 randomized shapes, required bit-identical between the offloaded path, the
-host-tiled path, and the golden model).
+host-tiled path, and the golden model). The offload A/B needs the SPI
+firmware; on a UART build it prints `[SKIP]`, and the closing banner still
+reads "ALL 14 … PASSED", so count the `[PASS]` lines if it matters.
 
 **The arguments must match the flashed bitstream**, not the Makefile
 defaults. A mismatch shows up as a frame-length failure.
+
+The target calls bare `python3`, which needs `pyserial` and `numpy`. If they
+live in a venv, activate it (or put its `bin/` first on `PATH`) before
+running `make hw-test`.
 
 Two bugs were found only here and were invisible to every other tier: the
 missing power-on reset ([`pico2-ice.md`](pico2-ice.md) §5.5 — simulation
@@ -123,7 +156,7 @@ Expected: 19/20 on the sampled set, matching the local numpy model exactly.
 | Changed | Run |
 |---|---|
 | One RTL module | `make test-<name>`, then `make test` |
-| Anything in the datapath or sequencer | `make test` + `make lint` + `make verilate-test` |
+| Anything in the datapath or sequencer | `make test` + `make lint` + `make verilate-test` + `make viz-check-all` |
 | Synthesis flags, primitives, or memory inference | all of the above **+ `make hw-test`** |
 | Wire protocol | all of the above + `mnist/infer.py` |
 | Firmware | `make hw-test` (there is no firmware sim tier) |

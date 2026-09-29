@@ -23,14 +23,17 @@ nothing board-facing happens locally at all.
 | Host bridge | `h2f_lw`, base `0xFF200000`; `hps_bridge` at component offset `0x0` |
 
 Build with **`USE_MAC16_PAIR=0`** — the `SB_MAC16` DSP-pair path is iCE40-only.
-Cyclone V infers its own DSPs from `pe.sv`'s multiply.
+Cyclone V infers its own DSPs from `pe.sv`'s multiply. `tpu_top_hps` takes
+the same `ARRAY_ROWS`/`NUM_COLS`/`M_TILE`/`PSUM_WIDTH`/`FIFO_DEPTH`
+parameters as the iCE40 top; `FIFO_DEPTH` must be raised to the next power
+of 2 ≥ `max(ARRAY_ROWS, M_TILE)` for anything past 4.
 
 ## 2. State of play
 
 | Piece | Status |
 |---|---|
 | `rtl/tpu_top_hps.sv`, `rtl/hps_bridge.sv` | Implemented, lint-clean, `make test-hps_bridge` passes |
-| `tpu_host.py --link hps` (`MmioLink`) | Implemented |
+| `tpu_host.py --link hps` (`MmioLink`) | Implemented; `hw_regression.py` and `mnist/infer.py` don't expose `--link hps` yet |
 | 8×8 scale-up shape | Sim-proven (`make verilate-test`, 64 PEs on generic-fabric multiply) — demonstrates the datapath parameterizes well past the iCE40's 8-DSP ceiling |
 | `fpga/de1soc/` Quartus project | Scaffolded: `Makefile`, `.sdc`, `.qsf` skeleton |
 | Qsys/GHRD integration | Not done |
@@ -71,8 +74,10 @@ scp ../../tpu_host.py ../../requirements.txt root@<board>:/root/
 python3 tpu_host.py --port /dev/mem --link hps --rows 2 --cols 2 --selftest
 ```
 
-`tests/hw_regression.py` and `mnist/infer.py` take the same `--link hps
---port /dev/mem` and also run on the board.
+Only `tpu_host.py` accepts `--link hps` today. `tests/hw_regression.py`
+(`--link {uart,spi,sim}`) and `mnist/infer.py` (`--link {uart,spi}`) need
+`hps` added to their `--link` choices before they can run on the board —
+a small change, since both go through `tpu_host.TPU`, but not yet made.
 
 ## 4. Cloud Quartus build (planned)
 
@@ -106,10 +111,15 @@ per-build instances stay fully headless. Spot instances cut the cost further.
 2. **Cloud build infra** — CDK stack + launch script (§4).
 3. **On-board bring-up** — `scp` the `.rbf`, let the HPS configure the FPGA,
    then run `tests/hw_regression.py --link hps --port /dev/mem` *on the board*
-   to validate the bridge against the same vectors sim and pico2-ice use.
+   to validate the bridge against the same vectors sim and pico2-ice use
+   (after adding `hps` to that script's `--link` choices — see §3).
 4. **Scale up** — raise `ARRAY_ROWS`/`NUM_COLS` to the largest shape that
    closes timing at 50 MHz. The 8×8 sim shape is the proof that the RTL is
    ready for it; the Cyclone V's ~87 DSPs and ~85K LEs leave far more room
-   than the UP5K did.
+   than the UP5K did. Growing `M_TILE` along with the array matters as much
+   as the array itself — see [`utilization.md`](utilization.md) §1.
+5. **A `PSUM_WIDTH=32` build** — what `llm/` needs to leave simulation.
+   `llm/infer.py` already accepts `--link hps`, and at 32 bits the
+   `pe_pair` path is unavailable anyway, which costs nothing here.
 
 See [`backlog.md`](backlog.md) for how this sits against other open work.

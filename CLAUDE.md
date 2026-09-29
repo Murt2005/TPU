@@ -22,10 +22,11 @@ Pure RTL changes need only a gateware reflash. Firmware reflash is rare.
 ## Commands
 
 ```bash
-make test                 # all 22 testbenches (iverilog); make test-<name> for one
+make test                 # 22 of the 23 testbenches (run_tests.sh omits hps_bridge); make test-<name> for one
 make lint                 # verilator --lint-only, 4 configs (UART/SPI/4x4-pair/HPS)
 make verilate-test        # full-chip C++ sim, 12 shape+PHY+width combos
 make sim-bridge           # build the model as a transport for --link sim
+make viz-check-all        # visualizer's JS model vs RTL traces, 6 shapes (after datapath changes)
 make hw-test PORT=/dev/cu.usbmodemXXXX \
      ARRAY_ROWS=4 NUM_COLS=4 M_TILE=2 LINK=spi   # real silicon; args must match the bitstream
 make list                 # every registered test target
@@ -67,18 +68,24 @@ targets. Never add `.github/workflows`.
   fails, try the other.
 - **Host flags must match the flashed bitstream** (`--rows/--cols/--m-tile
   --link`), not the Makefile defaults. A mismatch fails on frame length.
+  Don't assume which bitstream is flashed — probe with `--selftest`; the
+  mismatch error reports the result length the board actually returns.
+- **The host tools need numpy + pyserial**, and `make hw-test` calls bare
+  `python3`. If they're in a venv, activate it (or prefix `PATH=<venv>/bin:`)
+  first.
 
 ## Layout
 
 ```
 rtl/         datapath + control + 3 host PHYs; tpu_core.sv is board-neutral
-tests/       22 SV testbenches + hw_regression.py + verilator/ C++ bench
+tests/       23 SV testbenches + hw_regression.py + verilator/ C++ bench
 fpga/ice40/  yosys -> nextpnr-ice40 -> icepack; all build knobs live here
 fpga/de1soc/ Quartus scaffolding (in progress)
 firmware/    RP2350 bridge; pico-ice-sdk is a git submodule
 mnist/       144->64->10 int8 demo: train, infer, draw
 llm/         TinyStories-1M (GPT-Neo) on the array; needs PSUM_WIDTH=32
-tpu_host.py  host driver + CLI; UART / SPI / HPS-MMIO backends
+viz/         datapath visualizer: RTL trace harness + validated JS model + viewer
+tpu_host.py  host driver + CLI; UART / SPI / HPS-MMIO / Verilator-sim backends
 docs/        design reference (see below)
 olddocs/     pre-reorg archive, gitignored — do not edit or resurrect
 ```

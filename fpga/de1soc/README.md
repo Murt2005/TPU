@@ -28,11 +28,11 @@ nothing board-facing happens on the Mac at all.
 | Thing | Value |
 |-------|-------|
 | Device | `5CSEMA5F31C6N` (Cyclone V SoC; ~85K LEs, ~87 DSP blocks, 397 M10K) |
-| Fabric clock | `CLOCK_50` = `PIN_AF14`, 50 MHz (matches `tpu_top`'s default `CLK_FREQ`) |
+| Fabric clock | `CLOCK_50` = `PIN_AF14`, 50 MHz (`tpu_top_hps` has no `CLK_FREQ` knob — no baud divider to match) |
 | Reset | `KEY[0]` = `PIN_AA14`, active-low (→ `reset_n`) |
 | Host bridge | lightweight `h2f_lw`, base `0xFF200000`; `hps_bridge` at component offset `0x0` |
 
-The array shape is a parameter (`ARRAY_ROWS`/`NUM_COLS`/`M_TILE`/`USE_MAC16_PAIR`
+The array shape is a parameter (`ARRAY_ROWS`/`NUM_COLS`/`M_TILE`/`PSUM_WIDTH`/`FIFO_DEPTH`/`USE_MAC16_PAIR`
 on `tpu_top_hps`). Build with **`USE_MAC16_PAIR=0`** — the `SB_MAC16` DSP-pair
 path is iCE40-only; Cyclone V infers its own DSPs from `pe.sv`'s multiply. Start
 at the current small shape to bring the flow up, then scale (see
@@ -81,8 +81,9 @@ and all the HPS/DDR3 pin assignments done — so you only add one component.
    # on the board (needs numpy + root for /dev/mem):
    python3 tpu_host.py --port /dev/mem --link hps --rows 2 --cols 2 --selftest
    ```
-   `tests/hw_regression.py` and `mnist/infer.py` take the same `--link hps
-   --port /dev/mem` and can also run on the board.
+   Only `tpu_host.py` accepts `--link hps` so far; `tests/hw_regression.py`
+   and `mnist/infer.py` need `hps` added to their `--link` choices first
+   (both already go through `tpu_host.TPU`, so the change is small).
 
 ## Files here
 

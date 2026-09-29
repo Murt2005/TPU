@@ -141,7 +141,16 @@ in `tests/hw_regression.py`.
 - `act_bypass=` on `run`/`run_tile`/`stream_run`/`matmul_tiled` sets
   `flags[2]`. `FW_MATMUL` cannot carry it (nor a widened PSUM), so
   `matmul_tiled` falls back to the host-tiled path in either case.
-- CLI: `--port`, `--link {uart,spi,hps}`, `--rows/--cols/--m-tile`,
+- On connect: 258 zero bytes to finish any half-received frame, then
+  `RESET`, then a `LEN=0` `RUN` whose response length
+  (`PSUM_BYTES*M_TILE*NUM_COLS`) is checked against the driver's shape —
+  a mismatched bitstream fails here with an explicit error.
+- Links: `uart` and `spi` are pyserial on the RP2350's CDC port (`spi`
+  changes only write pacing and wire accounting — the firmware does the
+  SPI), `hps` is `MmioLink` over `/dev/mem`, and `sim` is `SimLink`, which
+  runs the `make sim-bridge` Verilator binary as a subprocess and speaks the
+  same bytes over its stdin/stdout.
+- CLI: `--port`, `--link {uart,spi,hps,sim}`, `--rows/--cols/--m-tile`,
   `--psum-width`, `--selftest`, `--weights/--activations/--bias`, `--reset`.
 
 `tests/hw_regression.py` drives the same protocol for the full regression.

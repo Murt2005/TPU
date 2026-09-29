@@ -9,7 +9,7 @@ iCE40 target is `fpga/ice40/`.
 | Piece | State |
 |---|---|
 | `rtl/tpu_top_hps.sv`, `rtl/hps_bridge.sv` | implemented, lint-clean, `make test-hps_bridge` passes |
-| `tpu_host.py --link hps` (`MmioLink`) | implemented |
+| `tpu_host.py --link hps` (`MmioLink`) | implemented; `hw_regression.py` / `mnist/infer.py` don't accept `--link hps` yet |
 | 8×8 shape | sim-proven only (`make verilate-test`), 64 PEs on generic fabric |
 | Quartus project here | scaffolding: `Makefile`, `.sdc`, `.qsf` skeleton |
 | Qsys/GHRD integration | **not done** |

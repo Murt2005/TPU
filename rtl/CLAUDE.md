@@ -8,8 +8,10 @@
   exposes active-low `reset_n`. Every sequential block is
   `if (reset) ... else ...`.
 - Tunables are `parameter int`; derived values are `localparam`.
-- Shared constants (opcodes, status bytes, data/psum widths) live in
-  `tpu_pkg.sv` — reuse them, never re-declare literals.
+- Shared wire-protocol constants (opcodes, flag bits, status bytes) live in
+  `tpu_pkg.sv` — reuse them, never re-declare literals. Datapath widths are
+  deliberately *not* in the package; they are per-module parameters
+  (`PSUM_WIDTH` etc.) threaded down from the top.
 - Every module opens with a header comment stating **role, contract, and
   latency**. Keep new ones consistent.
 - `import tpu_pkg::*;` goes at compilation-unit scope, *before* the module —
@@ -65,9 +67,11 @@ End-to-end per-row: **`ARRAY_ROWS + NUM_COLS + 3` cycles** (7 at 2×2).
   could not catch the power-on-reset bug (`tpu_top.sv`'s POR counter exists
   because `reset_n` idles high from configuration on real hardware). Don't
   assume sim-green means silicon-green.
-- Register a new bench in **three** places in the root `Makefile`: a
+- Register a new bench in **four** places: in the root `Makefile`, a
   `DEPS_<name>` line, an entry in `TESTS`, and a `build-<name>` +
-  `$(SIM_DIR)/<name>.vvp` rule pair.
+  `$(SIM_DIR)/<name>.vvp` rule pair; then `ALL_TESTS` in `run_tests.sh`,
+  which keeps its own name list (miss it and `make test` silently skips the
+  bench — `hps_bridge` is currently missing for exactly this reason).
 
 ## Target-specific code
 

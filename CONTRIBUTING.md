@@ -27,8 +27,9 @@ use hosted CI). Before opening a PR, run:
 
 ```sh
 make test           # build + run all testbenches, prints a pass/fail summary
-make lint           # Verilator --lint-only over the RTL (UART + SPI + 4x4 configs)
-make verilate-test  # full-chip C++ simulation across several array shapes
+make lint           # Verilator --lint-only over the RTL (UART + SPI + 4x4 + HPS configs)
+make verilate-test  # full-chip C++ simulation across 12 shape/PHY/width combos
+make viz-check-all  # if you touched the datapath: keeps viz/model.mjs in step with the RTL
 ```
 
 `make test` (via `run_tests.sh`) returns a non-zero exit code if any testbench
@@ -46,6 +47,9 @@ knobs must match the bitstream).
 2. In the top-level `Makefile`, register it in three places: a `DEPS_<name>`
    line listing the RTL it needs, an entry in the `TESTS` list, and a
    `build-<name>` + `$(SIM_DIR)/<name>.vvp` rule (copy an existing pair).
+3. Add the same name to `ALL_TESTS` in `run_tests.sh`. The script takes
+   dependencies from the Makefile but keeps its own list of names, so without
+   this step `make test` silently skips the new bench.
 
 ## Style conventions
 
@@ -56,7 +60,7 @@ The RTL follows a consistent house style — please match it:
 - Synchronous, active-high `reset` inside modules (only the top level exposes
   active-low `reset_n`); every sequential block is `if (reset) ... else ...`.
 - Tunables are `parameter int`; derived values are `localparam`.
-- Shared constants (command opcodes, status bytes, data/psum widths) live in
+- Shared wire-protocol constants (command opcodes, flag bits, status bytes) live in
   `rtl/tpu_pkg.sv` — reuse them rather than re-declaring literals.
 - Each module opens with a header comment stating its role, contract, and
   latency. Please keep new modules consistent.
@@ -64,4 +68,5 @@ The RTL follows a consistent house style — please match it:
 ## Commit / PR notes
 
 - Keep commits focused and messages short and descriptive.
-- Make sure `make test`, `make lint`, and `make verilate-test` all pass.
+- Make sure `make test`, `make lint`, and `make verilate-test` all pass
+  (plus `make viz-check-all` for datapath changes).

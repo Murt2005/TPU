@@ -3,19 +3,22 @@
 Reimplementing the core datapath of Google's first-generation Tensor Processing Unit
 (as described in *In-Datacenter Performance Analysis of a Tensor Processing Unit*)
 as synthesizable SystemVerilog with a fully parameterized array shape: verified in
-simulation (22 testbenches), and validated end-to-end on real hardware on a
+simulation (23 testbenches plus a full-chip Verilator model), and validated end-to-end on real hardware on a
 [pico2-ice](https://pico2-ice.tinyvision.ai/) (iCE40UP5K) board over a UART or SPI
 host link — including hardware-side K-dim matmul tiling, a batched wire protocol,
 DSP-backed PEs, an RP2350-offloaded tiling loop, and a real-time MNIST digit
 classification demo at ~64 ms/image on-silicon (125x down from the first working
-bring-up). Full design notes live in [`docs/`](docs/).
+bring-up). The accumulator width is a build knob and the ReLU is bypassable, which
+is enough to run a small transformer (TinyStories-1M) with every linear layer on the
+array — in simulation today, through the same host driver. Full design notes live in
+[`docs/`](docs/).
 
 **Where to start:**
 
 | You have… | Go to |
 |---|---|
 | A pico2-ice board and want to run this on it | [§1 Quick start](#1-quick-start-on-a-pico2-ice) |
-| No board (yet) — just want to see it work | [§2 Without a board](#2-without-a-board-simulation--offline-mnist) |
+| No board (yet) — just want to see it work | [§2 Without a board](#2-without-a-board-simulation--offline-mnist) — including the transformer and the datapath visualizer |
 | Curiosity about how a TPU actually works | [§3 How the design works](#3-how-the-design-works) |
 | A different FPGA, or want to change the array shape | [§5 FPGA build reference](#5-fpga-build-reference) |
 
@@ -213,7 +216,7 @@ Everything except the physical array runs on your laptop.
 
 **Run the full test suite** (needs only Icarus Verilog):
 ```bash
-make test                    # build + run all 22 testbenches, pass/fail summary table
+make test                    # build + run the testbench suite, pass/fail summary table
 ./run_tests.sh fifo mmu      # ...or just a subset, without make
 ```
 
@@ -232,6 +235,28 @@ make verilate-test
 
 Have hardware later? The same test vectors run against silicon via `make hw-test`,
 so a passing sim is a genuine predictor.
+
+**Drive a simulated TPU with the real host driver.** `make sim-bridge` builds the
+Verilator model as a transport, and every host tool that takes `--link sim` talks
+to it exactly as it would to a board:
+```bash
+make sim-bridge                                   # 8x8 array, M_TILE=4, PSUM_WIDTH=32
+python3 tests/hw_regression.py --link sim --port sim/verilator/bridge/tb_tpu_top \
+    --rows 8 --cols 8 --m-tile 4 --psum-width 32
+```
+
+**Run a transformer on it.** TinyStories-1M with every linear layer on the
+simulated array (see [`llm/README.md`](llm/README.md); ~48 MB download):
+```bash
+./llm/fetch.sh
+python3 llm/infer.py --link sim --port sim/verilator/bridge/tb_tpu_top \
+    --prompt "Once upon a time" -n 20
+```
+
+**Watch the array compute.** [`viz/`](viz/README.md) is an interactive viewer:
+edit W/A/bias, step the clock, and watch the diagonal wavefront cross the array.
+Its JavaScript model is checked cycle-by-cycle against the RTL with
+`make viz-check-all`.
 
 ### 2.1 Simulation workflow reference
 
@@ -255,11 +280,17 @@ make lint      # verilator --lint-only -Wall over all of rtl/ (audited waivers
 make verilate-test
                # Verilator C++ full-chip testbench (tests/verilator/): drives
                #   tpu_top through its real host pins (UART at the hardware's
-               #   12 MHz / 1 Mbaud ratio, and real SPI) across seven
-               #   shape/PHY combinations -- 2x2, 2x4, 4x2/M_TILE=3, the two
-               #   4x4 SB_MAC16-pair SPI builds, and an 8x8 sim-only shape --
-               #   replaying the hw_regression.py vector set plus a UART
-               #   framing-error injection only sim can do
+               #   12 MHz / 1 Mbaud ratio, and real SPI) across twelve
+               #   shape/PHY/width combinations -- 2x2, 2x4, 4x2/M_TILE=3, the
+               #   two 4x4 SB_MAC16-pair SPI builds, 8x8, three PSUM_WIDTH=32
+               #   builds, and two direct byte-injection shapes -- replaying
+               #   the hw_regression.py vector set plus a UART framing-error
+               #   injection only sim can do
+make sim-bridge
+               # build the Verilator model as a --link sim transport
+               #   (SIM_ROWS/SIM_COLS/SIM_MTILE/SIM_PSUM pick the shape)
+make viz-check-all
+               # check the visualizer's JS model against RTL traces
 make list      # print every registered test name and its available targets
 make clean     # remove sim/ (compiled binaries, logs, waveform dumps)
 make hw-test PORT=/dev/cu.usbmodemXXXX [ARRAY_ROWS=2] [NUM_COLS=2] [M_TILE=2] [LINK=uart]
@@ -277,30 +308,40 @@ MMU and streaming activations through it, so weights
 Here are the major blocks, and how data moves between them:
 
 - **Host I/O** — in the original TPUv1, a PCIe link to the host and DDR3 channels. In
-  this implementation, a UART over two GPIO pins (1 Mbaud by default — a synthesis-time
-  knob, see §5.1) replaces the PCIe/DDR path. `tpu_host.py` is the Python driver that
-  sends weights/activations from the PC and reads back results.
+  this implementation, a byte stream replaces the PCIe/DDR path: a UART over two GPIO
+  pins (1 Mbaud by default — a synthesis-time knob, see §5.1), an SPI slave on the
+  RP2350↔iCE40 bus, or (on the DE1-SoC) an Avalon-MM bridge from the board's ARM core.
+  All three present the identical interface to the sequencer. `tpu_host.py` is the
+  Python driver that sends weights/activations from the PC and reads back results.
 - **Weight FIFO (weight fetcher)** — in the original TPUv1, pulls weight tiles from DRAM.
-  Here, weights are streamed over UART and pushed directly into the shadow bank of the
-  Weight FIFO, then swapped in before each tile's compute phase.
-- **Unified Buffer** — on-chip SRAM holding activations: the layer's input matrix
-  going in, and the new layer output coming back in from the activation pipeline.
-  This is also what makes multi-layer networks possible — layer *N*'s output becomes
-  layer *N+1*'s input without ever leaving the chip.
-- **Systolic Data Setup** — reads an activation vector out of the Unified Buffer,
-  rotates and skews it, and streams it into the MMU from the left.
+  Here, weights arrive over the host link and are pushed directly into the shadow bank
+  of the Weight FIFO, then swapped in before each tile's compute phase. (The two banks
+  would let the next tile load while the current one computes; the sequencer doesn't
+  overlap them yet.)
+- **Unified Buffer** — on-chip SRAM holding activations. In TPUv1 this is what makes
+  multi-layer networks cheap: layer *N*'s output is written back and becomes layer
+  *N+1*'s input without leaving the chip. Here the module has that write-back port,
+  but it isn't wired up yet — results go back to the host, which rescales them to
+  int8 and sends them in as the next layer's input.
+- **Systolic Data Setup** — reads an activation vector out of the Unified Buffer and
+  skews it in time (element *i* delayed *i* cycles), so it enters the MMU from the left
+  as a diagonal wavefront.
 - **Matrix Multiply Unit (MXU)** — the systolic array of PEs itself. Each PE holds one
   weight value, multiplies it against a streaming activation, and accumulates a
   partial sum that gets passed to the PE below it.
 - **Accumulators** — collect the staggered partial sums exiting the bottom of the
   array, de-skew them back into a proper matrix, and — critically — sum across
   multiple passes when the real weight matrix is larger than the array itself (tiling).
-- **Bias unit → Activation unit → Normalize/Pool** — post-processing applied to each
-  accumulated output before it's written back into the Unified Buffer as the next
-  layer's input.
+- **Bias unit → Activation unit** — post-processing applied to each accumulated
+  output: a per-column bias add, then ReLU, which can be bypassed per pass for layers
+  that aren't ReLU-terminated. TPUv1's normalize/pool stage isn't implemented. The
+  accumulate/bias/result width (`PSUM_WIDTH`, 16 by default) is a build knob.
 - **Control / instruction buffer** — sequences all of the above (when to load weights,
   when to stream activations, which tile is active) instead of a testbench wiggling
   signals by hand.
+
+[`docs/architecture.md`](docs/architecture.md) walks through all of this in detail —
+cycle timings, the control state machine, and the software stack around it.
 
 ---
 
@@ -312,9 +353,11 @@ TPU/
 ├── Makefile                    # RTL sim automation (make test, make hw-test, ...)
 ├── run_tests.sh
 ├── requirements.txt             # tpu_host.py deps: pyserial, numpy
-├── tpu_host.py                  # host-side driver + CLI (UART / SPI / HPS links)
+├── tpu_host.py                  # host-side driver + CLI (UART / SPI / HPS / sim links)
 ├── rtl/                         # synthesizable SystemVerilog datapath + control plane
+│   ├── tpu_pkg.sv               # wire-protocol opcodes, flag bits, status bytes
 │   ├── pe.sv
+│   ├── pe_pair.sv               # two PEs on one iCE40 SB_MAC16 (USE_MAC16_PAIR=1)
 │   ├── mmu.sv
 │   ├── fifo.sv
 │   ├── weight_fifo.sv
@@ -326,33 +369,41 @@ TPU/
 │   ├── uart_rx.sv
 │   ├── uart_tx.sv
 │   ├── spi_slave.sv             # optional faster host PHY (see §5.1)
+│   ├── hps_bridge.sv            # Avalon-MM host PHY for the DE1-SoC's ARM core
 │   ├── tpu_sequencer.sv         # wire command protocol + pipeline orchestration
 │   ├── tpu_core.sv              # board-neutral datapath + sequencer
-│   └── tpu_top.sv               # pico2-ice top level: PHY + power-on reset + pins
+│   ├── tpu_top.sv               # pico2-ice top level: PHY + power-on reset + pins
+│   └── tpu_top_hps.sv           # DE1-SoC top level: hps_bridge + power-on reset
 ├── verilator.vlt                # audited lint waivers for `make lint`
 ├── tests/                       # SystemVerilog testbenches (simulation)
 │   ├── *_tb.sv                  # unit + integration tbs, incl. tpu_sequencer_{4x2,2x4,4x4}_tb.sv
 │   │                            #   proving the parameterized sequencer at non-2x2 shapes
-│   ├── verilator/               # C++ full-chip testbench (`make verilate-test`)
+│   ├── verilator/               # C++ full-chip testbench (`make verilate-test`,
+│   │                            #   and the --link sim transport via `make sim-bridge`)
 │   └── hw_regression.py         # real-hardware regression suite (§1.7)
 ├── sim/                         # simulation build output (gitignored)
 ├── fpga/                          # per-board FPGA build targets (dispatcher Makefile)
 │   ├── ice40/                     # pico2-ice (iCE40UP5K): yosys/nextpnr-ice40/icepack, §5.1
 │   └── de1soc/                    # DE1-SoC (Cyclone V): Quartus + HPS bridge (scaffolding)
-├── firmware/                      # RP2350 firmware: USB-CDC <-> FPGA UART bridge (§1.4)
+├── firmware/                      # RP2350 firmware: USB-CDC <-> FPGA UART or SPI bridge,
+│   │                              #   plus the FW_MATMUL tiling offload (§1.4, §5.1)
 │   └── pico-ice-sdk/              # vendored SDK, git submodule
-└── mnist/
-    ├── train_mnist.py           # trains + quantizes the 144->64->10 MLP
-    ├── infer.py                 # multi-layer tiled inference driver (hardware + offline)
-    ├── draw_demo.py             # interactive drawing demo, LED feedback
-    ├── model/mnist_2x2_int8.npz # quantized weights (committed, ~5KB)
-    └── data/                    # downloaded MNIST idx files, gitignored
+├── mnist/
+│   ├── train_mnist.py           # trains + quantizes the 144->64->10 MLP
+│   ├── infer.py                 # multi-layer tiled inference driver (hardware + offline)
+│   ├── draw_demo.py             # interactive drawing demo, LED feedback
+│   ├── model/mnist_2x2_int8.npz # quantized weights (committed, ~5KB)
+│   └── data/                    # downloaded MNIST idx files, gitignored
+├── llm/                         # TinyStories-1M transformer on the array (§2)
+├── viz/                         # interactive datapath visualizer + its RTL check (§2)
+└── docs/                        # design reference — start at docs/README.md
 ```
 
 Deeper reference material lives in [`docs/`](docs/) — [architecture](docs/architecture.md),
 [wire protocol](docs/protocol.md), [pico2-ice target](docs/pico2-ice.md),
 [DE1-SoC target](docs/de1soc.md), [performance](docs/performance.md),
-[verification](docs/verification.md), [MNIST](docs/mnist.md), and a
+[utilization](docs/utilization.md), [verification](docs/verification.md),
+[MNIST](docs/mnist.md), [backlog](docs/backlog.md), and a
 [full repo map](docs/repo-map.md). Start at [`docs/README.md`](docs/README.md).
 
 ---
@@ -391,6 +442,11 @@ bitstream at synthesis time — the matching host-side flags must agree, see
 make CLK_FREQ=12000000        # must match firmware/main.c's ice_fpga_init() request
 make BAUD_RATE=1000000        # must match tpu_host.py's --baud (default 1M, exact /12 of 12 MHz)
 make ARRAY_ROWS=2 NUM_COLS=4 M_TILE=2   # array shape; hosts then need --rows/--cols/--m-tile
+                                        #   (ARRAY_ROWS and M_TILE <= 4 unless FIFO_DEPTH is
+                                        #   raised in rtl/tpu_top.sv)
+make PSUM_WIDTH=32                      # accumulate/bias/result width (default 16); hosts need
+                                        #   --psum-width. Not usable with USE_MAC16_PAIR=1, and
+                                        #   no bitstream has been built with it yet
 make USE_SPI=1 CLK_FREQ=24000000        # SPI host link (rtl/spi_slave.sv) on the RP2350<->iCE40
                                         #   config bus instead of the UART; pair with the
                                         #   TPU_LINK_SPI=ON firmware build and hosts' --link spi.
@@ -459,8 +515,10 @@ it wins once `infer.py` batches images. See [`docs/performance.md`](docs/perform
 
 ## 6. Current status and future work
 
-- **Simulation** — full datapath implemented and passing all 22 SystemVerilog
-  testbenches (`make test`).
+- **Simulation** — full datapath implemented and passing all 23 SystemVerilog
+  testbenches (`make test` runs 22 — `run_tests.sh` is missing `hps_bridge`, which
+  passes on its own via `make test-hps_bridge`), lint-clean across 4 configurations,
+  and passing the full-chip Verilator suite across 12 shape/PHY/width combinations.
 - **pico2-ice hardware** — bring-up complete; `tests/hw_regression.py` (`make hw-test`)
   replays every simulation test vector plus int8/int16 boundary cases and a randomized
   stress run against real silicon, at whatever array shape the bitstream was built with
@@ -504,25 +562,42 @@ it wins once `infer.py` batches images. See [`docs/performance.md`](docs/perform
   quantized test accuracy in sim, 95.00% (19/20) on a real-hardware sample
   (`mnist/infer.py --port ... --test-n 20`), at ~63.8 ms/image end-to-end over the
   SPI link with firmware offload (see the latency bullet above).
+- **Beyond MNIST** — `PSUM_WIDTH` is a build knob threaded from the PEs through the
+  wire format and host, and `flags[2]` bypasses the ReLU per pass. Together they run
+  **TinyStories-1M** (a GPT-Neo transformer: q/k/v/out, both MLP projections and the
+  lm_head on the array; LayerNorm/softmax/GELU on the host) via `llm/infer.py`, with
+  output identical to an exact int8 emulation. It needs `PSUM_WIDTH=32`, which no
+  bitstream has been built with, so it runs against the Verilator model today
+  (8×8/M_TILE=4, ~11–19 s/token).
+- **Datapath visualizer** — `viz/`: an interactive viewer backed by a cycle-accurate
+  JavaScript port of `tpu_core`, checked register-by-register against RTL traces
+  across six shapes (`make viz-check-all`). The same traces fed
+  [`docs/utilization.md`](docs/utilization.md), which measured that the array feeds
+  new rows only 9–16% of each pass.
 - **Interactive demo** — `mnist/draw_demo.py`: draw a digit, classify it end-to-end on
   real pico2-ice silicon via `mnist/infer.py`'s multi-layer `matmul_tiled()` driver, with
   the board's LED flipping green→blue on completion (`firmware/main.c`'s LED command
   listener on the second, otherwise-idle USB-CDC port). `--offline` runs the same
   pipeline in pure numpy with no board attached.
-- **Future work** — a bigger/better MNIST model (current one is deliberately tiny to
-  stay provably inside the accumulator's int16 width — see `mnist/train_mnist.py`'s
-  header comment); batching `M_TILE` images per inference call in `mnist/infer.py` so a
-  single image stops wasting the padded activation rows (the highest-value item
-  left — projected ~17 ms/image at 4×4/M_TILE=4); and wire-format ideas
-  like packed instruction headers and int4 payload packing (the latter gated on
-  a software-only accuracy experiment). Full list: [`docs/backlog.md`](docs/backlog.md).
+- **Future work** — batching `M_TILE` images per inference call in `mnist/infer.py` so
+  a single image stops wasting the padded activation rows (the highest-value item
+  left, and host-only — projected ~17 ms/image at 4×4/M_TILE=4); weights that stay
+  resident on chip and can be named instead of re-sent; overlapping each tile's weight
+  load with the previous tile's compute, which the double-buffered weight FIFO already
+  supports; a `PSUM_WIDTH=32` bitstream so the transformer can leave simulation; a
+  bigger/better MNIST model (the current one is deliberately tiny to stay provably
+  inside int16 — see `mnist/train_mnist.py`'s header comment); and wire-format ideas,
+  up to a fixed-width instruction stream that removes the 255-byte frame cap. Full
+  list: [`docs/backlog.md`](docs/backlog.md).
 - **DE1-SoC (Cyclone V) target** — in progress. The board-neutral `tpu_core`,
   the HPS Avalon-MM bridge (`rtl/hps_bridge.sv` + `rtl/tpu_top_hps.sv`), and the
   memory-mapped host transport (`tpu_host.py --link hps`, driven over `/dev/mem`
   from the board's ARM Linux) are implemented and simulation-tested — including
   an 8×8 shape (64 PEs on generic-fabric multiply, well past the UP5K's 8-DSP
   ceiling; the iCE40-only `SB_MAC16` DSP-pair path drops to inferred DSPs on
-  Cyclone V). The `fpga/de1soc/` Quartus build is scaffolded. Remaining steps:
+  Cyclone V). The `fpga/de1soc/` Quartus build is scaffolded. `tpu_host.py` and
+  `llm/infer.py` accept `--link hps`; `tests/hw_regression.py` and `mnist/infer.py`
+  don't yet. Remaining steps:
   - **Cloud Quartus build.** Quartus has no macOS build, so the `.rbf` is
     produced on x86-64 Linux in AWS: an AWS CDK stack (S3 artifact bucket + an
     SSM-managed IAM instance profile, no SSH) plus an *ephemeral,

@@ -112,7 +112,8 @@ Both benefit every build, not just 4×4.
 
 ## 3. How it got 125× faster
 
-Eight months of measurement, in the order the levers were pulled. Each step's
+About a week of measurement (first bring-up 07-06, last step 07-13), in the
+order the levers were pulled. Each step's
 numbers are what was measured at the time.
 
 | Step | Change | ms/image | Cumulative |
@@ -206,4 +207,7 @@ Sources: [iCE40 UltraPlus datasheet](https://www.latticesemi.com/-/media/Lattice
 ## 5. What's left
 
 See [`backlog.md`](backlog.md). The short version: `M_TILE` image batching is
-the only remaining lever with a large, well-understood payoff.
+the largest well-understood lever and needs no RTL change. After it, the
+levers are structural — addressable resident weights and shadow-bank
+overlap — and [`utilization.md`](utilization.md) has the traced numbers
+behind them: the array feeds new rows only 9–16% of each pass.

@@ -1,13 +1,15 @@
 `timescale 1ns / 1ps
 
-// Accumulator for a 2x2 weight-stationary MMU.
+// Accumulator for the NUM_COLS-wide weight-stationary MMU.
 //
-// Instantiates one weight_fifo per MMU output column. Each column's
+// Instantiates one fifo (rtl/fifo.sv) per MMU output column. Each column's
 // out_partial_sum is written into its FIFO on that column's valid
 // pulse. This is required because the systolic array's output columns
-// are skewed in time relative to each other (column j finishes (N-1-j)
-// cycles after column 0 for the same logical row), so there is no shared
+// are skewed in time relative to each other (column j finishes j cycles
+// after column 0 for the same logical row), so there is no shared
 // "row valid" signal coming out of the MMU itself.
+//
+// Latency: 2 cycles (FIFO write, then the registered pop into out_row).
 //
 // The accumulator reassembles rows by popping one entry from every column
 // FIFO together, the moment all column FIFOs are simultaneously non-empty.

@@ -62,8 +62,9 @@ counter-driven FSM replays exact cycle sequences against fixed datapath
 latencies. [`verification.md`](verification.md)'s Tier 4 is the only tier that
 would catch a mistake in it.
 
-> `backlog.md` files this as low-value, worth "~2 ms at most". That estimate
-> predates these measurements and misses the SPI-clock coupling entirely.
+> `backlog.md` used to file this as low-value, worth "~2 ms at most". That
+> estimate predated these measurements and missed the SPI-clock coupling
+> entirely; the backlog now ranks it with the high-value items.
 
 ## 3. Where the bytes go
 

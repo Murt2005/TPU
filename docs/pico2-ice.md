@@ -26,7 +26,8 @@ nothing listening on the DFU interface `dfu-util` needs.
 |---|---|---|
 | `CLK_FREQ` | `12000000` | **Must match** `firmware/main.c`'s `ice_fpga_init()` request. 24 MHz for SPI builds |
 | `BAUD_RATE` | `1000000` | UART builds only. 1 M divides 12 MHz exactly (`TICKS_PER_BIT=12`, zero error). Fallback 921600 (+0.16%) |
-| `ARRAY_ROWS` / `NUM_COLS` / `M_TILE` | `2` / `2` / `=ARRAY_ROWS` | Array shape; must match the host's `--rows/--cols/--m-tile` |
+| `ARRAY_ROWS` / `NUM_COLS` / `M_TILE` | `2` / `2` / `=ARRAY_ROWS` | Array shape; must match the host's `--rows/--cols/--m-tile`. `FIFO_DEPTH` is **not** a knob here — `tpu_top`'s default of 4 caps `ARRAY_ROWS` and `M_TILE` at 4 unless you raise it in the RTL |
+| `PSUM_WIDTH` | `16` | Accumulate/bias/result width, and the wire bytes per result element. Must match the host's `--psum-width`. Incompatible with `USE_MAC16_PAIR=1` (the DSP accumulator is 16 bits). Every bitstream built so far is 16 |
 | `USE_SPI` | `0` | `1` = `spi_slave.sv` on the config bus; needs `TPU_LINK_SPI` firmware |
 | `USE_MAC16_PAIR` | `0` | `1` = `pe_pair.sv`, two PEs per `SB_MAC16`. Requires even `ARRAY_ROWS`. Drops `-dsp` (nothing left to infer, and it must not remap hand-placed primitives) |
 | `ABC_FLAGS` | `-abc9 -dff` | Register-aware ABC pass; worth ~412 LCs on the 4×4 build |

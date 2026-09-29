@@ -13,7 +13,7 @@ New to the repo, want to run it on a board:
 2. [`pico2-ice.md`](pico2-ice.md) — when §1 isn't enough, or something breaks.
 
 New to the repo, want to understand the design:
-1. [`architecture.md`](architecture.md) — the datapath and how it's parameterized.
+1. [`architecture.md`](architecture.md) — the whole system, top to bottom.
 2. [`protocol.md`](protocol.md) — how the host talks to it.
 3. [`performance.md`](performance.md) — where the time and the LUTs go.
 4. [`utilization.md`](utilization.md) — how much of that the array actually uses.
@@ -27,7 +27,7 @@ Working on the code:
 
 | File | What's in it |
 |---|---|
-| [`architecture.md`](architecture.md) | Datapath module by module, board-neutral core vs. board tops, the `ARRAY_ROWS`/`NUM_COLS`/`M_TILE` parameter model, K-dim tiling semantics |
+| [`architecture.md`](architecture.md) | The whole system: the four host paths, the datapath module by module, the sequencer FSM, the parameter model (`ARRAY_ROWS`/`NUM_COLS`/`M_TILE`/`PSUM_WIDTH`), K-dim tiling, numerics, the RTL that exists but isn't wired up, and the software stack (`tpu_host.py`, firmware, `mnist/`, `llm/`, `viz/`) |
 | [`protocol.md`](protocol.md) | The host wire protocol as shipped: every command, the tiling flags, status codes, SPI vs. UART PHY, and the firmware-local `FW_*` commands |
 | [`pico2-ice.md`](pico2-ice.md) | iCE40UP5K target reference: build knobs, flash order, the five hard-won gotchas, the bisect ladder |
 | [`de1soc.md`](de1soc.md) | Cyclone V target: what's implemented, what's scaffolded, the cloud Quartus build plan |

@@ -48,12 +48,16 @@ model is sized for `PSUM_WIDTH=16` and is unaffected.
 These are why `train_mnist.py` doesn't look like a normal quantization
 script:
 
-**ReLU is applied unconditionally on every layer**, including the output.
-`rtl/activation.sv` has no bypass mode. The network is therefore trained
-with ReLU on the output logits too, so the loss landscape matches what the
-hardware actually produces — argmax over ReLU'd scores — rather than
+**ReLU is applied on every layer**, including the output. When the model
+was trained, `rtl/activation.sv` had no bypass mode, so the network was
+trained with ReLU on the output logits too — the loss landscape matches what
+the hardware actually produces (argmax over ReLU'd scores) rather than
 training a standard logits-then-softmax network and hoping ReLU doesn't
-disturb the decision boundary afterwards.
+disturb the decision boundary afterwards. The RTL has since gained a
+per-pass bypass (`flags[2]`, [`protocol.md`](protocol.md) §2), but the
+committed model and `infer.py` still use ReLU everywhere, and the
+`FW_MATMUL` offload path cannot carry the bypass at all. Retraining with a
+linear output layer is possible now; nobody has done it.
 
 **There is no on-chip requantization unit.** `unified_buffer` stores int8
 (`DATA_WIDTH=8`), but a layer's output arrives as int16 post-ReLU. The
@@ -102,7 +106,7 @@ Add `--rows/--cols/--m-tile` and `--link` to match the flashed bitstream.
 | File | What |
 |---|---|
 | `mnist/train_mnist.py` | Train + quantize; the header comment is the authoritative note on all the constraints above |
-| `mnist/infer.py` | Multi-layer driver; `HardwareBackend` (via `tpu_host.py`'s `matmul_tiled()`) and `OfflineBackend` (numpy), plus `--compare` and `--timing-breakdown` |
+| `mnist/infer.py` | Multi-layer driver; `HardwareBackend` (via `tpu_host.py`'s `matmul_tiled()`) and `OfflineBackend` (numpy), plus `--compare` and `--no-offload` |
 | `mnist/draw_demo.py` | Tkinter drawing demo; `--offline` runs boardless |
 | `mnist/model/mnist_2x2_int8.npz` | Committed pre-trained weights |
 | `mnist/data/` | Downloaded IDX files (gitignored) |
@@ -120,5 +124,6 @@ three of four streamed rows are zeros, which is why that shape measures
 strictly more capable. Batched, layer 1 costs 30.6 ms per 2 rows vs. 44.6 —
 projecting to **~17 ms/image**.
 
-A bigger/better model is possible but gated on §2's accumulator width. See
-[`backlog.md`](backlog.md).
+A bigger/better model is gated on §2's accumulator width: either prove it
+still fits int16, or build a `PSUM_WIDTH=32` bitstream (never built so far).
+See [`backlog.md`](backlog.md).
