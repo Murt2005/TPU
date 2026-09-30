@@ -33,7 +33,7 @@ precisely so a row/column index confusion cannot pass by coincidence. This is
 how the `unified_buffer` ROWS/COLS indexing bug — harmless while `ROWS==COLS`
 — was caught.
 
-Registering a new bench is one line: a `DEPS_<name>` entry in the `Makefile`
+Registering a new bench is one line: a `DEPS_<name>` entry in `mk/sim.mk`
 listing the RTL it needs. The test list is built from the `tests/*_tb.sv`
 files themselves (`make print-tests`), and `run_tests.sh` reads it from there,
 so a bench can't be silently left out — one with no `DEPS_` line stops the
@@ -90,15 +90,15 @@ DE1-SoC scale-up shape.
 `make sim-bridge` builds the `direct` bench as a transport binary
 (`sim/verilator/bridge/tb_tpu_top`; shape set by `SIM_ROWS`/`SIM_COLS`/
 `SIM_MTILE`/`SIM_PSUM`, default 8×8/M_TILE=4/PSUM=32), and
-`tests/hw_regression.py --link sim --port <that binary>` runs the hardware
+`tests/hw/hw_regression.py --link sim --port <that binary>` runs the hardware
 suite against it instead of silicon. That is not a substitute for Tier 4 — it
 validates the RTL, protocol and host driver, not the netlist — but it is the
-only way to run the host-side programs (`hw_regression.py`, `llm/infer.py`)
+only way to run the host-side programs (`hw_regression.py`, `software/llm/infer.py`)
 at shapes and widths no bitstream has been built for.
 
 ## Tier 4 — Real hardware (`make hw-test`)
 
-`tests/hw_regression.py` against a flashed board. **The only tier that
+`tests/hw/hw_regression.py` against a flashed board. **The only tier that
 validates synthesis** — netlist transforms like `-dsp`, `-abc9 -dff`, and
 the hand-instantiated `SB_MAC16` primitives are all trusted on the basis of
 this suite passing bit-exactly, not on inspection.
@@ -130,7 +130,7 @@ race that only fires at 1 Mbaud.
 ## Tier 4b — End-to-end accuracy
 
 ```bash
-python3 mnist/infer.py --port /dev/cu.usbmodemXXXX --test-n 20
+python3 software/mnist/infer.py --port /dev/cu.usbmodemXXXX --test-n 20
 ```
 
 Not a regression gate, but the check that the whole stack — training,
@@ -144,7 +144,7 @@ Expected: 19/20 on the sampled set, matching the local numpy model exactly.
 | One RTL module | `make test-<name>`, then `make test` |
 | Anything in the datapath or sequencer | `make test` + `make lint` + `make verilate-test` |
 | Synthesis flags, primitives, or memory inference | all of the above **+ `make hw-test`** |
-| Wire protocol | all of the above + `mnist/infer.py` |
+| Wire protocol | all of the above + `software/mnist/infer.py` |
 | Firmware | `make hw-test` (there is no firmware sim tier) |
 
 This project deliberately uses **no hosted CI** — the gates are local `make`

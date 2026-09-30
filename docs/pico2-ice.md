@@ -10,8 +10,8 @@ pico2-ice carries two programmable chips, and each needs its own image:
 
 | Chip | Role | Image | Built from |
 |---|---|---|---|
-| Lattice iCE40UP5K | Runs the TPU datapath | `fpga/ice40/tpu_top.bin` | `rtl/*.sv` |
-| Raspberry Pi RP2350 | USB bridge **+ FPGA clock + bitstream loader** | `firmware/build*/pico2_ice_bridge.uf2` | `firmware/*` |
+| Lattice iCE40UP5K | Runs the TPU datapath | `boards/pico2-ice/fpga/tpu_top.bin` | `rtl/` + `boards/pico2-ice/top/` |
+| Raspberry Pi RP2350 | USB bridge **+ FPGA clock + bitstream loader** | `boards/pico2-ice/firmware/build*/pico2_ice_bridge.uf2` | `boards/pico2-ice/firmware/*` |
 
 The RP2350 is not just a USB-to-serial chip. It **drives the FPGA's clock and
 loads its bitstream**, so its firmware must be running correctly before the
@@ -20,11 +20,11 @@ nothing listening on the DFU interface `dfu-util` needs.
 
 **Flash firmware first, gateware second.** Always.
 
-## 2. Build knobs (`fpga/ice40/Makefile`)
+## 2. Build knobs (`boards/pico2-ice/fpga/Makefile`)
 
 | Knob | Default | Notes |
 |---|---|---|
-| `CLK_FREQ` | `12000000` | **Must match** `firmware/main.c`'s `ice_fpga_init()` request. 24 MHz for SPI builds |
+| `CLK_FREQ` | `12000000` | **Must match** `boards/pico2-ice/firmware/main.c`'s `ice_fpga_init()` request. 24 MHz for SPI builds |
 | `BAUD_RATE` | `1000000` | UART builds only. 1 M divides 12 MHz exactly (`TICKS_PER_BIT=12`, zero error). Fallback 921600 (+0.16%) |
 | `ARRAY_ROWS` / `NUM_COLS` / `M_TILE` | `2` / `2` / `=ARRAY_ROWS` | Array shape; must match the host's `--rows/--cols/--m-tile`. `FIFO_DEPTH` is **not** a knob here — `tpu_top`'s default of 4 caps `ARRAY_ROWS` and `M_TILE` at 4 unless you raise it in the RTL |
 | `PSUM_WIDTH` | `16` | Accumulate/bias/result width, and the wire bytes per result element. Must match the host's `--psum-width`. Incompatible with `USE_MAC16_PAIR=1` (the DSP accumulator is 16 bits). Every bitstream built so far is 16 |
@@ -55,8 +55,8 @@ requests. The UART baud divider is computed at *synthesis* time from
 `CLK_FREQ`/`BAUD_RATE`. So three numbers must agree:
 
 ```
-firmware/main.c   ice_fpga_init(FPGA_DATA, AS_MHZ(12))
-fpga/ice40/Makefile   CLK_FREQ = 12000000
+boards/pico2-ice/firmware/main.c   ice_fpga_init(FPGA_DATA, AS_MHZ(12))
+boards/pico2-ice/fpga/Makefile   CLK_FREQ = 12000000
 tpu_host.py       DEFAULT_BAUD (matches BAUD_RATE)
 ```
 
@@ -66,7 +66,7 @@ Measured fMax is ~28–32 MHz depending on shape, so 12 MHz leaves ~2.6×
 margin. SPI builds run the core at 24 MHz — the baud divider was the 12 MHz
 constraint, and `spi_slave` has no such coupling.
 
-## 4. Pin constraints (`fpga/ice40/tpu_top.pcf`)
+## 4. Pin constraints (`boards/pico2-ice/fpga/tpu_top.pcf`)
 
 iCE40 **package-pin** namespace — not the RP2350 GPIO namespace used in
 firmware. Easy to conflate; don't.
@@ -91,7 +91,7 @@ failure. Root cause: `pico-ice-sdk/src/ice_usb.c`'s DFU manifest callback
 does `ok = ice_fpga_start(FPGA_DATA)` and errors whenever `ok` is falsy — but
 `ice_fpga_start()` unconditionally `return 0;` and never polls `CDONE`.
 
-Don't trust that message in either direction. `firmware/main.c` adds a real
+Don't trust that message in either direction. `boards/pico2-ice/firmware/main.c` adds a real
 check via `ice_fpga_configured()` — a function that exists in the SDK source
 but is not declared in the public header or called by any upstream example —
 and shows it on the LED: **green = configured, red = not**.
@@ -159,7 +159,7 @@ Physical wiring → clock delivery → reset generation → module state.
 
 ## 7. Firmware notes
 
-`firmware/main.c` is a minimal fork of `pico-ice-sdk/examples/rp2_usb_uart`.
+`boards/pico2-ice/firmware/main.c` is a minimal fork of `pico-ice-sdk/examples/rp2_usb_uart`.
 Its whole job is USB bridging, FPGA clock/config, and LED status.
 
 Two SDK bugs bit this project on real hardware and are fixed here:
@@ -178,7 +178,7 @@ Two SDK bugs bit this project on real hardware and are fixed here:
   then the only TinyUSB caller.
 
 Firmware changes take effect via the SDK's 1200-baud-touch UF2 reboot — no
-BOOTSEL press needed. See `firmware/README.md` for the per-file walkthrough.
+BOOTSEL press needed. See `boards/pico2-ice/firmware/README.md` for the per-file walkthrough.
 
 ## 8. Validating a build
 
@@ -186,7 +186,7 @@ BOOTSEL press needed. See `firmware/README.md` for the per-file walkthrough.
 python3 tpu_host.py --port /dev/cu.usbmodemXXXX --selftest       # one golden vector
 make hw-test PORT=/dev/cu.usbmodemXXXX \
      ARRAY_ROWS=4 NUM_COLS=4 M_TILE=4 LINK=spi                   # full regression
-python3 mnist/infer.py --port /dev/cu.usbmodemXXXX --test-n 20   # end-to-end accuracy
+python3 software/mnist/infer.py --port /dev/cu.usbmodemXXXX --test-n 20   # end-to-end accuracy
 ```
 
 The `ARRAY_ROWS`/`NUM_COLS`/`M_TILE`/`LINK` arguments must match **the

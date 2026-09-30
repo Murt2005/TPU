@@ -1,6 +1,6 @@
 # Host protocol
 
-How the host drives the array. `rtl/tpu_sequencer.sv`'s header comment is the
+How the host drives the array. `rtl/core/tpu_sequencer.sv`'s header comment is the
 normative definition — this page explains it and covers the layers around it
 (PHY choice, firmware-local commands, host driver).
 
@@ -55,7 +55,7 @@ returning the biased sum unchanged; it is only observable on a `TILE_LAST`
 pass, since that is the only one activation fires on. `RUN` with `LEN=0` is
 equivalent to `flags=TILE_FIRST|TILE_LAST`, i.e. the original single-shot
 behaviour, so a host that never sends the byte still works. Bit positions
-are named in `rtl/tpu_pkg.sv` and mirrored in `tpu_host.py`. See
+are named in `rtl/core/tpu_pkg.sv` and mirrored in `tpu_host.py`. See
 [`architecture.md`](architecture.md) §6 for the accumulation semantics.
 
 ## 3. The batched commands
@@ -97,7 +97,7 @@ protocol above is unchanged.
 synthesis time from `CLK_FREQ`/`BAUD_RATE`, so **those two must match the
 firmware's clock request**. See [`pico2-ice.md`](pico2-ice.md) §3.
 
-**SPI** (`USE_SPI=1`) — `rtl/spi_slave.sv`, mode 0, on the shared
+**SPI** (`USE_SPI=1`) — `rtl/peripherals/spi_slave.sv`, mode 0, on the shared
 RP2350↔iCE40 config bus. SPI is master-driven, so responses are **polled**:
 the bridge clocks `0xFF` filler (`NOP`, ignored in `S_IDLE`) and the first
 non-`0x00` MISO byte is the STATUS. Both clocks are CLK-capped — write
@@ -105,13 +105,13 @@ non-`0x00` MISO byte is the STATUS. Both clocks are CLK-capped — write
 synchronizer). At the 24 MHz core clock that is 4 MHz / 3 MHz. No baud
 coupling, which is what allows the higher core clock.
 
-**HPS Avalon-MM** (`tpu_top_hps`) — `rtl/hps_bridge.sv`, memory-mapped, fixed
+**HPS Avalon-MM** (`tpu_top_hps`) — `rtl/peripherals/hps_bridge.sv`, memory-mapped, fixed
 read latency 1, no waitrequest. Driven from the board's own Linux over
 `/dev/mem`. See [`de1soc.md`](de1soc.md).
 
 ## 5. Firmware-local commands (SPI builds)
 
-`firmware/tpu_tile.c` captures two command bytes off the CDC stream that
+`boards/pico2-ice/firmware/tpu_tile.c` captures two command bytes off the CDC stream that
 **never reach the FPGA**. Every sequencer command still passes through
 byte-identically, so raw-protocol tests double as pass-through coverage.
 
@@ -123,7 +123,7 @@ byte-identically, so raw-protocol tests double as pass-through coverage.
 `FW_MATMUL` collapses MNIST from ~45 USB round trips per image to 2 (one per
 layer). Zero-padding happens in the tile gather — no padded copies are
 materialized. Results are bit-identical to the host-tiled path, A/B-verified
-in `tests/hw_regression.py`.
+in `tests/hw/hw_regression.py`.
 
 ## 6. Host side
 
@@ -153,7 +153,7 @@ in `tests/hw_regression.py`.
 - CLI: `--port`, `--link {uart,spi,hps,sim}`, `--rows/--cols/--m-tile`,
   `--psum-width`, `--selftest`, `--weights/--activations/--bias`, `--reset`.
 
-`tests/hw_regression.py` drives the same protocol for the full regression.
+`tests/hw/hw_regression.py` drives the same protocol for the full regression.
 
 Driving the board directly from a terminal or another language is entirely
 reasonable — the sequencer's header comment is all you need.

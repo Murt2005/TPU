@@ -6,26 +6,26 @@ sim/
 *.vvp
 
 # FPGA synthesis build artifacts (yosys/nextpnr-ice40/icepack outputs)
-fpga/**/*.json
-fpga/**/*.asc
-fpga/**/*.bin
-fpga/**/*.aig
+boards/*/fpga/*.json
+boards/*/fpga/*.asc
+boards/*/fpga/*.bin
+boards/*/fpga/*.aig
 
 # Quartus (DE1-SoC / Cyclone V) build output
-fpga/de1soc/db/
-fpga/de1soc/incremental_db/
-fpga/de1soc/output_files/
-fpga/de1soc/*.qws
-fpga/de1soc/*.rpt
-fpga/de1soc/*.rbf
-fpga/de1soc/*.sof
+boards/de1soc/fpga/db/
+boards/de1soc/fpga/incremental_db/
+boards/de1soc/fpga/output_files/
+boards/de1soc/fpga/*.qws
+boards/de1soc/fpga/*.rpt
+boards/de1soc/fpga/*.rbf
+boards/de1soc/fpga/*.sof
 
 # RP2350 firmware out-of-tree build dirs (build/ = UART bridge,
 # build-spi/ = TPU_LINK_SPI=ON variant)
-firmware/build*/
+boards/pico2-ice/firmware/build*/
 
-# Downloaded MNIST idx files (mnist/train_mnist.py fetches these; ~11MB, not tracked)
-mnist/data/
+# Downloaded MNIST idx files (software/mnist/train_mnist.py fetches these; ~11MB, not tracked)
+software/mnist/data/
 
 # Python venv (README §1.3: `python3 -m venv .venv`) and bytecode caches
 .venv/
@@ -34,7 +34,7 @@ __pycache__/
 # Pre-reorganization docs, kept locally for reference only (superseded by docs/)
 olddocs/
 
-# TinyStories weights + tokenizer (llm/fetch.sh downloads and quantizes
-# these; ~16MB, same rationale as mnist/data/ above -- reproducible, not
+# TinyStories weights + tokenizer (software/llm/fetch.sh downloads and quantizes
+# these; ~16MB, same rationale as software/mnist/data/ above -- reproducible, not
 # tracked). The scripts that build them ARE tracked.
-llm/model/
+software/llm/model/

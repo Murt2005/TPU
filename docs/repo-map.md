@@ -1,7 +1,7 @@
 # Repository map
 
-File-by-file. The root [`README.md`](../README.md) §4 has the short version;
-this is the complete one.
+File-by-file. The root [`README.md`](../README.md) §4 has the directory-level
+version; this is the complete one.
 
 ## Root
 
@@ -9,88 +9,67 @@ this is the complete one.
 |---|---|
 | `README.md` | Entry point: quick start, toolchain, architecture walkthrough, status |
 | `CONTRIBUTING.md` | Dev setup, local quality gates, how to register a testbench, RTL house style |
-| `Makefile` | Simulation, lint, Verilator suite, sim bridge, and hardware-test automation; single-sources the RTL dependency graph `run_tests.sh` uses |
+| `Makefile` | Entry point for simulation, lint, the Verilator suite, the sim bridge and hardware tests; defines the shared file sets and includes `mk/` |
+| `mk/sim.mk` | Icarus testbenches: the RTL dependency graph (`DEPS_<name>`), the test list (built from `tests/sv/*_tb.sv`), and `make test` |
+| `mk/verilator.mk` | `make lint` (4 configs), `make verilate-test` (12 combos), `make sim-bridge` |
+| `mk/hw.mk` | `make hw-test` |
 | `run_tests.sh` | Builds and runs every (or a named subset of) testbench, printing a pass/fail summary. Gets the test list from `make print-tests` |
 | `tpu_host.py` | Host driver + CLI: the wire protocol, `matmul_tiled()`, and the four link backends (UART / SPI / HPS MMIO / Verilator sim) |
 | `verilator.vlt` | Verilator lint waivers |
 | `requirements.txt` | `pyserial`, `numpy` |
-| `.gitmodules` | Pins `firmware/pico-ice-sdk` to tinyvision-ai-inc's SDK |
+| `.gitmodules` | Pins `boards/pico2-ice/firmware/pico-ice-sdk` to tinyvision-ai-inc's SDK |
 | `.gitignore` | Sim output, FPGA artifacts, Quartus output, firmware build dirs, MNIST data, `.venv/`, `olddocs/` |
 
 `.venv/` is the Python virtual environment (README §1.3) and `__pycache__/`
 holds bytecode caches. Both gitignored.
 
-## `rtl/` — synthesizable SystemVerilog
+## `rtl/` — board-neutral SystemVerilog
 
-**Datapath**
+Everything here is shared by every board. Nothing in it names a pin or a
+vendor primitive.
+
+**`rtl/core/` — datapath and control**
 
 | File | What |
 |---|---|
 | `pe.sv` | One processing element: stationary weight × streaming activation, partial sum forwarded down |
-| `pe_pair.sv` | Two PEs in one hand-instantiated `SB_MAC16` (dual-8×8 signed). iCE40-only |
-| `mmu.sv` | The `ARRAY_ROWS`×`NUM_COLS` systolic array; instantiates `pe` or `pe_pair` |
+| `mmu.sv` | The `ARRAY_ROWS`×`NUM_COLS` systolic array; instantiates `pe`, or `pe_pair` when `USE_MAC16_PAIR=1` |
 | `systolic_data_setup.sv` | Skews an activation row in time to match the array's diagonal wavefront |
 | `weight_fifo.sv` | Ping-pong weight store; drains the active bank while the next streams into the shadow |
 | `unified_buffer.sv` | Double-banked activation SRAM, BRAM-inferred. Its layer-to-layer write-back port exists but is tied off in `tpu_core` |
 | `accumulator.sv` | Reassembles time-skewed column partial sums into rows; persistent non-saturating `PSUM_WIDTH` PSUM for K-tiling |
 | `bias.sv` | Registered per-column `PSUM_WIDTH` add |
 | `activation.sv` | Registered ReLU, bypassable per pass (`flags[2]`) |
-| `fifo.sv` | Generic synchronous circular queue used by `accumulator` and `weight_fifo` |
-
-**Control and host interface**
-
-| File | What |
-|---|---|
+| `fifo.sv` | Generic synchronous circular queue used by `accumulator`, `weight_fifo` and `spi_slave` |
 | `tpu_sequencer.sv` | Command decoder + pipeline orchestrator. Its header comment is the normative protocol spec |
 | `tpu_pkg.sv` | Shared wire-protocol constants; must be read before `tpu_sequencer.sv` |
-| `uart_rx.sv` | 8N1 receiver, 16× oversampling, mid-bit sample |
-| `uart_tx.sv` | 8N1 transmitter |
-| `spi_slave.sv` | Mode-0 SPI slave presenting the identical byte-stream interface |
-| `hps_bridge.sv` | Avalon-MM slave for the DE1-SoC's HPS; fixed read latency 1, no CDC |
+| `tpu_core.sv` | Sequencer + datapath behind the byte-stream interface; no host PHY |
 
-**Tops**
+**`rtl/peripherals/` — host-link PHYs**
 
-| File | Target |
-|---|---|
-| `tpu_core.sv` | Board-neutral datapath; no host interface |
-| `tpu_top.sv` | pico2-ice: PHY + sequencer + core, plus the power-on-reset counter |
-| `tpu_top_hps.sv` | DE1-SoC: `hps_bridge` + sequencer + core |
-
-## `tests/` — 23 testbenches + hardware regression
-
-**Unit** — `fifo_tb`, `pe_tb`, `pe_pair_tb`, `mmu_tb`, `bias_tb`,
-`activation_tb`, `accumulator_tb`, `unified_buffer_tb`,
-`systolic_data_setup_tb`, `weight_fifo_tb`, `uart_rx_tb`, `uart_tx_tb`,
-`spi_slave_tb`, `hps_bridge_tb`.
-
-**Pairwise integration** — `mmu_accum_tb`, `accum_bias_tb`,
-`bias_activation_tb`, `weight_fifo_mmu_tb`.
-
-**Full-path** — `tpu_core_tb` (datapath, no sequencer), `tpu_sequencer_tb`
-(protocol → pipeline), and shape variants `tpu_sequencer_4x2_tb` (all three
-axes distinct), `_2x4_tb`, `_4x4_tb` (through the `SB_MAC16` netlist path).
+All four present the same byte-stream interface to `tpu_core`.
 
 | File | What |
 |---|---|
-| `hw_regression.py` | 14-case regression against real silicon over `tpu_host.py` |
-| `verilator/tb_tpu_top.cpp` | C++ full-chip bench: drives `tpu_top`'s real host pins (or injects bytes into `tpu_core` directly) across 12 shape/PHY/width combos; with `--bridge` it is the `--link sim` transport (`make sim-bridge`) |
+| `uart_rx.sv` | 8N1 receiver, 16× oversampling, mid-bit sample |
+| `uart_tx.sv` | 8N1 transmitter |
+| `spi_slave.sv` | Mode-0 SPI slave |
+| `hps_bridge.sv` | Avalon-MM slave for the DE1-SoC's HPS; fixed read latency 1, no CDC |
 
-See [`verification.md`](verification.md).
+## `boards/` — one directory per target
 
-## `fpga/` — synthesis targets
+### `boards/pico2-ice/` — iCE40UP5K + RP2350 (hardware-validated)
 
 | Path | What |
 |---|---|
-| `Makefile` | Dispatches to the per-board makefiles |
-| `ice40/Makefile` | yosys → nextpnr-ice40 → icepack; all build knobs live here |
-| `ice40/tpu_top.pcf` | iCE40 package-pin constraints |
-| `ice40/tpu_top.{json,asc,bin}` | Generated artifacts (gitignored) |
-| `de1soc/Makefile` | Quartus command-line build + `.rbf` generation; set `PROJECT`/`REVISION` |
-| `de1soc/README.md` | Quartus/Qsys integration and HPS deploy runbook |
-| `de1soc/tpu_top_hps.sdc` | 50 MHz fabric clock constraint |
-| `de1soc/tpu_top_hps.qsf` | Device + TPU-specific pin/settings skeleton |
+| `top/tpu_top.sv` | Top level: UART or SPI PHY + `tpu_core` + the power-on-reset counter |
+| `top/pe_pair.sv` | Two PEs in one hand-instantiated `SB_MAC16` (dual-8×8 signed). iCE40-only, so it lives here rather than in `rtl/` |
+| `fpga/Makefile` | yosys → nextpnr-ice40 → icepack → dfu-util; all build knobs live here |
+| `fpga/tpu_top.pcf` | iCE40 package-pin constraints |
+| `fpga/tpu_top.{json,asc,bin}` | Generated artifacts (gitignored) |
+| `firmware/` | RP2350 firmware — below |
 
-## `firmware/` — RP2350
+**`boards/pico2-ice/firmware/`**
 
 | File | What |
 |---|---|
@@ -104,7 +83,41 @@ See [`verification.md`](verification.md).
 | `pico-ice-sdk/` | Vendored SDK (**git submodule**) |
 | `build/`, `build-spi/` | Out-of-tree build dirs producing the `.uf2` (gitignored) |
 
-## `mnist/`
+### `boards/de1soc/` — Cyclone V SoC (in progress)
+
+| Path | What |
+|---|---|
+| `top/tpu_top_hps.sv` | Top level: `hps_bridge` + `tpu_core` + power-on reset |
+| `fpga/Makefile` | Quartus command-line build + `.rbf` generation; set `PROJECT`/`REVISION` |
+| `fpga/README.md` | Quartus/Qsys integration and HPS deploy runbook |
+| `fpga/tpu_top_hps.sdc` | 50 MHz fabric clock constraint |
+| `fpga/tpu_top_hps.qsf` | Device, source list, and TPU-specific pin/settings skeleton |
+
+## `tests/` — by verification tier
+
+| Path | What |
+|---|---|
+| `sv/` | 23 Icarus testbenches (`make test`) — list below |
+| `verilator/tb_tpu_top.cpp` | C++ full-chip bench: drives `tpu_top`'s real host pins (or injects bytes into `tpu_core` directly) across 12 shape/PHY/width combos; with `--bridge` it is the `--link sim` transport (`make sim-bridge`) |
+| `hw/hw_regression.py` | 14-case regression against real silicon over `tpu_host.py` (`make hw-test`) |
+
+**Unit** — `fifo_tb`, `pe_tb`, `pe_pair_tb`, `mmu_tb`, `bias_tb`,
+`activation_tb`, `accumulator_tb`, `unified_buffer_tb`,
+`systolic_data_setup_tb`, `weight_fifo_tb`, `uart_rx_tb`, `uart_tx_tb`,
+`spi_slave_tb`, `hps_bridge_tb`.
+
+**Pairwise integration** — `mmu_accum_tb`, `accum_bias_tb`,
+`bias_activation_tb`, `weight_fifo_mmu_tb`.
+
+**Full-path** — `tpu_core_tb` (datapath, no sequencer), `tpu_sequencer_tb`
+(protocol → pipeline), and shape variants `tpu_sequencer_4x2_tb` (all three
+axes distinct), `_2x4_tb`, `_4x4_tb` (through the `SB_MAC16` netlist path).
+
+See [`verification.md`](verification.md).
+
+## `software/` — programs that run on the TPU
+
+### `software/mnist/`
 
 | Path | What |
 |---|---|
@@ -116,7 +129,7 @@ See [`verification.md`](verification.md).
 
 See [`mnist.md`](mnist.md).
 
-## `llm/` — a transformer on the array
+### `software/llm/` — a transformer on the array
 
 | File | What |
 |---|---|

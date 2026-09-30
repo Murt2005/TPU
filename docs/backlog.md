@@ -6,7 +6,7 @@ Open work, in rough value order. Anything here needs `make test` and
 
 ## High value
 
-**Batch `M_TILE` images per inference call** (`mnist/infer.py`).
+**Batch `M_TILE` images per inference call** (`software/mnist/infer.py`).
 The largest well-understood lever, and it needs no RTL change. A single image
 wastes the padded activation rows: at 4×4/M_TILE=4, three of four streamed
 rows are zeros. Measured M-scaling says layer 1 costs 30.6 ms per 2 rows at
@@ -39,7 +39,7 @@ utilization measurements and missed the SPI-clock coupling.)*
 ## Medium
 
 **A `PSUM_WIDTH=32` bitstream.** The knob exists and is covered in
-simulation, but no bitstream has been built with it. It is what `llm/` needs
+simulation, but no bitstream has been built with it. It is what `software/llm/` needs
 to leave simulation. On the UP5K it cannot use `pe_pair` and costs LCs across
 the reduction path, so it means a smaller array; the DE1-SoC is the natural
 home.
@@ -50,8 +50,8 @@ still fits in ±32,767, or use a `PSUM_WIDTH=32` build (above). With the ReLU
 bypass now available, a retrained model could also drop the ReLU on its
 output layer.
 
-**`--link hps` in the host scripts.** `tpu_host.py` and `llm/infer.py`
-accept it; `tests/hw_regression.py` and `mnist/infer.py` don't. Needed before
+**`--link hps` in the host scripts.** `tpu_host.py` and `software/llm/infer.py`
+accept it; `tests/hw/hw_regression.py` and `software/mnist/infer.py` don't. Needed before
 DE1-SoC bring-up can run the regression on the board.
 
 **A fixed-width instruction stream.** Replaces `[CMD][LEN][payload]` framing,
@@ -102,4 +102,4 @@ These were open items in earlier planning docs and have shipped. Details in
 - `-dsp`, then `pe_pair.sv`'s dual-8×8 `SB_MAC16` (16 PEs on 8 blocks)
 - The LC diet that made 4×4/M_TILE=4 fit (`-abc9 -dff` + BRAM UB)
 - `PSUM_WIDTH` as a build knob, and a per-pass ReLU bypass (`flags[2]`)
-- The `--link sim` transport, and TinyStories-1M running on it (`llm/`)
+- The `--link sim` transport, and TinyStories-1M running on it (`software/llm/`)

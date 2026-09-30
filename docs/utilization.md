@@ -42,8 +42,8 @@ without raising `M_TILE` buys compute density and spends it on fill and drain.
 
 ## 2. The double-buffering already exists and is not wired up
 
-`rtl/weight_fifo.sv` implements full ping-pong banks — its header describes
-loading the shadow bank while the active bank drains. `rtl/tpu_core.sv` ties
+`rtl/core/weight_fifo.sv` implements full ping-pong banks — its header describes
+loading the shadow bank while the active bank drains. `rtl/core/tpu_core.sv` ties
 `shadow_loaded`, `active_bank` and `any_shadow_full` to nothing, and the
 sequencer never pulses `swap_banks` early. Every pass loads, computes, and
 drains to completion before the next begins.
@@ -96,7 +96,7 @@ inside a 255-byte `LEN`:
 | 4×4 M_TILE=2 | 24 | 10 |
 | 8×8 M_TILE=4 | 96 | **2** |
 
-At 8×8 a round trip carries 196 payload bytes. This is why `llm/infer.py`
+At 8×8 a round trip carries 196 payload bytes. This is why `software/llm/infer.py`
 needs ~28k frames per token.
 
 ## 4. What to do, in order
@@ -115,7 +115,7 @@ risk is also the largest win per hour of work.
 
 **#4 has a trap.** Result bytes are `PSUM_BYTES × M_TILE × NUM_COLS` against
 the 255-byte `LEN` cap. At 8×8, `M_TILE=8` fits at `PSUM_WIDTH=16` (128
-bytes) but **not** at 32 (256). The `llm/` path cannot take this lever
+bytes) but **not** at 32 (256). The `software/llm/` path cannot take this lever
 without a protocol change — which §5 is.
 
 ## 5. The command interface
@@ -182,7 +182,7 @@ instruction stream is unrecoverable without a distinguished sync word and a
 recovery path. That is real design work, not a detail.
 
 It is also a rewrite of `tpu_sequencer.sv`, `tpu_host.py` and
-`firmware/tpu_tile.c` together, with Tier 4 unavailable to catch mistakes.
+`boards/pico2-ice/firmware/tpu_tile.c` together, with Tier 4 unavailable to catch mistakes.
 
 **The staged path is better.** Most of §4 #2's win needs exactly one new
 thing: naming weights that are already loaded. That is a single opcode on the

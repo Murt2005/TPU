@@ -5,7 +5,7 @@
 // which none of the Icarus testbenches do: tpu_sequencer_tb injects
 // rx_data/rx_valid behind the UART.
 //
-// The test set mirrors tests/hw_regression.py (fixed pattern cases, reset
+// The test set mirrors tests/hw/hw_regression.py (fixed pattern cases, reset
 // roundtrip, unknown CMD, randomized stress, matmul_tiled stress, RUN_TILE
 // equivalence, STREAM_RUN frame boundaries) plus one case only simulation
 // can do: injecting a UART framing error (bad stop bit) and checking the
@@ -16,7 +16,7 @@
 // this file with -DTB_ROWS/-DTB_COLS/-DTB_MTILE.
 //
 // With -DTB_SPI (paired with -GUSE_SPI=1), the UART BFM is replaced by an
-// SPI mode-0 master BFM (rtl/spi_slave.sv's write-then-poll protocol:
+// SPI mode-0 master BFM (rtl/peripherals/spi_slave.sv's write-then-poll protocol:
 // command frame in one CS burst, then 0xFF filler polls reading MISO until
 // the first non-0x00 byte, which is STATUS). Write SCK runs at CLK/6 —
 // the sequencer's inter-tile STREAM_RUN processing window caps uniform
@@ -100,7 +100,7 @@ using Vec  = std::vector<int>;
 using Bytes = std::vector<uint8_t>;
 
 // ---------------------------------------------------------------------------
-// Golden model -- must match tests/hw_regression.py golden(): the
+// Golden model -- must match tests/hw/hw_regression.py golden(): the
 // accumulator/bias sum wraps silently at int16 (non-saturating), and ReLU is
 // applied AFTER that truncation.
 // ---------------------------------------------------------------------------
@@ -557,7 +557,7 @@ static Vec rand_vec(std::mt19937& rng, int n, int lo, int hi) {
     return v;
 }
 
-// The seven fixed case patterns from tests/hw_regression.py, generated at
+// The seven fixed case patterns from tests/hw/hw_regression.py, generated at
 // this build's shape (exact 2x2 vectors when the shape is 2x2/M_TILE=2).
 static std::vector<std::tuple<const char*, Mat, Mat, Vec>> build_cases() {
     if (ROWS == 2 && COLS == 2 && MTILE == 2) {

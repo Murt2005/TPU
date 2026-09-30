@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Host-side driver for the UART command protocol implemented by
-rtl/tpu_sequencer.sv. Talks to one ARRAY_ROWS x NUM_COLS systolic array
+rtl/core/tpu_sequencer.sv. Talks to one ARRAY_ROWS x NUM_COLS systolic array
 (rows/cols/m_tile below, matching what the bitstream was built with --
-fpga/Makefile's ARRAY_ROWS/NUM_COLS/M_TILE): load an int8 weight matrix and
+boards/pico2-ice/fpga/Makefile's ARRAY_ROWS/NUM_COLS/M_TILE): load an int8 weight matrix and
 an int8 activation matrix, optionally a per-column int16 bias, then RUN to
 get back Y = ReLU(A @ W + bias) as an (m_tile x cols) int16 matrix.
 
-Protocol (8-N-1, host-initiates everything -- see rtl/tpu_sequencer.sv).
+Protocol (8-N-1, host-initiates everything -- see rtl/core/tpu_sequencer.sv).
 All payload sizes derive from the array shape: W_BYTES = rows*cols,
 A_BYTES = m_tile*rows, B_BYTES = psum_bytes*cols,
 RESULT_BYTES = psum_bytes*m_tile*cols  (psum_bytes = PSUM_WIDTH/8, default 2)
@@ -35,7 +35,7 @@ RESULT_BYTES = psum_bytes*m_tile*cols  (psum_bytes = PSUM_WIDTH/8, default 2)
                               frames. Response: result bytes on a TILE_LAST
                               frame, else a bare ACK. See TPU.stream_run().
 
-Firmware commands (TPU_LINK_SPI firmware only -- firmware/tpu_tile.c
+Firmware commands (TPU_LINK_SPI firmware only -- boards/pico2-ice/firmware/tpu_tile.c
 captures these off the CDC stream; the FPGA never sees them, and firmware
 without support forwards them to the FPGA, which rejects the unknown CMD):
 
@@ -63,7 +63,7 @@ import time
 import numpy as np
 import serial
 
-# Wire-protocol opcodes / status bytes. These mirror rtl/tpu_pkg.sv, which is
+# Wire-protocol opcodes / status bytes. These mirror rtl/core/tpu_pkg.sv, which is
 # the canonical (RTL) side of the host<->FPGA contract -- keep the two in sync.
 CMD_LOAD_WEIGHTS = 0x01
 CMD_LOAD_BIAS = 0x02
@@ -80,12 +80,12 @@ FLAG_TILE_LAST = 0x02    # forward the final sum through bias/activation
 FLAG_ACT_BYPASS = 0x04   # skip the ReLU clamp on this pass
 
 # PSUM_WIDTH -> the numpy dtype one bias/result element takes on the wire.
-# Must match the bitstream's PSUM_WIDTH (rtl/tpu_sequencer.sv's parameter).
+# Must match the bitstream's PSUM_WIDTH (rtl/core/tpu_sequencer.sv's parameter).
 _PSUM_DTYPE = {8: "<i1", 16: "<i2", 32: "<i4", 64: "<i8"}
 
 FW_MATMUL = 0xF0
 FW_PROBE = 0xF1
-FW_PROBE_MAGIC = b"T\x01"  # firmware/tpu_tile.c's FW_MAGIC + FW_VERSION
+FW_PROBE_MAGIC = b"T\x01"  # boards/pico2-ice/firmware/tpu_tile.c's FW_MAGIC + FW_VERSION
 
 # One STREAM_RUN tile = rows*cols weight + m_tile*rows act payload bytes; the
 # 1-byte LEN caps a frame at 255 payload bytes, minus 2 header bytes (flags,
@@ -100,7 +100,7 @@ FW_PROBE_MAGIC = b"T\x01"  # firmware/tpu_tile.c's FW_MAGIC + FW_VERSION
 # than one FIFO's worth down to wire speed (chunks + drain-time sleeps);
 # this costs nothing measurable since the UART is the throughput floor
 # anyway, and stays correct (just redundant) once the firmware-side fix in
-# firmware/main.c (blocking bridge write) is flashed.
+# boards/pico2-ice/firmware/main.c (blocking bridge write) is flashed.
 BRIDGE_FIFO_BYTES = 32
 BRIDGE_CHUNK_BYTES = 28  # a little margin under the FIFO depth
 
@@ -114,18 +114,18 @@ STATUS_ERR = 0xFF
 #    control (no 32-byte UART FIFO to overrun), so the BRIDGE_* sleeps
 #    below would just emulate UART-era latency for nothing;
 #  - wire-time accounting: SPI moves 8 bits/byte at the bridge's write
-#    clock (firmware/main.c TPU_SPI_WRITE_HZ; reads are slower and add
+#    clock (boards/pico2-ice/firmware/main.c TPU_SPI_WRITE_HZ; reads are slower and add
 #    poll filler, so uart_wire_seconds() is a lower bound there).
 SPI_WIRE_HZ = 4_000_000
 
-# Must match fpga/Makefile's BAUD_RATE (the divider is baked into the
+# Must match boards/pico2-ice/fpga/Makefile's BAUD_RATE (the divider is baked into the
 # bitstream at synthesis time). The RP2350 bridge needs no matching change:
 # pico-ice-sdk's tud_cdc_line_coding_cb sets uart0's baud to whatever rate
 # the host opens the CDC port with. 1M divides the 12 MHz FPGA clock exactly
 # (TICKS_PER_BIT = 12, zero baud error).
 DEFAULT_BAUD = 1_000_000
 
-# Must match fpga/Makefile's CLK_FREQ (default 12 MHz) and firmware/main.c's
+# Must match boards/pico2-ice/fpga/Makefile's CLK_FREQ (default 12 MHz) and boards/pico2-ice/firmware/main.c's
 # ice_fpga_init() request -- the clock the RP2350 actually exports to the
 # FPGA on real pico2-ice hardware, not iverilog sim's 50 MHz DE1-SoC default.
 FPGA_CLK_FREQ = 12_000_000
@@ -137,7 +137,7 @@ class TPUError(RuntimeError):
 
 class MmioLink:
     """Duck-typed drop-in for serial.Serial that reaches the DE1-SoC's
-    hps_bridge (rtl/hps_bridge.sv) over the Cyclone V lightweight HPS->FPGA
+    hps_bridge (rtl/peripherals/hps_bridge.sv) over the Cyclone V lightweight HPS->FPGA
     bridge via /dev/mem. It exposes the small slice of the pyserial API the
     TPU class uses (write/read/reset_input_buffer/close/baudrate) so nothing
     else in this driver changes -- only the transport does.
@@ -298,7 +298,7 @@ class TPU:
     """One systolic-array TPU core, reachable over a UART link.
 
     rows/cols/m_tile must match the ARRAY_ROWS/NUM_COLS/M_TILE the bitstream
-    was built with (fpga/Makefile) -- the wire protocol's payload sizes are
+    was built with (boards/pico2-ice/fpga/Makefile) -- the wire protocol's payload sizes are
     synthesis-time constants on the FPGA side, so a shape mismatch shows up
     as STATUS_ERR or a UART timeout, not a wrong answer.
     """
@@ -310,7 +310,7 @@ class TPU:
         self.cols = cols            # NUM_COLS:   N-tile width
         self.m_tile = rows if m_tile is None else m_tile  # M rows per RUN
         # PSUM_WIDTH: bias and result elements are psum_bytes LE each on the
-        # wire. Must match the bitstream's PSUM_WIDTH (fpga/ice40/Makefile);
+        # wire. Must match the bitstream's PSUM_WIDTH (boards/pico2-ice/fpga/Makefile);
         # a mismatch is a frame-length error, not a wrong answer.
         if psum_width not in _PSUM_DTYPE:
             raise ValueError(f"psum_width must be one of "
@@ -338,7 +338,7 @@ class TPU:
         # cmd byte -> [call count, wire bytes tx (incl. CMD/LEN header), wire bytes rx]
         # Lets a caller measure exactly how many bytes crossed the wire per command
         # type, to separate UART transmission time from actual RTL execution time
-        # (see mnist/infer.py's --timing-breakdown and docs/performance.md §1).
+        # (see software/mnist/infer.py's --timing-breakdown and docs/performance.md §1).
         self.stats = {}
         # FPGA-side work done on the offload path, invisible to self.stats'
         # wire counts (the tile frames run RP2350->FPGA, not host->board);
@@ -348,7 +348,7 @@ class TPU:
         self.offload = False
         if probe:
             self._resync_and_probe_shape()
-            # Firmware matmul offload (FW_MATMUL, firmware/tpu_tile.c) only
+            # Firmware matmul offload (FW_MATMUL, boards/pico2-ice/firmware/tpu_tile.c) only
             # exists behind the SPI bridge; older firmware answers the probe
             # with the FPGA's STATUS_ERR for the unknown CMD.
             if offload and link == "spi":
@@ -397,7 +397,7 @@ class TPU:
                 f"cols={self.cols}/m_tile={self.m_tile}/"
                 f"psum_width={self.psum_width} expects {self.result_bytes}. "
                 f"Pass --rows/--cols/--m-tile/--psum-width matching the "
-                f"fpga/Makefile ARRAY_ROWS/NUM_COLS/M_TILE/PSUM_WIDTH the "
+                f"boards/pico2-ice/fpga/Makefile ARRAY_ROWS/NUM_COLS/M_TILE/PSUM_WIDTH the "
                 f"bitstream was built with."
             )
 
@@ -486,8 +486,8 @@ class TPU:
         LOAD_*/RESET just latch a register file and ACK, budgeted at a
         conservative 2 cycles since that path isn't cycle-counted in the docs
         the way RUN is. clk_freq defaults to the 12 MHz this repo's firmware
-        exports to the FPGA (firmware/main.c's ice_fpga_init call, must match
-        fpga/Makefile's CLK_FREQ)."""
+        exports to the FPGA (boards/pico2-ice/firmware/main.c's ice_fpga_init call, must match
+        boards/pico2-ice/fpga/Makefile's CLK_FREQ)."""
         run_like = (CMD_RUN, CMD_RUN_TILE)  # RUN_TILE unpacks in the same
         # dispatch cycle RUN's flags do, then runs the identical pipeline
         run_calls = sum(self.stats.get(cmd, (0, 0, 0))[0] for cmd in run_like)
@@ -546,7 +546,7 @@ class TPU:
         """Executes one RUN pass; returns an (m_tile x cols) int16 matrix,
         or None.
 
-        first/last drive the accumulator's K-dim tiling (rtl/accumulator.sv):
+        first/last drive the accumulator's K-dim tiling (rtl/core/accumulator.sv):
         first=True overwrites its persistent running sum with this pass's
         result (start of a new K-reduction); first=False adds to it
         (continuing one). last=True forwards the now-final sum through
@@ -627,7 +627,7 @@ class TPU:
         the answer is exactly the un-padded matmul's).
 
         Tiles the K dimension into rows-deep weight-reload passes
-        accumulated in hardware (rtl/accumulator.sv's persistent PSUM), and
+        accumulated in hardware (rtl/core/accumulator.sv's persistent PSUM), and
         the M/N dimensions into (m_tile x cols) blocks run one at a time.
         Each (M,N) block's whole K-run goes over the wire as CMD_STREAM_RUN
         frames (stream_run()) of up to self.max_stream_tiles tiles each --
@@ -706,7 +706,7 @@ class TPU:
         return out[:m, :n]
 
     def _matmul_offload(self, a, w, bias, m, k, n):
-        """FW_MATMUL fast path (firmware/tpu_tile.c): ship the whole
+        """FW_MATMUL fast path (boards/pico2-ice/firmware/tpu_tile.c): ship the whole
         unpadded W/bias/A in one bulk CDC write; the RP2350 runs exactly
         matmul_tiled()'s LOAD_BIAS + chained-STREAM_RUN loop against the
         FPGA over SPI (zero-padding included) and returns the full de-tiled
@@ -736,7 +736,7 @@ class TPU:
 
 
 # -- golden self-test -----------------------------------------------------
-# Exact vectors from tests/tpu_sequencer_tb.sv "Test 1": W=[[4,5],[2,3]],
+# Exact vectors from tests/sv/tpu_sequencer_tb.sv "Test 1": W=[[4,5],[2,3]],
 # A=[[1,2],[3,4]], bias=[100,200] -> ReLU(A@W + bias) = [[108,211],[120,227]].
 # Already verified bit-for-bit in simulation; running it against real
 # hardware is a datapath smoke test, not a numerics test.

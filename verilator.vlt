@@ -5,23 +5,23 @@
 // tpu_core deliberately leaves some submodule status outputs unconnected
 // (e.g. weight_fifo bank flags, sequencer busy, accumulator any_fifo_full) --
 // the empty named connection is the documentation that this is intentional.
-lint_off -rule PINCONNECTEMPTY -file "*rtl/tpu_core.sv"
+lint_off -rule PINCONNECTEMPTY -file "*rtl/core/tpu_core.sv"
 
 // tpu_top's host-PHY pins are config-dependent by design (USE_SPI selects
 // UART or SPI); the deselected PHY's input pins are intentionally unused.
-lint_off -rule UNUSEDSIGNAL -file "*rtl/tpu_top.sv" -match "*'spi_*"
-lint_off -rule UNUSEDSIGNAL -file "*rtl/tpu_top.sv" -match "*'rx_pin'*"
+lint_off -rule UNUSEDSIGNAL -file "*boards/pico2-ice/top/tpu_top.sv" -match "*'spi_*"
+lint_off -rule UNUSEDSIGNAL -file "*boards/pico2-ice/top/tpu_top.sv" -match "*'rx_pin'*"
 
 // spi_slave deliberately uses csn BOTH as an async clear (SCK-domain bit
 // counter: a torn byte must not leave alignment off for the next burst,
 // and SCK stops ticking when CS deasserts, so a synchronous clear in that
 // domain can't work) AND 2FF-synchronized into clk for the TX engine.
-lint_off -rule SYNCASYNCNET -file "*rtl/tpu_top.sv" -match "*'spi_csn'*"
+lint_off -rule SYNCASYNCNET -file "*boards/pico2-ice/top/tpu_top.sv" -match "*'spi_csn'*"
 
 // pe_pair deliberately leaves the SB_MAC16 carry/cascade outputs
 // (CO/ACCUMCO/SIGNEXTOUT) unconnected -- the two halves run independent
 // 16-bit adds; the empty named connection documents that.
-lint_off -rule PINCONNECTEMPTY -file "*rtl/pe_pair.sv"
+lint_off -rule PINCONNECTEMPTY -file "*boards/pico2-ice/top/pe_pair.sv"
 
 // yosys's SB_MAC16 model (extracted verbatim from ice40/cells_sim.v for
 // pe_pair.sv) is compiled as-is for simulation fidelity; it is upstream
@@ -34,8 +34,8 @@ lint_off -file "*/sb_mac16_sim.v"
 // with them truncates index bits by construction. All such counters are
 // FSM-bounded before use (audited 2026-07-12); per-site casts would have to
 // be re-derived at every array shape for zero behavioral difference.
-lint_off -rule WIDTHTRUNC  -file "*rtl/tpu_sequencer.sv"
-lint_off -rule WIDTHEXPAND -file "*rtl/tpu_sequencer.sv"
+lint_off -rule WIDTHTRUNC  -file "*rtl/core/tpu_sequencer.sv"
+lint_off -rule WIDTHEXPAND -file "*rtl/core/tpu_sequencer.sv"
 
 // tpu_sequencer imports tpu_pkg::* at $unit scope. Verilator warns this "may
 // pollute the global namespace", but the $unit-scope form is the only package
@@ -43,9 +43,9 @@ lint_off -rule WIDTHEXPAND -file "*rtl/tpu_sequencer.sv"
 // so it is deliberate and portable. tpu_pkg holds only wire-protocol opcode /
 // status constants -- no ambiguous names -- and the sequencer is the sole
 // importer, so there is no actual pollution to worry about.
-lint_off -rule IMPORTSTAR -file "*rtl/tpu_sequencer.sv"
+lint_off -rule IMPORTSTAR -file "*rtl/core/tpu_sequencer.sv"
 
 // hps_bridge's Avalon registers are byte-wide within a 32-bit word, so the
 // upper 24 bits of avs_writedata (the TXDATA register) are intentionally
 // unused -- only writedata[7:0] carries a host->FPGA byte.
-lint_off -rule UNUSEDSIGNAL -file "*rtl/hps_bridge.sv" -match "*avs_writedata*"
+lint_off -rule UNUSEDSIGNAL -file "*rtl/peripherals/hps_bridge.sv" -match "*avs_writedata*"

@@ -27,7 +27,7 @@ Working on the code:
 
 | File | What's in it |
 |---|---|
-| [`architecture.md`](architecture.md) | The whole system: the four host paths, the datapath module by module, the sequencer FSM, the parameter model (`ARRAY_ROWS`/`NUM_COLS`/`M_TILE`/`PSUM_WIDTH`), K-dim tiling, numerics, the RTL that exists but isn't wired up, and the software stack (`tpu_host.py`, firmware, `mnist/`, `llm/`) |
+| [`architecture.md`](architecture.md) | The whole system: the four host paths, the datapath module by module, the sequencer FSM, the parameter model (`ARRAY_ROWS`/`NUM_COLS`/`M_TILE`/`PSUM_WIDTH`), K-dim tiling, numerics, the RTL that exists but isn't wired up, and the software stack (`tpu_host.py`, firmware, `software/mnist/`, `software/llm/`) |
 | [`protocol.md`](protocol.md) | The host wire protocol as shipped: every command, the tiling flags, status codes, SPI vs. UART PHY, and the firmware-local `FW_*` commands |
 | [`pico2-ice.md`](pico2-ice.md) | iCE40UP5K target reference: build knobs, flash order, the five hard-won gotchas, the bisect ladder |
 | [`de1soc.md`](de1soc.md) | Cyclone V target: what's implemented, what's scaffolded, the cloud Quartus build plan |
@@ -46,5 +46,5 @@ Working on the code:
   conclusions live in `performance.md`'s history section, clearly dated —
   not as present-tense claims elsewhere.
 - **The source is authoritative for protocol details.**
-  `rtl/tpu_sequencer.sv`'s header comment is the normative command table;
+  `rtl/core/tpu_sequencer.sv`'s header comment is the normative command table;
   [`protocol.md`](protocol.md) explains it but does not replace it.

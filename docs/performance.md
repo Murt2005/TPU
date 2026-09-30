@@ -22,7 +22,7 @@ bit-identical to the golden model.
 **4×4/M_TILE=4 is slower on a single image and that is expected** — three of
 four streamed activation rows are zero padding. Its batched cost is better
 (30.6 ms per 2 rows vs. 44.6 at M_TILE=2, from the halved weight
-re-streaming), projecting to ~17 ms/image once `mnist/infer.py` batches
+re-streaming), projecting to ~17 ms/image once `software/mnist/infer.py` batches
 images. It is the right shape *after* batching lands, not before.
 
 ### Budget breakdown
@@ -52,16 +52,16 @@ synthesizing `pe.sv` standalone both ways). That ~7× is the single biggest
 lever in the whole design, from one synthesis flag with no RTL change:
 
 ```bash
-yosys -p "read_verilog -sv rtl/pe.sv; synth_ice40 -top pe -json /dev/null" \
+yosys -p "read_verilog -sv rtl/core/pe.sv; synth_ice40 -top pe -json /dev/null" \
     2>&1 | grep -E "SB_LUT4|SB_DFF|SB_MAC16"
-yosys -p "read_verilog -sv rtl/pe.sv; synth_ice40 -top pe -dsp -json /dev/null" \
+yosys -p "read_verilog -sv rtl/core/pe.sv; synth_ice40 -top pe -dsp -json /dev/null" \
     2>&1 | grep -E "SB_LUT4|SB_DFF|SB_MAC16"
 ```
 
 Reproduce a full-design utilisation report:
 
 ```bash
-cd fpga/ice40 && make clean && make util
+cd boards/pico2-ice/fpga/ && make clean && make util
 ```
 
 ### Breaking the DSP ceiling
@@ -70,7 +70,7 @@ The array size was capped twice, and the cap was wrong both times:
 
 1. *"~20 PEs by mixing DSP and LUT PEs"* — **not reachable.** yosys `-dsp`
    maps *every* `pe` multiply to `SB_MAC16` with no per-instance opt-out.
-2. *"8 PEs, all DSP-backed"* — **retired by `rtl/pe_pair.sv`**, which
+2. *"8 PEs, all DSP-backed"* — **retired by `boards/pico2-ice/top/pe_pair.sv`**, which
    hand-instantiates `SB_MAC16` in dual-8×8 signed mode (`MODE_8x8=1`,
    `A_SIGNED=B_SIGNED=1`, `{TOP,BOT}ADDSUB_LOWERINPUT=1`, `UPPERINPUT=1`,
    `OUTPUT_SELECT=1`). Two independent 8×8 multiplier + 16-bit ADDSUB +
@@ -83,7 +83,7 @@ psum leaves on `psum_out[r]` and re-enters as `psum_in[r+1]` → the D input,
 which *is* the inter-PE pipeline register. Bit-exactness comes from input
 gating (act→0 when invalid so the adder passes C/D through; C/D→0 in the
 act-valid/psum-invalid case; both→0 during `loading_phase` for the
-synchronous clear), verified cycle-accurate in `tests/pe_pair_tb.sv` against
+synchronous clear), verified cycle-accurate in `tests/sv/pe_pair_tb.sv` against
 yosys's own `SB_MAC16` model.
 
 Of the 8-PE shapes, **2×4 beats 4×2** for this workload: total activation
@@ -168,7 +168,7 @@ Kept deliberately, because the reasoning trail matters:
 ## 4. Hardware vs. a laptop
 
 Same model, same sampled images, three execution paths
-(`python3 mnist/infer.py --port ... --compare --test-n 20`):
+(`python3 software/mnist/infer.py --port ... --compare --test-n 20`):
 
 | Path | Accuracy | Latency |
 |---|---|---|
@@ -182,7 +182,7 @@ where the arithmetic physically happens, and it is not the array being slow.
 
 | | pico2-ice (iCE40UP5K + RP2350B) | Apple M2 Pro (MBP 14", 2023) |
 |---|---|---|
-| Role here | Runs the TPU datapath (`rtl/*.sv` → `fpga/ice40/tpu_top.bin`) + bridge firmware | Runs the host driver, and here a numpy re-implementation of the same math |
+| Role here | Runs the TPU datapath (`rtl/` + `boards/pico2-ice/top/` → `boards/pico2-ice/fpga/tpu_top.bin`) + bridge firmware | Runs the host driver, and here a numpy re-implementation of the same math |
 | Process | 40nm (both chips) | TSMC N5P (5nm-class) |
 | Compute used | 16 PEs carved from 5,280 LUT4s; the RP2350's cores only bridge | 1 CPU core of 12; GPU and Neural Engine idle |
 | Scale | ~5,280 LUTs | ~40 billion transistors |

@@ -21,6 +21,10 @@ mkdir -p "$LOG_DIR"
 # The test list comes from the Makefile, which derives it from tests/*_tb.sv,
 # so there is no second list here to fall out of step.
 read -r -a ALL_TESTS <<< "$(make -s print-tests)"
+if [ ${#ALL_TESTS[@]} -eq 0 ]; then
+    echo "run_tests.sh: 'make print-tests' returned no tests -- check TB_DIR in the Makefile" >&2
+    exit 1
+fi
 TESTS=("${@:-${ALL_TESTS[@]}}")
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BOLD='\033[1m'; NC='\033[0m'

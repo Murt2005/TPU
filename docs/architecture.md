@@ -17,7 +17,7 @@ layer sequencing, requantization, softmax, LayerNorm — is software.
 
 ```
  ┌──────────── host (laptop / HPS Linux) ────────────┐
- │ mnist/infer.py   llm/infer.py   tests/hw_regression│
+ │ software/mnist/infer.py   software/llm/infer.py   tests/hw_regression│
  │            └────────┬─────────┘                    │
  │               tpu_host.py  TPU.matmul_tiled()      │  pads + tiles any M×K×N
  │     link: uart │ spi │ hps (MmioLink) │ sim (SimLink)
@@ -77,10 +77,14 @@ target-specific is in a top level or a PHY:
 
 | Top | Target | Host PHY |
 |---|---|---|
-| `rtl/tpu_top.sv` | pico2-ice (iCE40UP5K) | `uart_rx`/`uart_tx`, or `spi_slave` when `USE_SPI=1` |
-| `rtl/tpu_top_hps.sv` | DE1-SoC (Cyclone V) | `hps_bridge` (Avalon-MM slave on `h2f_lw`) |
+| `boards/pico2-ice/top/tpu_top.sv` | pico2-ice (iCE40UP5K) | `uart_rx`/`uart_tx`, or `spi_slave` when `USE_SPI=1` |
+| `boards/de1soc/top/tpu_top_hps.sv` | DE1-SoC (Cyclone V) | `hps_bridge` (Avalon-MM slave on `h2f_lw`) |
 
-Adding a third target means writing a top level and a PHY, not touching the
+The repo layout follows the same line: `rtl/core/` and `rtl/peripherals/` are
+shared by every board, and everything specific to one board — its top level,
+pins, build flow, firmware — lives under `boards/<board>/`. Adding a third
+target means a new `boards/` directory with a top level (and a PHY in
+`rtl/peripherals/` if none of the existing ones fits), not touching the
 datapath.
 
 **Resets.** Both tops hold an internal power-on reset for 256 cycles after
@@ -252,7 +256,7 @@ is hardcoded to 2×2.
 | `NUM_COLS` (`C`) | N-tile width — output columns per pass | — |
 | `M_TILE` (`M`) | Activation rows streamed per pass (UB depth; accumulator rows per pass) | — |
 | `PSUM_WIDTH` | Width of the psum/accumulate/bias/result path, and the wire bytes per bias/result element (`PSUM_BYTES = PSUM_WIDTH/8`) | multiple of 8; `PSUM_BYTES*M*C ≤ 255`; 16 if `USE_MAC16_PAIR=1` |
-| `FIFO_DEPTH` | Depth of the weight and accumulator FIFOs | power of 2, ≥ `max(R, M)`. Default 4, and **not** a `fpga/ice40/Makefile` knob — larger shapes need it raised |
+| `FIFO_DEPTH` | Depth of the weight and accumulator FIFOs | power of 2, ≥ `max(R, M)`. Default 4, and **not** a `boards/pico2-ice/fpga/Makefile` knob — larger shapes need it raised |
 | `USE_MAC16_PAIR` | `pe_pair` instead of `pe` | iCE40 only |
 | `USE_SPI` (`tpu_top` only) | SPI PHY instead of UART | needs SPI firmware |
 | `CLK_FREQ`, `BAUD_RATE` (`tpu_top` only) | UART divider, fixed at synthesis | must match firmware clock and host baud |
@@ -266,11 +270,11 @@ One pass computes `Y = act(A @ W + bias)` for an `M × R` activation block
 against an `R × C` weight block. A matmul of any shape is split into these
 blocks by the host (or by the firmware), with zero-padding on all three axes.
 
-The shape is a **build knob, not a redesign** — set in `fpga/ice40/Makefile`
+The shape is a **build knob, not a redesign** — set in `boards/pico2-ice/fpga/Makefile`
 and passed to yosys with `chparam`. The host must be told the same shape
 (`tpu_host.py --rows/--cols/--m-tile/--psum-width`); a mismatch gives
 wrong-length frames, not a clean error. **It must agree in four places:**
-`fpga/ice40/Makefile` → the bitstream → `tpu_host.py` flags → `make hw-test
+`boards/pico2-ice/fpga/Makefile` → the bitstream → `tpu_host.py` flags → `make hw-test
 ARRAY_ROWS=/NUM_COLS=/M_TILE=`.
 
 ## 6. K-dimension tiling
@@ -299,7 +303,7 @@ last, so a K-run can span several frames.
 - **The PSUM does not saturate — it wraps.** This is true regardless of how
   many K-tiles feed it. At the default `PSUM_WIDTH=16` it is the constraint
   that sizes the MNIST model ([`mnist.md`](mnist.md) §2). `PSUM_WIDTH=32`
-  raises it (the `llm/` transformer requires it), but no bitstream has been
+  raises it (the `software/llm/` transformer requires it), but no bitstream has been
   built at 32; it is covered in simulation only.
 - **Bias** is a full `PSUM_WIDTH` value per column, added once per output
   block, not per K-tile.
@@ -361,7 +365,7 @@ These are the natural extension points; [`utilization.md`](utilization.md)
 - Legacy one-command API (`load_weights`, `run`, …), `run_tile`,
   `stream_run`, wire-byte accounting, and a CLI with `--selftest`.
 
-### 10.2 `firmware/` — the RP2350
+### 10.2 `boards/pico2-ice/firmware/` — the RP2350
 
 The FPGA is a peripheral of the microcontroller. `main.c` brings up USB (two
 CDC ports + DFU), exports the FPGA clock, loads the bitstream, shows the real
@@ -375,26 +379,27 @@ without it the FPGA has no clock.
 
 ### 10.3 Workloads
 
-- **`mnist/`** — a 144→64→10 int8 MLP designed around the hardware's
+- **`software/mnist/`** — a 144→64→10 int8 MLP designed around the hardware's
   numerics. `infer.py` runs it layer by layer through `matmul_tiled`,
   requantizing on the host between layers; `draw_demo.py` is the interactive
   demo. See [`mnist.md`](mnist.md).
-- **`llm/`** — TinyStories-1M (GPT-Neo) with every linear layer on the
+- **`software/llm/`** — TinyStories-1M (GPT-Neo) with every linear layer on the
   array: q/k/v/out, both MLP projections, and the lm_head. Embedding,
   LayerNorm, softmax, GELU and residuals stay on the host. Needs
   `PSUM_WIDTH=32` and `act_bypass`, so today it runs against the Verilator
-  model (`--link sim`) only. See `llm/README.md`.
+  model (`--link sim`) only. See `software/llm/README.md`.
 
 ## 11. Build flow
 
-**iCE40** (`fpga/ice40/Makefile`): yosys reads `rtl/*.sv`, `chparam`s the
+**iCE40** (`boards/pico2-ice/fpga/Makefile`): yosys reads `rtl/core/`,
+`rtl/peripherals/` and `boards/pico2-ice/top/`, `chparam`s the
 knobs from §5 onto `tpu_top`, and runs `synth_ice40` with `-dsp` (unless
 pairing) and `-abc9 -dff`. Then nextpnr-ice40 (`--up5k --package sg48`,
 `tpu_top.pcf`), icepack, and `dfu-util` via the RP2350. The UB maps to
 `SB_RAM40_4K`; PE multiplies map to `SB_MAC16`, either inferred or
 hand-instantiated.
 
-**Cyclone V** (`fpga/de1soc/`): `tpu_top_hps` becomes a Platform Designer
+**Cyclone V** (`boards/de1soc/fpga/`): `tpu_top_hps` becomes a Platform Designer
 component on the GHRD's `h2f_lw` bridge, built with `USE_MAC16_PAIR=0` so
 Quartus infers its own DSPs from `pe.sv`. Scaffolded, not yet built — see
 [`de1soc.md`](de1soc.md).

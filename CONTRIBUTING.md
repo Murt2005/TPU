@@ -18,7 +18,7 @@ You need an open-source RTL toolchain (see the Prerequisites section of the
 - **Python 3.11+** with `pip install -r requirements.txt` — the host driver
 
 The FPGA build additionally needs board-specific tools (`nextpnr-ice40` +
-`icestorm` + `dfu-util` for the iCE40 target; see `fpga/`).
+`icestorm` + `dfu-util` for the pico2-ice target; see `boards/pico2-ice/fpga/`).
 
 ## Running the checks
 
@@ -43,7 +43,7 @@ knobs must match the bitstream).
 
 1. Write `tests/<name>_tb.sv`. Print `PASSED` on success; use `$error`/`$fatal`
    (or a `[FAIL]` string) on failure — `run_tests.sh` classifies by those.
-2. Add one `DEPS_<name>` line to the top-level `Makefile` listing the RTL it
+2. Add one `DEPS_<name>` line to `mk/sim.mk` listing the RTL it
    needs. That's all — the test list is built from the `tests/*_tb.sv` files,
    and a bench without a `DEPS_` line stops the build with an error naming it.
 
@@ -57,7 +57,7 @@ The RTL follows a consistent house style — please match it:
   active-low `reset_n`); every sequential block is `if (reset) ... else ...`.
 - Tunables are `parameter int`; derived values are `localparam`.
 - Shared wire-protocol constants (command opcodes, flag bits, status bytes) live in
-  `rtl/tpu_pkg.sv` — reuse them rather than re-declaring literals.
+  `rtl/core/tpu_pkg.sv` — reuse them rather than re-declaring literals.
 - Each module opens with a header comment stating its role, contract, and
   latency. Please keep new modules consistent.
 

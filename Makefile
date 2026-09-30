@@ -1,15 +1,22 @@
 ## ============================================================================
-##  TPU RTL Test Automation
+##  TPU — simulation, lint, and hardware-test automation
 ##
 ##  Usage:
 ##    make              Build + run every testbench, print a pass/fail summary
 ##    make test         Same as above
-##    make test-fifo    Build + run a single testbench (see TESTS list below)
+##    make test-fifo    Build + run a single testbench (tests/sv/fifo_tb.sv)
 ##    make build-fifo   Compile a single testbench without running it
 ##    make wave-fifo    Run a testbench and open its VCD in gtkwave (if dumped)
+##    make lint         Verilator lint, 4 configurations
+##    make verilate-test  Full-chip Verilator bench, 12 shape/PHY/width combos
+##    make sim-bridge   Build the Verilator model as a --link sim transport
 ##    make list         Show all available test targets
 ##    make clean        Remove all simulation build artifacts
-##    make hw-test PORT=/dev/cu.usbmodemXXXX   Run tests/hw_regression.py against real hardware
+##    make hw-test PORT=/dev/cu.usbmodemXXXX   Run tests/hw/hw_regression.py on a board
+##
+##  The rules live in mk/: sim.mk (testbenches), verilator.mk (lint, full-chip
+##  sim, sim bridge), hw.mk (hardware regression). FPGA builds are per board:
+##  boards/pico2-ice/fpga/, boards/de1soc/fpga/.
 ## ============================================================================
 
 IVERILOG  := iverilog
@@ -18,266 +25,53 @@ GTKWAVE   := gtkwave
 VERILATOR := verilator
 IFLAGS    := -g2012 -Wall
 
-RTL_DIR  := rtl
-TEST_DIR := tests
-SIM_DIR  := sim
-LOG_DIR  := $(SIM_DIR)/logs
+CORE_DIR   := rtl/core
+PERIPH_DIR := rtl/peripherals
+PICO_DIR   := boards/pico2-ice/top
+HPS_DIR    := boards/de1soc/top
+TEST_DIR   := tests
+TB_DIR     := $(TEST_DIR)/sv
+SIM_DIR    := sim
+LOG_DIR    := $(SIM_DIR)/logs
 
-# ----------------------------------------------------------------------------
-# RTL dependency graph
-#
-# Reflects what each module instantiates internally:
-#   mmu.sv              -> pe.sv            (instantiates 4x pe)
-#   accumulator.sv       -> fifo.sv          (instantiates fifo)
-#   weight_fifo.sv       -> fifo.sv          (instantiates fifo)
-#   tpu_sequencer.sv     -> no RTL deps      (datapath wired externally in tb)
-#   tpu_top.sv           -> all datapath modules
-#   pe.sv, fifo.sv, systolic_data_setup.sv  -> no internal deps
-#   bias.sv, activation.sv                  -> no internal deps
-#   uart_rx.sv, uart_tx.sv                  -> no internal deps
-#
-# Update these lists whenever an RTL file's internal instantiations change.
-# ----------------------------------------------------------------------------
-RTL_fifo                 := $(RTL_DIR)/fifo.sv
-RTL_pe                   := $(RTL_DIR)/pe.sv
 # pe_pair hand-instantiates SB_MAC16, so simulations of it compile yosys's
 # own SB_MAC16 model — the same model synthesis maps to, not a stand-in.
 # The module is extracted from the installed cells_sim.v at build time
 # (single source of truth) because Verilator's -sv mode rejects unrelated
 # constructs elsewhere in that file (SB_RAM40_4K* port-default syntax).
-CELLS_SIM                := $(shell yosys-config --datdir)/ice40/cells_sim.v
-SB_MAC16_SIM             := $(SIM_DIR)/sb_mac16_sim.v
-RTL_pe_pair              := $(RTL_DIR)/pe_pair.sv $(SB_MAC16_SIM)
+CELLS_SIM    := $(shell yosys-config --datdir)/ice40/cells_sim.v
+SB_MAC16_SIM := $(SIM_DIR)/sb_mac16_sim.v
 
 $(SB_MAC16_SIM): $(CELLS_SIM) | $(SIM_DIR)
 	echo '`timescale 1ns / 1ps' > $@
 	sed -n '/^module SB_MAC16/,/^endmodule/p' $< >> $@
 	@grep -q endmodule $@ || { echo "SB_MAC16 extraction from $< failed"; rm -f $@; exit 1; }
-RTL_mmu                  := $(RTL_DIR)/mmu.sv $(RTL_pe)
-RTL_accumulator          := $(RTL_DIR)/accumulator.sv $(RTL_fifo)
-RTL_systolic_data_setup  := $(RTL_DIR)/systolic_data_setup.sv
-RTL_weight_fifo          := $(RTL_DIR)/weight_fifo.sv $(RTL_fifo)
-RTL_bias                 := $(RTL_DIR)/bias.sv
-RTL_activation           := $(RTL_DIR)/activation.sv
-RTL_unified_buffer       := $(RTL_DIR)/unified_buffer.sv
-RTL_uart_rx              := $(RTL_DIR)/uart_rx.sv
-RTL_uart_tx              := $(RTL_DIR)/uart_tx.sv
-RTL_spi_slave            := $(RTL_DIR)/spi_slave.sv $(RTL_fifo)
-RTL_hps_bridge           := $(RTL_DIR)/hps_bridge.sv
-# tpu_pkg.sv (shared opcode/status/width constants) must precede any file that
-# imports it, so it leads every dep list that pulls in tpu_sequencer.
-RTL_pkg                  := $(RTL_DIR)/tpu_pkg.sv
-RTL_tpu_sequencer        := $(RTL_pkg) $(RTL_DIR)/tpu_sequencer.sv
 
-# Full datapath (everything tpu_sequencer_tb needs to instantiate)
-RTL_tpu_datapath         := $(RTL_unified_buffer) $(RTL_weight_fifo) \
-                            $(RTL_systolic_data_setup) $(RTL_mmu) \
-                            $(RTL_accumulator) $(RTL_bias) $(RTL_activation)
-
-# ----------------------------------------------------------------------------
-# Testbench -> RTL files required to build it
-#
-# Each test name maps to tests/<name>_tb.sv. Registering a new testbench is
-# this one line (+ the _tb.sv file itself).
-# ----------------------------------------------------------------------------
-DEPS_fifo                 := $(RTL_fifo)
-DEPS_pe                   := $(RTL_pe)
-DEPS_pe_pair              := $(RTL_pe_pair) $(RTL_pe)
-DEPS_mmu                  := $(RTL_mmu)
-DEPS_accumulator          := $(RTL_accumulator)
-DEPS_systolic_data_setup  := $(RTL_systolic_data_setup)
-DEPS_weight_fifo          := $(RTL_weight_fifo)
-DEPS_bias                 := $(RTL_bias)
-DEPS_activation           := $(RTL_activation)
-DEPS_mmu_accum            := $(RTL_mmu) $(RTL_accumulator)
-DEPS_accum_bias           := $(RTL_accumulator) $(RTL_bias)
-DEPS_bias_activation      := $(RTL_accumulator) $(RTL_bias) $(RTL_activation)
-DEPS_weight_fifo_mmu      := $(RTL_weight_fifo) $(RTL_mmu)
-DEPS_unified_buffer       := $(RTL_unified_buffer)
-DEPS_tpu_core             := $(RTL_tpu_datapath)
-DEPS_uart_rx              := $(RTL_uart_rx)
-DEPS_uart_tx              := $(RTL_uart_tx)
-DEPS_spi_slave            := $(RTL_spi_slave)
-DEPS_hps_bridge           := $(RTL_hps_bridge)
-DEPS_tpu_sequencer        := $(RTL_tpu_sequencer) $(RTL_tpu_datapath)
-DEPS_tpu_sequencer_4x2    := $(RTL_tpu_sequencer) $(RTL_tpu_datapath)
-DEPS_tpu_sequencer_2x4    := $(RTL_tpu_sequencer) $(RTL_tpu_datapath)
-# 4x4 instantiates mmu with USE_MAC16_PAIR=1 -> needs pe_pair + SB_MAC16 model
-DEPS_tpu_sequencer_4x4    := $(RTL_tpu_sequencer) $(RTL_tpu_datapath) $(RTL_pe_pair)
-
-# The test list is every tests/<name>_tb.sv on disk -- nothing to register by
-# hand. A testbench without a DEPS_<name> line above stops the build here,
-# instead of being silently skipped.
-TESTS := $(sort $(patsubst $(TEST_DIR)/%_tb.sv,%,$(wildcard $(TEST_DIR)/*_tb.sv)))
-MISSING_DEPS := $(strip $(foreach t,$(TESTS),$(if $(DEPS_$(t)),,$(t))))
-ifneq ($(MISSING_DEPS),)
-$(error Testbench(es) without a DEPS_<name> line in the Makefile: $(MISSING_DEPS))
-endif
-
-# de-duplicate dep lists (modules shared via multiple paths, e.g. tpu_core -> fifo.sv)
-dedup = $(if $1,$(firstword $1) $(call dedup,$(filter-out $(firstword $1),$1)))
-
-.PHONY: all test lint verilate-test sim-bridge list print-tests clean hw-test $(foreach t,$(TESTS),test-$(t) build-$(t) wave-$(t))
+# Whole-design file sets. tpu_pkg.sv leads: it must be read before the
+# sequencer that imports it.
+SHARED_RTL := $(CORE_DIR)/tpu_pkg.sv \
+              $(filter-out $(CORE_DIR)/tpu_pkg.sv,$(wildcard $(CORE_DIR)/*.sv)) \
+              $(wildcard $(PERIPH_DIR)/*.sv)
+PICO_RTL   := $(SB_MAC16_SIM) $(SHARED_RTL) $(wildcard $(PICO_DIR)/*.sv)
+HPS_RTL    := $(SHARED_RTL) $(wildcard $(HPS_DIR)/*.sv)
 
 all: test
 
 $(SIM_DIR) $(LOG_DIR):
 	@mkdir -p $@
 
-# ----------------------------------------------------------------------------
-# Per-test build + run rules: one pattern rule for every testbench
-# ----------------------------------------------------------------------------
-.SECONDEXPANSION:
-$(SIM_DIR)/%.vvp: $(TEST_DIR)/%_tb.sv $$(call dedup,$$(DEPS_$$*)) | $(SIM_DIR)
-	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_$*)) $<
-
-$(foreach t,$(TESTS),$(eval build-$(t): $(SIM_DIR)/$(t).vvp))
-
-# `make test-<name>` builds (if stale) and runs a single testbench, dumping
-# its VCD (if any) and console log into sim/
-define RUN_RULE
-test-$(1): $(SIM_DIR)/$(1).vvp | $(LOG_DIR)
-	@cd $(SIM_DIR) && $(VVP) $(1).vvp | tee logs/$(1).log
-
-wave-$(1): test-$(1)
-	@if [ -f $(SIM_DIR)/*.vcd ]; then $(GTKWAVE) $(SIM_DIR)/*.vcd & else echo "No VCD dump found for $(1)"; fi
-endef
-$(foreach t,$(TESTS),$(eval $(call RUN_RULE,$(t))))
-
-# ----------------------------------------------------------------------------
-# Aggregate target: run everything, print a single pass/fail summary
-# ----------------------------------------------------------------------------
-test: | $(LOG_DIR)
-	@./run_tests.sh
-
-# Static lint over the whole synthesizable RTL tree (no simulation).
-# Waivers live in verilator.vlt -- every entry there is an audited
-# don't-care with a comment saying why. The extracted SB_MAC16 model is on
-# the file list because pe_pair.sv instantiates it (whole-file waiver in
-# the .vlt: it's yosys's library, not ours to lint).
-lint: $(SB_MAC16_SIM)
-	$(VERILATOR) --lint-only -Wall --timing -sv verilator.vlt \
-		$(SB_MAC16_SIM) $(RTL_DIR)/*.sv --top-module tpu_top
-	$(VERILATOR) --lint-only -Wall --timing -sv verilator.vlt \
-		-GUSE_SPI=1 $(SB_MAC16_SIM) $(RTL_DIR)/*.sv --top-module tpu_top
-	$(VERILATOR) --lint-only -Wall --timing -sv verilator.vlt \
-		-GUSE_SPI=1 -GUSE_MAC16_PAIR=1 -GARRAY_ROWS=4 -GNUM_COLS=4 -GM_TILE=4 \
-		$(SB_MAC16_SIM) $(RTL_DIR)/*.sv --top-module tpu_top
-	$(VERILATOR) --lint-only -Wall --timing -sv verilator.vlt \
-		$(SB_MAC16_SIM) $(RTL_DIR)/*.sv --top-module tpu_top_hps
-	@echo "lint: clean (UART + SPI + 4x4 MAC16-pair + HPS configs)"
-
-# ----------------------------------------------------------------------------
-# Verilator C++ full-chip testbench (tests/verilator/tb_tpu_top.cpp): drives
-# tpu_top through its real host pins — UART at the hardware's 12 MHz/1 Mbaud
-# ratio at three array shapes (incl. one with all three axes distinct), plus
-# an SPI-PHY build (USE_SPI=1, spi_slave.sv) at the hardware 2x4 shape.
-# Each variant gets its own obj dir under sim/verilator/.
-# ----------------------------------------------------------------------------
-# ROWS_COLS_MTILE_PHY; phy "spipair" = SPI PHY + USE_MAC16_PAIR mmu (the
-# 4x4 hardware build: 16 PEs on 8 hand-instantiated SB_MAC16s); 4_4_4 is
-# the shipped shape, 4_4_2 kept as the M_TILE-axis variant. 8_8_8_uart is the
-# DE1-SoC scale-up shape (64 PEs, generic-fabric multiply) — sim-only proof
-# that the datapath parameterizes past the iCE40's 8-DSP ceiling.
-# A trailing 32 on the PHY field selects PSUM_WIDTH=32 (default 16): the wide
-# reduction path, whose bias/result elements are 4 wire bytes each. 8_8_4_uart32
-# is the shape a transformer-sized K needs -- M_TILE=4 keeps the result frame
-# at 128 bytes, inside the 1-byte LEN cap that 8x8/M_TILE=8 would blow at 256.
-# The `direct` PHY verilates tpu_core instead of tpu_top and injects bytes
-# straight at the sequencer's rx_data/rx_valid, skipping the bit-level PHY.
-# Same protocol, same golden checks, ~50x fewer simulated cycles per byte --
-# which is what makes transformer-sized workloads tractable in simulation.
-VERILATE_SHAPES := 2_2_2_uart 2_4_2_uart 4_2_3_uart 2_4_2_spi 4_4_2_spipair 4_4_4_spipair \
-                   8_8_8_uart 2_2_2_uart32 4_4_2_spi32 8_8_4_uart32 \
-                   2_2_2_direct 8_8_4_direct32
-
-# make sim-bridge: build the direct bench as a transport binary for
-# tpu_host.py --link sim. Shape knobs are independent of the test matrix
-# above so a model's K/N can pick the array it wants; the defaults are the
-# transformer shape (PSUM=32 for a reduction past int16, M_TILE=4 to keep
-# the result frame inside the 255-byte LEN cap).
-SIM_ROWS  ?= 8
-SIM_COLS  ?= 8
-SIM_MTILE ?= 4
-SIM_PSUM  ?= 32
-SIM_FD    ?= 8
-SIM_BRIDGE_DIR := $(SIM_DIR)/verilator/bridge
-SIM_BRIDGE     := $(SIM_BRIDGE_DIR)/tb_tpu_top
-
-sim-bridge: $(SB_MAC16_SIM) | $(SIM_DIR)
-	@mkdir -p $(SIM_BRIDGE_DIR)
-	@$(VERILATOR) --cc --exe --build -j 0 -Wall \
-		--Mdir $(SIM_BRIDGE_DIR) verilator.vlt \
-		--top-module tpu_core \
-		-GFIFO_DEPTH=$(SIM_FD) -GARRAY_ROWS=$(SIM_ROWS) -GNUM_COLS=$(SIM_COLS) \
-		-GM_TILE=$(SIM_MTILE) -GPSUM_WIDTH=$(SIM_PSUM) \
-		-CFLAGS "-std=c++17 -DTB_ROWS=$(SIM_ROWS) -DTB_COLS=$(SIM_COLS) \
-		         -DTB_MTILE=$(SIM_MTILE) -DTB_PSUM_WIDTH=$(SIM_PSUM) -DTB_DIRECT" \
-		$(SB_MAC16_SIM) $(RTL_DIR)/*.sv $(TEST_DIR)/verilator/tb_tpu_top.cpp \
-		-o tb_tpu_top > /dev/null
-	@echo "sim-bridge: $(SIM_BRIDGE) ($(SIM_ROWS)x$(SIM_COLS) M_TILE=$(SIM_MTILE) PSUM=$(SIM_PSUM))"
-	@echo "  use: python3 tpu_host.py --link sim --port $(SIM_BRIDGE) \
---rows $(SIM_ROWS) --cols $(SIM_COLS) --m-tile $(SIM_MTILE) --psum-width $(SIM_PSUM) --selftest"
-
-verilate-test: $(SB_MAC16_SIM) | $(SIM_DIR)
-	@set -e; for shape in $(VERILATE_SHAPES); do \
-		rows=$${shape%%_*}; rest=$${shape#*_}; \
-		cols=$${rest%%_*}; rest=$${rest#*_}; \
-		mt=$${rest%%_*}; phy=$${rest#*_}; \
-		psum=16; case "$$phy" in *32) psum=32; phy=$${phy%32};; esac; \
-		objdir=$(SIM_DIR)/verilator/$${rows}x$${cols}m$${mt}_$${phy}p$${psum}; \
-		mkdir -p $$objdir; \
-		phyflags=""; phycflags=""; \
-		topmod=tpu_top; clkflags="-GCLK_FREQ=12000000 -GBAUD_RATE=1000000"; \
-		if [ "$$phy" = "spi" ]; then \
-			phyflags="-GUSE_SPI=1"; phycflags="-DTB_SPI"; \
-		elif [ "$$phy" = "spipair" ]; then \
-			phyflags="-GUSE_SPI=1 -GUSE_MAC16_PAIR=1"; phycflags="-DTB_SPI"; \
-		elif [ "$$phy" = "direct" ]; then \
-			topmod=tpu_core; clkflags=""; phycflags="-DTB_DIRECT"; \
-		fi; \
-		fd=4; m=$$rows; [ $$mt -gt $$m ] && m=$$mt; \
-		while [ $$fd -lt $$m ]; do fd=$$((fd*2)); done; \
-		echo "=== verilate $${rows}x$${cols} M_TILE=$${mt} FIFO_DEPTH=$${fd} PSUM=$${psum} ($${phy}) ==="; \
-		$(VERILATOR) --cc --exe --build -j 0 -Wall \
-			--Mdir $$objdir verilator.vlt \
-			--top-module $$topmod \
-			$$clkflags -GFIFO_DEPTH=$$fd \
-			-GARRAY_ROWS=$$rows -GNUM_COLS=$$cols -GM_TILE=$$mt -GPSUM_WIDTH=$$psum $$phyflags \
-			-CFLAGS "-std=c++17 -DTB_ROWS=$$rows -DTB_COLS=$$cols -DTB_MTILE=$$mt -DTB_PSUM_WIDTH=$$psum $$phycflags" \
-			$(SB_MAC16_SIM) $(RTL_DIR)/*.sv $(TEST_DIR)/verilator/tb_tpu_top.cpp \
-			-o tb_tpu_top > /dev/null; \
-		$$objdir/tb_tpu_top; \
-	done
-	@echo "verilate-test: all shapes passed"
-
-print-tests:
-	@echo $(TESTS)
+include mk/sim.mk
+include mk/verilator.mk
+include mk/hw.mk
 
 list:
-	@echo "Available tests (tests/<name>_tb.sv):"
+	@echo "Available tests (tests/sv/<name>_tb.sv):"
 	@for t in $(TESTS); do echo "  make test-$$t"; done
 	@echo ""
-	@echo "Other targets: make test | make build-<name> | make wave-<name> | make clean"
+	@echo "Other targets: make test | make build-<name> | make wave-<name> | make lint |"
+	@echo "  make verilate-test | make sim-bridge | make hw-test PORT=... | make clean"
 
 clean:
 	rm -rf $(SIM_DIR)
 
-# ----------------------------------------------------------------------------
-# Real-hardware regression suite (pico2-ice) -- see tests/hw_regression.py
-# ----------------------------------------------------------------------------
-# ARRAY_ROWS/NUM_COLS/M_TILE must match the flashed bitstream's shape
-# (fpga/Makefile's knobs of the same names); defaults match both. LINK must
-# match the flashed PHY: uart, or spi (USE_SPI=1 gateware + TPU_LINK_SPI
-# firmware).
-ARRAY_ROWS ?= 2
-NUM_COLS   ?= 2
-M_TILE     ?= $(ARRAY_ROWS)
-LINK       ?= uart
-
-hw-test:
-	@if [ -z "$(PORT)" ]; then \
-		echo "Usage: make hw-test PORT=/dev/cu.usbmodemXXXX [ARRAY_ROWS=2 NUM_COLS=2 M_TILE=2 LINK=uart]"; exit 1; \
-	fi
-	python3 tests/hw_regression.py --port $(PORT) \
-		--rows $(ARRAY_ROWS) --cols $(NUM_COLS) --m-tile $(M_TILE) --link $(LINK)
+.PHONY: all list clean

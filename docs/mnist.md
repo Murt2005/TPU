@@ -11,23 +11,23 @@ classifier whose forward pass runs on actual silicon.
 - Hidden: 64 units.
 - Output: 10 class scores.
 - int8 weights and activations, int16 bias — matching the wire format in
-  `rtl/tpu_sequencer.sv`.
+  `rtl/core/tpu_sequencer.sv`.
 
 Both K values (144, 64) and both N values (64, 10) are even, so every layer
 tiles cleanly into 2×2 blocks with no padding. Larger shapes pad on the
 axes that don't divide.
 
-Trained and quantized by `mnist/train_mnist.py`, which writes
-`mnist/model/mnist_2x2_int8.npz` (~5 KB, committed — the demo works out of
-the box). Retraining downloads MNIST (~11 MB, cached in `mnist/data/`,
+Trained and quantized by `software/mnist/train_mnist.py`, which writes
+`software/mnist/model/mnist_2x2_int8.npz` (~5 KB, committed — the demo works out of
+the box). Retraining downloads MNIST (~11 MB, cached in `software/mnist/data/`,
 gitignored).
 
 ## 2. Why the model is this small
 
 **It is deliberately tiny, and the constraint is hardware, not accuracy.**
 
-`rtl/accumulator.sv`'s PSUM register is `PSUM_WIDTH=16` and **does not
-saturate — it silently wraps**, exactly like `tests/hw_regression.py`'s
+`rtl/core/accumulator.sv`'s PSUM register is `PSUM_WIDTH=16` and **does not
+saturate — it silently wraps**, exactly like `tests/hw/hw_regression.py`'s
 golden model. That holds regardless of K-dim tiling: the persistent
 `psum_reg` is 16 bits whether one `RUN` or seventy-two passes feed it.
 
@@ -49,7 +49,7 @@ These are why `train_mnist.py` doesn't look like a normal quantization
 script:
 
 **ReLU is applied on every layer**, including the output. When the model
-was trained, `rtl/activation.sv` had no bypass mode, so the network was
+was trained, `rtl/core/activation.sv` had no bypass mode, so the network was
 trained with ReLU on the output logits too — the loss landscape matches what
 the hardware actually produces (argmax over ReLU'd scores) rather than
 training a standard logits-then-softmax network and hoping ReLU doesn't
@@ -84,19 +84,19 @@ Any divergence is a bug, not rounding.
 
 ```bash
 # accuracy on real hardware, N random test images end-to-end
-python3 mnist/infer.py --port /dev/cu.usbmodemXXXX --test-n 20
+python3 software/mnist/infer.py --port /dev/cu.usbmodemXXXX --test-n 20
 
 # hardware vs. local numpy on identical images, side by side
-python3 mnist/infer.py --port /dev/cu.usbmodemXXXX --compare --test-n 20
+python3 software/mnist/infer.py --port /dev/cu.usbmodemXXXX --compare --test-n 20
 
 # no board at all — same pipeline, pure numpy
-python3 mnist/infer.py --offline --test-n 20
+python3 software/mnist/infer.py --offline --test-n 20
 
 # draw a digit with the mouse; the board's LED flips green → blue on completion
-python3 mnist/draw_demo.py --port /dev/cu.usbmodemXXXX
+python3 software/mnist/draw_demo.py --port /dev/cu.usbmodemXXXX
 
 # retrain + requantize (overwrites the committed model)
-python3 mnist/train_mnist.py
+python3 software/mnist/train_mnist.py
 ```
 
 Add `--rows/--cols/--m-tile` and `--link` to match the flashed bitstream.
@@ -105,14 +105,14 @@ Add `--rows/--cols/--m-tile` and `--link` to match the flashed bitstream.
 
 | File | What |
 |---|---|
-| `mnist/train_mnist.py` | Train + quantize; the header comment is the authoritative note on all the constraints above |
-| `mnist/infer.py` | Multi-layer driver; `HardwareBackend` (via `tpu_host.py`'s `matmul_tiled()`) and `OfflineBackend` (numpy), plus `--compare` and `--no-offload` |
-| `mnist/draw_demo.py` | Tkinter drawing demo; `--offline` runs boardless |
-| `mnist/model/mnist_2x2_int8.npz` | Committed pre-trained weights |
-| `mnist/data/` | Downloaded IDX files (gitignored) |
+| `software/mnist/train_mnist.py` | Train + quantize; the header comment is the authoritative note on all the constraints above |
+| `software/mnist/infer.py` | Multi-layer driver; `HardwareBackend` (via `tpu_host.py`'s `matmul_tiled()`) and `OfflineBackend` (numpy), plus `--compare` and `--no-offload` |
+| `software/mnist/draw_demo.py` | Tkinter drawing demo; `--offline` runs boardless |
+| `software/mnist/model/mnist_2x2_int8.npz` | Committed pre-trained weights |
+| `software/mnist/data/` | Downloaded IDX files (gitignored) |
 
 The LED flip in `draw_demo.py` goes over the **second, otherwise-idle**
-USB-CDC port, handled by `firmware/main.c`'s one-byte LED command listener —
+USB-CDC port, handled by `boards/pico2-ice/firmware/main.c`'s one-byte LED command listener —
 it does not disturb the TPU link.
 
 ## 7. Open work

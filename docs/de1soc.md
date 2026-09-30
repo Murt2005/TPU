@@ -32,15 +32,15 @@ of 2 ≥ `max(ARRAY_ROWS, M_TILE)` for anything past 4.
 
 | Piece | Status |
 |---|---|
-| `rtl/tpu_top_hps.sv`, `rtl/hps_bridge.sv` | Implemented, lint-clean, `make test-hps_bridge` passes |
-| `tpu_host.py --link hps` (`MmioLink`) | Implemented; `hw_regression.py` and `mnist/infer.py` don't expose `--link hps` yet |
+| `boards/de1soc/top/tpu_top_hps.sv`, `rtl/peripherals/hps_bridge.sv` | Implemented, lint-clean, `make test-hps_bridge` passes |
+| `tpu_host.py --link hps` (`MmioLink`) | Implemented; `hw_regression.py` and `software/mnist/infer.py` don't expose `--link hps` yet |
 | 8×8 scale-up shape | Sim-proven (`make verilate-test`, 64 PEs on generic-fabric multiply) — demonstrates the datapath parameterizes well past the iCE40's 8-DSP ceiling |
-| `fpga/de1soc/` Quartus project | Scaffolded: `Makefile`, `.sdc`, `.qsf` skeleton |
+| `boards/de1soc/fpga/` Quartus project | Scaffolded: `Makefile`, `.sdc`, `.qsf` skeleton |
 | Qsys/GHRD integration | Not done |
 | Cloud build infrastructure | Planned, not built (§4) |
 | On-board bring-up | Not started |
 
-## 3. Build and deploy (from `fpga/de1soc/README.md`)
+## 3. Build and deploy (from `boards/de1soc/fpga/README.md`)
 
 Quartus Prime has no macOS build, so the `.rbf` is produced on x86-64 Linux.
 The cleanest path reuses Terasic's **DE1-SoC GHRD**, which already
@@ -48,7 +48,8 @@ instantiates the HPS, exports `h2f_lw`, and has all the HPS/DDR3 pin
 assignments — you add one component.
 
 1. Open the GHRD Quartus project for your Quartus version.
-2. Add `../../rtl/*.sv` (board-neutral) plus this directory's
+2. Add `../../../rtl/core/*.sv` and `../../../rtl/peripherals/*.sv`
+   (board-neutral), `../top/tpu_top_hps.sv`, and this directory's
    `tpu_top_hps.sdc`. The relevant module is `tpu_top_hps`.
 3. In Platform Designer, add `tpu_top_hps` as a component:
    - Avalon-MM slave → the HPS `h2f_lw` master.
@@ -59,7 +60,7 @@ assignments — you add one component.
    - Clock `clk` from the same fabric clock `h2f_lw` uses. **`hps_bridge` does
      no CDC** — single clock domain only.
    - `reset_n` → system reset. Regenerate HDL.
-4. `make` in `fpga/de1soc/` (wraps `quartus_map`/`fit`/`asm` + `.sof`→`.rbf`)
+4. `make` in `boards/de1soc/fpga/` (wraps `quartus_map`/`fit`/`asm` + `.sof`→`.rbf`)
    with `PROJECT`/`REVISION` set to match the GHRD project. Confirm timing
    closes at 50 MHz.
 
@@ -69,13 +70,13 @@ Then:
 scp output_files/<project>.rbf root@<board>:/root/tpu.rbf
 # on the board: configure via u-boot `fpga load` from the SD FAT partition,
 # or at runtime through the FPGA Manager (device depends on your kernel/overlay)
-scp ../../tpu_host.py ../../requirements.txt root@<board>:/root/
+scp ../../../tpu_host.py ../../../requirements.txt root@<board>:/root/
 # on the board (needs numpy + root for /dev/mem):
 python3 tpu_host.py --port /dev/mem --link hps --rows 2 --cols 2 --selftest
 ```
 
-Only `tpu_host.py` accepts `--link hps` today. `tests/hw_regression.py`
-(`--link {uart,spi,sim}`) and `mnist/infer.py` (`--link {uart,spi}`) need
+Only `tpu_host.py` accepts `--link hps` today. `tests/hw/hw_regression.py`
+(`--link {uart,spi,sim}`) and `software/mnist/infer.py` (`--link {uart,spi}`) need
 `hps` added to their `--link` choices before they can run on the board —
 a small change, since both go through `tpu_host.TPU`, but not yet made.
 
@@ -110,7 +111,7 @@ per-build instances stay fully headless. Spot instances cut the cost further.
 1. **Qsys/GHRD integration** — §3 step 3, done once and baked into the AMI.
 2. **Cloud build infra** — CDK stack + launch script (§4).
 3. **On-board bring-up** — `scp` the `.rbf`, let the HPS configure the FPGA,
-   then run `tests/hw_regression.py --link hps --port /dev/mem` *on the board*
+   then run `tests/hw/hw_regression.py --link hps --port /dev/mem` *on the board*
    to validate the bridge against the same vectors sim and pico2-ice use
    (after adding `hps` to that script's `--link` choices — see §3).
 4. **Scale up** — raise `ARRAY_ROWS`/`NUM_COLS` to the largest shape that
@@ -118,8 +119,8 @@ per-build instances stay fully headless. Spot instances cut the cost further.
    ready for it; the Cyclone V's ~87 DSPs and ~85K LEs leave far more room
    than the UP5K did. Growing `M_TILE` along with the array matters as much
    as the array itself — see [`utilization.md`](utilization.md) §1.
-5. **A `PSUM_WIDTH=32` build** — what `llm/` needs to leave simulation.
-   `llm/infer.py` already accepts `--link hps`, and at 32 bits the
+5. **A `PSUM_WIDTH=32` build** — what `software/llm/` needs to leave simulation.
+   `software/llm/infer.py` already accepts `--link hps`, and at 32 bits the
    `pe_pair` path is unavailable anyway, which costs nothing here.
 
 See [`backlog.md`](backlog.md) for how this sits against other open work.

@@ -99,10 +99,10 @@ Tested versions (other recent releases are likely fine): Yosys 0.63, Verilator
 ### 1.4 Build and flash the RP2350 firmware (once)
 
 This is the USB↔UART bridge. You only ever redo this if you change something in
-`firmware/` — pure RTL changes need only a gateware reflash.
+`boards/pico2-ice/firmware/` — pure RTL changes need only a gateware reflash.
 
 ```bash
-cd firmware && mkdir -p build && cd build
+cd boards/pico2-ice/firmware && mkdir -p build && cd build
 cmake -DPICO_BOARD=pico2_ice -DPICO_PLATFORM=rp2350-riscv \
       -DPICO_GCC_TRIPLE=riscv64-unknown-elf -G Ninja ..
 ninja                                    # -> pico2_ice_bridge.uf2
@@ -123,7 +123,7 @@ Then flash it:
 ### 1.5 Build and flash the gateware
 
 ```bash
-cd fpga/ice40
+cd boards/pico2-ice/fpga/
 make            # yosys -> nextpnr-ice40 -> icepack, produces tpu_top.bin
 make prog       # flash it over USB-DFU (board in normal run mode, no button needed)
 ```
@@ -172,11 +172,11 @@ python3 tpu_host.py --port /dev/cu.usbmodemXXXX --selftest
 make hw-test PORT=/dev/cu.usbmodemXXXX
 
 # 3. Real MNIST digits classified end-to-end on the array.
-python3 mnist/infer.py --port /dev/cu.usbmodemXXXX --test-n 20
+python3 software/mnist/infer.py --port /dev/cu.usbmodemXXXX --test-n 20
 
 # 4. The fun one: draw a digit with your mouse, watch the board's LED flip
 #    green -> blue as the on-chip inference completes.
-python3 mnist/draw_demo.py --port /dev/cu.usbmodemXXXX --led-port /dev/cu.usbmodemYYYY
+python3 software/mnist/draw_demo.py --port /dev/cu.usbmodemXXXX --led-port /dev/cu.usbmodemYYYY
 ```
 
 Step 3 runs a trained, quantized 144→64→10 MLP tile-by-tile through the physical
@@ -199,11 +199,11 @@ Step 4 needs `tkinter`; on Homebrew Python, `brew install python-tk` if
 | LED red after flashing gateware | FPGA didn't configure | Replug the board so the boot-time `CDONE` check re-runs; confirm `make prog` actually completed |
 | `dfu-util`: *"Device's firmware is corrupt"* | Known SDK false alarm, printed on **every** flash | Ignore it; trust the LED |
 | Nothing responds on either port | Firmware not flashed, or FPGA not configured | `dfu-util -l` should list two DFU alt interfaces; check LED is green |
-| Board responds, but data is **garbled** (not absent) | `CLK_FREQ` in `fpga/ice40/Makefile` ≠ `ice_fpga_init()` in `firmware/main.c` — the baud divider is baked in at synthesis | Change both together, reflash both images |
+| Board responds, but data is **garbled** (not absent) | `CLK_FREQ` in `boards/pico2-ice/fpga/Makefile` ≠ `ice_fpga_init()` in `boards/pico2-ice/firmware/main.c` — the baud divider is baked in at synthesis | Change both together, reflash both images |
 | Selftest fails with a shape mismatch error | Host flags don't match the flashed bitstream | Pass `--rows/--cols/--m-tile` matching your build knobs |
 | Both serial ports look identical | macOS shows the USB product string, not per-interface descriptions | Trial and error; higher-numbered port first |
 | `make time`: *"Can't find chipdb file"* | Some Homebrew icestorm installs can't resolve `-d up5k` | `make time ICETIME_CHIPDB=$(brew --prefix icestorm)/share/icestorm/chipdb/chipdb-5k.txt` |
-| Long commands lose their tail; short ones are fine | You're on stock SDK bridge code | This repo's `firmware/main.c` already fixes it (blocking CDC→UART write) — make sure you flashed *this* firmware |
+| Long commands lose their tail; short ones are fine | You're on stock SDK bridge code | This repo's `boards/pico2-ice/firmware/main.c` already fixes it (blocking CDC→UART write) — make sure you flashed *this* firmware |
 
 Still stuck? Open an issue — please include your LED state, the output of
 `dfu-util -l`, and the exact `make`/`tpu_host.py` commands you ran.
@@ -223,8 +223,8 @@ make test                    # build + run the testbench suite, pass/fail summar
 **Classify real MNIST digits in pure numpy**, with the exact same fixed-point math
 the hardware does — no board, no FPGA toolchain:
 ```bash
-python3 mnist/infer.py --offline --test-n 200
-python3 mnist/draw_demo.py --offline          # the drawing demo works offline too
+python3 software/mnist/infer.py --offline --test-n 200
+python3 software/mnist/draw_demo.py --offline          # the drawing demo works offline too
 ```
 
 **Simulate the whole chip through its real UART pins**, at the hardware's actual
@@ -241,15 +241,15 @@ Verilator model as a transport, and every host tool that takes `--link sim` talk
 to it exactly as it would to a board:
 ```bash
 make sim-bridge                                   # 8x8 array, M_TILE=4, PSUM_WIDTH=32
-python3 tests/hw_regression.py --link sim --port sim/verilator/bridge/tb_tpu_top \
+python3 tests/hw/hw_regression.py --link sim --port sim/verilator/bridge/tb_tpu_top \
     --rows 8 --cols 8 --m-tile 4 --psum-width 32
 ```
 
 **Run a transformer on it.** TinyStories-1M with every linear layer on the
-simulated array (see [`llm/README.md`](llm/README.md); ~48 MB download):
+simulated array (see [`software/llm/README.md`](software/llm/README.md); ~48 MB download):
 ```bash
 ./llm/fetch.sh
-python3 llm/infer.py --link sim --port sim/verilator/bridge/tb_tpu_top \
+python3 software/llm/infer.py --link sim --port sim/verilator/bridge/tb_tpu_top \
     --prompt "Once upon a time" -n 20
 ```
 
@@ -342,54 +342,29 @@ cycle timings, the control state machine, and the software stack around it.
 
 ```
 TPU/
-├── README.md
-├── Makefile                    # RTL sim automation (make test, make hw-test, ...)
-├── run_tests.sh
-├── requirements.txt             # tpu_host.py deps: pyserial, numpy
-├── tpu_host.py                  # host-side driver + CLI (UART / SPI / HPS / sim links)
-├── rtl/                         # synthesizable SystemVerilog datapath + control plane
-│   ├── tpu_pkg.sv               # wire-protocol opcodes, flag bits, status bytes
-│   ├── pe.sv
-│   ├── pe_pair.sv               # two PEs on one iCE40 SB_MAC16 (USE_MAC16_PAIR=1)
-│   ├── mmu.sv
-│   ├── fifo.sv
-│   ├── weight_fifo.sv
-│   ├── systolic_data_setup.sv
-│   ├── accumulator.sv
-│   ├── bias.sv
-│   ├── activation.sv
-│   ├── unified_buffer.sv
-│   ├── uart_rx.sv
-│   ├── uart_tx.sv
-│   ├── spi_slave.sv             # optional faster host PHY (see §5.1)
-│   ├── hps_bridge.sv            # Avalon-MM host PHY for the DE1-SoC's ARM core
-│   ├── tpu_sequencer.sv         # wire command protocol + pipeline orchestration
-│   ├── tpu_core.sv              # board-neutral datapath + sequencer
-│   ├── tpu_top.sv               # pico2-ice top level: PHY + power-on reset + pins
-│   └── tpu_top_hps.sv           # DE1-SoC top level: hps_bridge + power-on reset
-├── verilator.vlt                # audited lint waivers for `make lint`
-├── tests/                       # SystemVerilog testbenches (simulation)
-│   ├── *_tb.sv                  # unit + integration tbs, incl. tpu_sequencer_{4x2,2x4,4x4}_tb.sv
-│   │                            #   proving the parameterized sequencer at non-2x2 shapes
-│   ├── verilator/               # C++ full-chip testbench (`make verilate-test`,
-│   │                            #   and the --link sim transport via `make sim-bridge`)
-│   └── hw_regression.py         # real-hardware regression suite (§1.7)
-├── sim/                         # simulation build output (gitignored)
-├── fpga/                          # per-board FPGA build targets (dispatcher Makefile)
-│   ├── ice40/                     # pico2-ice (iCE40UP5K): yosys/nextpnr-ice40/icepack, §5.1
-│   └── de1soc/                    # DE1-SoC (Cyclone V): Quartus + HPS bridge (scaffolding)
-├── firmware/                      # RP2350 firmware: USB-CDC <-> FPGA UART or SPI bridge,
-│   │                              #   plus the FW_MATMUL tiling offload (§1.4, §5.1)
-│   └── pico-ice-sdk/              # vendored SDK, git submodule
-├── mnist/
-│   ├── train_mnist.py           # trains + quantizes the 144->64->10 MLP
-│   ├── infer.py                 # multi-layer tiled inference driver (hardware + offline)
-│   ├── draw_demo.py             # interactive drawing demo, LED feedback
-│   ├── model/mnist_2x2_int8.npz # quantized weights (committed, ~5KB)
-│   └── data/                    # downloaded MNIST idx files, gitignored
-├── llm/                         # TinyStories-1M transformer on the array (§2)
-└── docs/                        # design reference — start at docs/README.md
+├── rtl/
+│   ├── core/          board-neutral datapath + sequencer + tpu_core.sv
+│   └── peripherals/   host-link PHYs: UART, SPI slave, HPS Avalon-MM bridge
+├── boards/
+│   ├── pico2-ice/     top/ (tpu_top.sv, pe_pair.sv) · fpga/ (yosys/nextpnr build) ·
+│   │                  firmware/ (RP2350 bridge; pico-ice-sdk submodule)
+│   └── de1soc/        top/ (tpu_top_hps.sv) · fpga/ (Quartus scaffolding)
+├── tests/
+│   ├── sv/            23 Icarus testbenches (make test)
+│   ├── verilator/     full-chip C++ bench + --link sim bridge
+│   └── hw/            hw_regression.py (make hw-test)
+├── software/
+│   ├── mnist/         144→64→10 MLP: train, infer, draw demo
+│   └── llm/           TinyStories-1M transformer on the array
+├── docs/              design reference — start at docs/README.md
+├── mk/                the Makefile's rules, split by tier
+├── tpu_host.py        host driver + CLI (UART / SPI / HPS / sim links)
+└── Makefile, run_tests.sh, verilator.vlt, requirements.txt
 ```
+
+The rule of thumb: `rtl/` holds only what every board shares; anything specific
+to one board — its top level, pins, build flow and firmware — lives under
+`boards/<board>/`. A new target is a new `boards/` directory.
 
 Deeper reference material lives in [`docs/`](docs/) — [architecture](docs/architecture.md),
 [wire protocol](docs/protocol.md), [pico2-ice target](docs/pico2-ice.md),
@@ -406,14 +381,13 @@ Deeper reference material lives in [`docs/`](docs/) — [architecture](docs/arch
 
 A parameterized `ARRAY_ROWS × NUM_COLS` systolic array (default 2×2;
 hardware-validated at 2×2, 2×4, and 4×4 — 2×4 puts one PE on each of the UP5K's
-8 `SB_MAC16` DSP blocks, 4×4 puts *two* PEs on each via `rtl/pe_pair.sv`'s
+8 `SB_MAC16` DSP blocks, 4×4 puts *two* PEs on each via `boards/pico2-ice/top/pe_pair.sv`'s
 dual-8×8 mode) runs the full datapath (UART RX → sequencer →
 weight FIFO → unified buffer → systolic data setup → MMU → accumulator → bias →
 ReLU → UART TX) on real silicon.
 
-**iCE40 make targets** (run from `fpga/ice40/`, or via the dispatcher as
-`make -C fpga ice40 TARGET=<target>`; the yosys → nextpnr-ice40 → icepack flow,
-staged so each intermediate can be inspected):
+**iCE40 make targets** (run from `boards/pico2-ice/fpga/`; the yosys →
+nextpnr-ice40 → icepack flow, staged so each intermediate can be inspected):
 ```bash
 make            # full build to tpu_top.bin (equivalent to make bin)
 make json       # synthesize only, up to tpu_top.json (yosys, with -dsp)
@@ -431,21 +405,21 @@ make clean      # remove tpu_top.json/.asc/.bin
 bitstream at synthesis time — the matching host-side flags must agree, see
 `tpu_host.py --help`):
 ```bash
-make CLK_FREQ=12000000        # must match firmware/main.c's ice_fpga_init() request
+make CLK_FREQ=12000000        # must match boards/pico2-ice/firmware/main.c's ice_fpga_init() request
 make BAUD_RATE=1000000        # must match tpu_host.py's --baud (default 1M, exact /12 of 12 MHz)
 make ARRAY_ROWS=2 NUM_COLS=4 M_TILE=2   # array shape; hosts then need --rows/--cols/--m-tile
                                         #   (ARRAY_ROWS and M_TILE <= 4 unless FIFO_DEPTH is
-                                        #   raised in rtl/tpu_top.sv)
+                                        #   raised in boards/pico2-ice/top/tpu_top.sv)
 make PSUM_WIDTH=32                      # accumulate/bias/result width (default 16); hosts need
                                         #   --psum-width. Not usable with USE_MAC16_PAIR=1, and
                                         #   no bitstream has been built with it yet
-make USE_SPI=1 CLK_FREQ=24000000        # SPI host link (rtl/spi_slave.sv) on the RP2350<->iCE40
+make USE_SPI=1 CLK_FREQ=24000000        # SPI host link (rtl/peripherals/spi_slave.sv) on the RP2350<->iCE40
                                         #   config bus instead of the UART; pair with the
                                         #   TPU_LINK_SPI=ON firmware build and hosts' --link spi.
                                         #   24 MHz works because the SPI slave, unlike the UART,
                                         #   has no synthesis-baked baud divider (fMax ~32 MHz)
 make USE_MAC16_PAIR=1 ARRAY_ROWS=4 NUM_COLS=4 M_TILE=2
-                                        # build the MMU from rtl/pe_pair.sv (hand-instantiated
+                                        # build the MMU from boards/pico2-ice/top/pe_pair.sv (hand-instantiated
                                         #   SB_MAC16 in dual-8x8 mode: two PEs per DSP, so 16 PEs
                                         #   fit on the UP5K's 8 blocks). Requires even ARRAY_ROWS;
                                         #   -dsp is dropped automatically (nothing left to infer)
@@ -455,17 +429,17 @@ make USE_MAC16_PAIR=1 ARRAY_ROWS=4 NUM_COLS=4 M_TILE=2
 all three sides rebuilt and reflashed together:
 ```bash
 # 1. Firmware, with the SPI bridge compiled in (separate build dir keeps the UART one intact)
-cd firmware && mkdir -p build-spi && cd build-spi
+cd boards/pico2-ice/firmware && mkdir -p build-spi && cd build-spi
 cmake -DPICO_BOARD=pico2_ice -DPICO_PLATFORM=rp2350-riscv \
       -DPICO_GCC_TRIPLE=riscv64-unknown-elf -DTPU_LINK_SPI=ON -G Ninja ..
 ninja                                  # then flash pico2_ice_bridge.uf2 as in §1.4
 
 # 2. Gateware, matching link + clock + shape
-cd ../../fpga/ice40 && make USE_SPI=1 CLK_FREQ=24000000 \
+cd ../../fpga && make USE_SPI=1 CLK_FREQ=24000000 \
      USE_MAC16_PAIR=1 ARRAY_ROWS=4 NUM_COLS=4 M_TILE=2 && make prog
 
 # 3. Host, matching all three
-python3 mnist/infer.py --port /dev/cu.usbmodemXXXX --link spi \
+python3 software/mnist/infer.py --port /dev/cu.usbmodemXXXX --link spi \
      --rows 4 --cols 4 --m-tile 2 --test-n 20
 ```
 Keep the UART build around as a bisect fallback — if the SPI path misbehaves, reflashing
@@ -474,27 +448,27 @@ the plain `make` gateware plus the `build/` firmware gets you back to a known-go
 ### 5.2 MNIST digit classification demo
 
 Runs a trained+quantized 144→64→10 MLP through the real systolic array, tile
-by tile, via `mnist/infer.py`'s `matmul_tiled()` driver (built on the K-dim
+by tile, via `software/mnist/infer.py`'s `matmul_tiled()` driver (built on the K-dim
 tiling from §5.1/§6; any layer shape works — non-multiples of the array size
 are zero-padded on the wire and sliced off the result) — either against real
 hardware or, with `--offline`, in pure numpy with no board at all.
-`mnist/model/mnist_2x2_int8.npz` is already trained and committed, so retraining
+`software/mnist/model/mnist_2x2_int8.npz` is already trained and committed, so retraining
 is entirely optional. All three scripts take `--rows/--cols/--m-tile` to match a
 non-2×2 bitstream.
 
 ```bash
 # Accuracy on real hardware, N random real MNIST test images end-to-end:
-python3 mnist/infer.py --port /dev/cu.usbmodemXXXX --test-n 20
+python3 software/mnist/infer.py --port /dev/cu.usbmodemXXXX --test-n 20
 
 # Hardware vs. local numpy on the exact same images, side by side:
-python3 mnist/infer.py --port /dev/cu.usbmodemXXXX --compare --test-n 20
+python3 software/mnist/infer.py --port /dev/cu.usbmodemXXXX --compare --test-n 20
 
 # Interactive drawing demo (LED flips green->blue when inference completes):
-python3 mnist/draw_demo.py --port /dev/cu.usbmodemXXXX --led-port /dev/cu.usbmodemYYYY
+python3 software/mnist/draw_demo.py --port /dev/cu.usbmodemXXXX --led-port /dev/cu.usbmodemYYYY
 
-# (Optional) retrain + requantize — downloads MNIST (~11 MB, cached in mnist/data/,
-# gitignored) and overwrites mnist/model/mnist_2x2_int8.npz:
-python3 mnist/train_mnist.py
+# (Optional) retrain + requantize — downloads MNIST (~11 MB, cached in software/mnist/data/,
+# gitignored) and overwrites software/mnist/model/mnist_2x2_int8.npz:
+python3 software/mnist/train_mnist.py
 ```
 
 Per-image latency depends on the build: ~316 ms at the default 2×2 over 1 Mbaud
@@ -510,17 +484,17 @@ it wins once `infer.py` batches images. See [`docs/performance.md`](docs/perform
 - **Simulation** — full datapath implemented and passing all 23 SystemVerilog
   testbenches (`make test`), lint-clean across 4 configurations,
   and passing the full-chip Verilator suite across 12 shape/PHY/width combinations.
-- **pico2-ice hardware** — bring-up complete; `tests/hw_regression.py` (`make hw-test`)
+- **pico2-ice hardware** — bring-up complete; `tests/hw/hw_regression.py` (`make hw-test`)
   replays every simulation test vector plus int8/int16 boundary cases and a randomized
   stress run against real silicon, at whatever array shape the bitstream was built with
   (validated at 2×2, 2×4, and 4×4 — 14/14 at each).
 - **Parameterized array shape** — every module including the sequencer takes
   `ARRAY_ROWS`/`NUM_COLS`/`M_TILE`; the shape is a build knob (§5.1) threaded from
-  `fpga/ice40/Makefile` through `tpu_host.py`. The largest shape that fits is
+  `boards/pico2-ice/fpga/Makefile` through `tpu_host.py`. The largest shape that fits is
   **4×4/M_TILE=4** at 4,935 LCs (93%), 8/8 DSPs, fMax 27.62 MHz. Getting there took
   breaking an apparent 8-PE ceiling: yosys `-dsp` maps one PE per `SB_MAC16` with no
   per-instance opt-out, so 16 PEs looked impossible against the chip's 8 blocks —
-  until `rtl/pe_pair.sv` hand-instantiated `SB_MAC16` in dual-8×8 signed mode, fitting
+  until `boards/pico2-ice/top/pe_pair.sv` hand-instantiated `SB_MAC16` in dual-8×8 signed mode, fitting
   *two* complete PE MACs per block (bit-exact vs. two `pe.sv`, verified cycle-accurate
   against yosys's own primitive model). The last 10% came from `ABC_FLAGS := -abc9 -dff`
   and a BRAM-backed `unified_buffer` — see [`docs/performance.md`](docs/performance.md) §2.
@@ -528,64 +502,64 @@ it wins once `infer.py` batches images. See [`docs/performance.md`](docs/perform
   survives across separate `RUN`s (`tile_first`/`tile_last` control, `pass_done` status),
   so a matmul with K larger than the array can be tiled into multiple weight-reload
   passes summed in hardware before bias/ReLU ever runs — see its header comment
-  and the `RUN` command's optional `LEN=1` flags byte (`rtl/tpu_sequencer.sv`).
+  and the `RUN` command's optional `LEN=1` flags byte (`rtl/core/tpu_sequencer.sv`).
   Verified in sim (`accumulator_tb`, `tpu_core_tb` Test 8,
   `tpu_sequencer_tb` Test 7) and on real pico2-ice hardware (`tpu_host.py`'s
-  `TPU.matmul_tiled()`, `tests/hw_regression.py`'s randomized multi-tile stress case).
+  `TPU.matmul_tiled()`, `tests/hw/hw_regression.py`'s randomized multi-tile stress case).
 - **Inference latency: 8.0 s → 63.8 ms/image (125x)** — measured on real hardware, in
   seven stacked steps: batched wire commands (`CMD_RUN_TILE`, then `CMD_STREAM_RUN`
   streaming a whole K-run per round trip, 3.3x), `-dsp` synthesis (PE multiplies onto
   hard `SB_MAC16` blocks, ~7x fewer LUTs/PE), the UART at 1 Mbaud instead of 115200
   (7.8x), the 2×4 array (1.3x), replacing the UART with an SPI host link
-  (`rtl/spi_slave.sv` + `TPU_LINK_SPI` firmware bridge) at a 24 MHz core clock
+  (`rtl/peripherals/spi_slave.sv` + `TPU_LINK_SPI` firmware bridge) at a 24 MHz core clock
   (2.7x), and offloading the whole matmul tiling loop onto the RP2350
-  (`firmware/tpu_tile.c`'s `FW_MATMUL` bulk command: one USB round trip per
+  (`boards/pico2-ice/firmware/tpu_tile.c`'s `FW_MATMUL` bulk command: one USB round trip per
   network layer instead of one per tile frame, 1.5x — bit-identical to the
-  host-tiled path, A/B-verified in `tests/hw_regression.py`), and the 4×4 array
+  host-tiled path, A/B-verified in `tests/hw/hw_regression.py`), and the 4×4 array
   via `pe_pair.sv` (flat on latency by design — wire bytes are shape-invariant in
   W and 1/`NUM_COLS` in A — but 2x the compute density, and the headroom that makes
   image batching worth doing). The remaining budget is genuinely wire-bound: mostly
   SPI tile traffic at the CLK/6-capped 4 MHz write clock, ~3% actual RTL compute.
-- **MNIST** — `mnist/train_mnist.py` trains and quantizes a 144→64→10 MLP (12×12
+- **MNIST** — `software/mnist/train_mnist.py` trains and quantizes a 144→64→10 MLP (12×12
   downsampled input, int8 weights/activations, int16 bias) sized and empirically
   verified against the accumulator's non-saturating int16 width (5% calibration
   safety margin, zero overflow across the full 10k-image test set); 97.50%
   quantized test accuracy in sim, 95.00% (19/20) on a real-hardware sample
-  (`mnist/infer.py --port ... --test-n 20`), at ~63.8 ms/image end-to-end over the
+  (`software/mnist/infer.py --port ... --test-n 20`), at ~63.8 ms/image end-to-end over the
   SPI link with firmware offload (see the latency bullet above).
 - **Beyond MNIST** — `PSUM_WIDTH` is a build knob threaded from the PEs through the
   wire format and host, and `flags[2]` bypasses the ReLU per pass. Together they run
   **TinyStories-1M** (a GPT-Neo transformer: q/k/v/out, both MLP projections and the
-  lm_head on the array; LayerNorm/softmax/GELU on the host) via `llm/infer.py`, with
+  lm_head on the array; LayerNorm/softmax/GELU on the host) via `software/llm/infer.py`, with
   output identical to an exact int8 emulation. It needs `PSUM_WIDTH=32`, which no
   bitstream has been built with, so it runs against the Verilator model today
   (8×8/M_TILE=4, ~11–19 s/token).
 - **Utilization** — cycle-accurate RTL traces measured that the array feeds new rows
   only 9–16% of each pass; [`docs/utilization.md`](docs/utilization.md) has the numbers
   and what to do about them.
-- **Interactive demo** — `mnist/draw_demo.py`: draw a digit, classify it end-to-end on
-  real pico2-ice silicon via `mnist/infer.py`'s multi-layer `matmul_tiled()` driver, with
-  the board's LED flipping green→blue on completion (`firmware/main.c`'s LED command
+- **Interactive demo** — `software/mnist/draw_demo.py`: draw a digit, classify it end-to-end on
+  real pico2-ice silicon via `software/mnist/infer.py`'s multi-layer `matmul_tiled()` driver, with
+  the board's LED flipping green→blue on completion (`boards/pico2-ice/firmware/main.c`'s LED command
   listener on the second, otherwise-idle USB-CDC port). `--offline` runs the same
   pipeline in pure numpy with no board attached.
-- **Future work** — batching `M_TILE` images per inference call in `mnist/infer.py` so
+- **Future work** — batching `M_TILE` images per inference call in `software/mnist/infer.py` so
   a single image stops wasting the padded activation rows (the highest-value item
   left, and host-only — projected ~17 ms/image at 4×4/M_TILE=4); weights that stay
   resident on chip and can be named instead of re-sent; overlapping each tile's weight
   load with the previous tile's compute, which the double-buffered weight FIFO already
   supports; a `PSUM_WIDTH=32` bitstream so the transformer can leave simulation; a
   bigger/better MNIST model (the current one is deliberately tiny to stay provably
-  inside int16 — see `mnist/train_mnist.py`'s header comment); and wire-format ideas,
+  inside int16 — see `software/mnist/train_mnist.py`'s header comment); and wire-format ideas,
   up to a fixed-width instruction stream that removes the 255-byte frame cap. Full
   list: [`docs/backlog.md`](docs/backlog.md).
 - **DE1-SoC (Cyclone V) target** — in progress. The board-neutral `tpu_core`,
-  the HPS Avalon-MM bridge (`rtl/hps_bridge.sv` + `rtl/tpu_top_hps.sv`), and the
+  the HPS Avalon-MM bridge (`rtl/peripherals/hps_bridge.sv` + `boards/de1soc/top/tpu_top_hps.sv`), and the
   memory-mapped host transport (`tpu_host.py --link hps`, driven over `/dev/mem`
   from the board's ARM Linux) are implemented and simulation-tested — including
   an 8×8 shape (64 PEs on generic-fabric multiply, well past the UP5K's 8-DSP
   ceiling; the iCE40-only `SB_MAC16` DSP-pair path drops to inferred DSPs on
-  Cyclone V). The `fpga/de1soc/` Quartus build is scaffolded. `tpu_host.py` and
-  `llm/infer.py` accept `--link hps`; `tests/hw_regression.py` and `mnist/infer.py`
+  Cyclone V). The `boards/de1soc/fpga/` Quartus build is scaffolded. `tpu_host.py` and
+  `software/llm/infer.py` accept `--link hps`; `tests/hw/hw_regression.py` and `software/mnist/infer.py`
   don't yet. Remaining steps:
   - **Cloud Quartus build.** Quartus has no macOS build, so the `.rbf` is
     produced on x86-64 Linux in AWS: an AWS CDK stack (S3 artifact bucket + an
@@ -593,10 +567,10 @@ it wins once `infer.py` batches images. See [`docs/performance.md`](docs/perform
     self-terminating* EC2 build instance launched from a pre-baked Quartus AMI —
     spin up, `quartus_sh` compile, push the `.rbf` to S3, tear down (Spot to cut
     cost). The one-time Qsys/GHRD integration is baked into the AMI so per-build
-    instances stay fully headless. See `fpga/de1soc/README.md` for the build and
+    instances stay fully headless. See `boards/de1soc/fpga/README.md` for the build and
     HPS-deploy runbook.
   - **On-board bring-up.** `scp` the `.rbf` to the board, let the ARM HPS
-    configure the FPGA, then run `tests/hw_regression.py --link hps
+    configure the FPGA, then run `tests/hw/hw_regression.py --link hps
     --port /dev/mem` *on the board* to validate the bridge end-to-end against
     the same vectors the sim and pico2-ice targets use.
   - **Scale up.** Once the flow is up, raise `ARRAY_ROWS`/`NUM_COLS` to the
