@@ -45,7 +45,7 @@ class TPU:
         # cmd byte -> [call count, wire bytes tx (incl. CMD/LEN header), wire bytes rx]
         # Lets a caller measure exactly how many bytes crossed the wire per command
         # type, to separate UART transmission time from actual RTL execution time
-        # (see software/mnist/infer.py's --timing-breakdown and docs/performance.md §1).
+        # (see docs/performance.md §1).
         self.stats = {}
         # FPGA-side work done on the offload path, invisible to self.stats'
         # wire counts (the tile frames run RP2350->FPGA, not host->board);
