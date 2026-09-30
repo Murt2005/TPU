@@ -77,8 +77,8 @@ RTL_tpu_datapath         := $(RTL_unified_buffer) $(RTL_weight_fifo) \
 # ----------------------------------------------------------------------------
 # Testbench -> RTL files required to build it
 #
-# Each test name below maps to tests/<name>_tb.sv automatically.
-# Add a new line here (+ the matching _tb.sv file) to register a new test.
+# Each test name maps to tests/<name>_tb.sv. Registering a new testbench is
+# this one line (+ the _tb.sv file itself).
 # ----------------------------------------------------------------------------
 DEPS_fifo                 := $(RTL_fifo)
 DEPS_pe                   := $(RTL_pe)
@@ -105,16 +105,19 @@ DEPS_tpu_sequencer_2x4    := $(RTL_tpu_sequencer) $(RTL_tpu_datapath)
 # 4x4 instantiates mmu with USE_MAC16_PAIR=1 -> needs pe_pair + SB_MAC16 model
 DEPS_tpu_sequencer_4x4    := $(RTL_tpu_sequencer) $(RTL_tpu_datapath) $(RTL_pe_pair)
 
-TESTS := fifo pe pe_pair mmu accumulator systolic_data_setup weight_fifo bias activation \
-         unified_buffer \
-         mmu_accum accum_bias bias_activation weight_fifo_mmu tpu_core \
-         uart_rx uart_tx spi_slave hps_bridge tpu_sequencer tpu_sequencer_4x2 tpu_sequencer_2x4 \
-         tpu_sequencer_4x4
+# The test list is every tests/<name>_tb.sv on disk -- nothing to register by
+# hand. A testbench without a DEPS_<name> line above stops the build here,
+# instead of being silently skipped.
+TESTS := $(sort $(patsubst $(TEST_DIR)/%_tb.sv,%,$(wildcard $(TEST_DIR)/*_tb.sv)))
+MISSING_DEPS := $(strip $(foreach t,$(TESTS),$(if $(DEPS_$(t)),,$(t))))
+ifneq ($(MISSING_DEPS),)
+$(error Testbench(es) without a DEPS_<name> line in the Makefile: $(MISSING_DEPS))
+endif
 
 # de-duplicate dep lists (modules shared via multiple paths, e.g. tpu_core -> fifo.sv)
 dedup = $(if $1,$(firstword $1) $(call dedup,$(filter-out $(firstword $1),$1)))
 
-.PHONY: all test lint verilate-test sim-bridge list clean hw-test $(foreach t,$(TESTS),test-$(t) build-$(t) wave-$(t))
+.PHONY: all test lint verilate-test sim-bridge list print-tests clean hw-test $(foreach t,$(TESTS),test-$(t) build-$(t) wave-$(t))
 
 all: test
 
@@ -122,100 +125,13 @@ $(SIM_DIR) $(LOG_DIR):
 	@mkdir -p $@
 
 # ----------------------------------------------------------------------------
-# Per-test build + run rules (explicit, one per testbench)
+# Per-test build + run rules: one pattern rule for every testbench
 # ----------------------------------------------------------------------------
-build-unified_buffer:       $(SIM_DIR)/unified_buffer.vvp
-build-fifo:                 $(SIM_DIR)/fifo.vvp
-build-pe:                   $(SIM_DIR)/pe.vvp
-build-pe_pair:              $(SIM_DIR)/pe_pair.vvp
-build-mmu:                  $(SIM_DIR)/mmu.vvp
-build-accumulator:          $(SIM_DIR)/accumulator.vvp
-build-systolic_data_setup:  $(SIM_DIR)/systolic_data_setup.vvp
-build-weight_fifo:          $(SIM_DIR)/weight_fifo.vvp
-build-bias:                 $(SIM_DIR)/bias.vvp
-build-activation:           $(SIM_DIR)/activation.vvp
-build-mmu_accum:            $(SIM_DIR)/mmu_accum.vvp
-build-accum_bias:           $(SIM_DIR)/accum_bias.vvp
-build-bias_activation:      $(SIM_DIR)/bias_activation.vvp
-build-weight_fifo_mmu:      $(SIM_DIR)/weight_fifo_mmu.vvp
-build-tpu_core:             $(SIM_DIR)/tpu_core.vvp
-build-uart_rx:              $(SIM_DIR)/uart_rx.vvp
-build-uart_tx:              $(SIM_DIR)/uart_tx.vvp
-build-spi_slave:            $(SIM_DIR)/spi_slave.vvp
-build-hps_bridge:           $(SIM_DIR)/hps_bridge.vvp
-build-tpu_sequencer:        $(SIM_DIR)/tpu_sequencer.vvp
-build-tpu_sequencer_4x2:    $(SIM_DIR)/tpu_sequencer_4x2.vvp
-build-tpu_sequencer_2x4:    $(SIM_DIR)/tpu_sequencer_2x4.vvp
-build-tpu_sequencer_4x4:    $(SIM_DIR)/tpu_sequencer_4x4.vvp
+.SECONDEXPANSION:
+$(SIM_DIR)/%.vvp: $(TEST_DIR)/%_tb.sv $$(call dedup,$$(DEPS_$$*)) | $(SIM_DIR)
+	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_$*)) $<
 
-$(SIM_DIR)/unified_buffer.vvp: $(TEST_DIR)/unified_buffer_tb.sv $(call dedup,$(DEPS_unified_buffer)) | $(SIM_DIR)
-	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_unified_buffer)) $<
-
-$(SIM_DIR)/fifo.vvp: $(TEST_DIR)/fifo_tb.sv $(call dedup,$(DEPS_fifo)) | $(SIM_DIR)
-	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_fifo)) $<
-
-$(SIM_DIR)/pe.vvp: $(TEST_DIR)/pe_tb.sv $(call dedup,$(DEPS_pe)) | $(SIM_DIR)
-	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_pe)) $<
-
-$(SIM_DIR)/pe_pair.vvp: $(TEST_DIR)/pe_pair_tb.sv $(call dedup,$(DEPS_pe_pair)) | $(SIM_DIR)
-	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_pe_pair)) $<
-
-$(SIM_DIR)/mmu.vvp: $(TEST_DIR)/mmu_tb.sv $(call dedup,$(DEPS_mmu)) | $(SIM_DIR)
-	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_mmu)) $<
-
-$(SIM_DIR)/accumulator.vvp: $(TEST_DIR)/accumulator_tb.sv $(call dedup,$(DEPS_accumulator)) | $(SIM_DIR)
-	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_accumulator)) $<
-
-$(SIM_DIR)/systolic_data_setup.vvp: $(TEST_DIR)/systolic_data_setup_tb.sv $(call dedup,$(DEPS_systolic_data_setup)) | $(SIM_DIR)
-	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_systolic_data_setup)) $<
-
-$(SIM_DIR)/weight_fifo.vvp: $(TEST_DIR)/weight_fifo_tb.sv $(call dedup,$(DEPS_weight_fifo)) | $(SIM_DIR)
-	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_weight_fifo)) $<
-
-$(SIM_DIR)/bias.vvp: $(TEST_DIR)/bias_tb.sv $(call dedup,$(DEPS_bias)) | $(SIM_DIR)
-	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_bias)) $<
-
-$(SIM_DIR)/activation.vvp: $(TEST_DIR)/activation_tb.sv $(call dedup,$(DEPS_activation)) | $(SIM_DIR)
-	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_activation)) $<
-
-$(SIM_DIR)/mmu_accum.vvp: $(TEST_DIR)/mmu_accum_tb.sv $(call dedup,$(DEPS_mmu_accum)) | $(SIM_DIR)
-	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_mmu_accum)) $<
-
-$(SIM_DIR)/accum_bias.vvp: $(TEST_DIR)/accum_bias_tb.sv $(call dedup,$(DEPS_accum_bias)) | $(SIM_DIR)
-	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_accum_bias)) $<
-
-$(SIM_DIR)/bias_activation.vvp: $(TEST_DIR)/bias_activation_tb.sv $(call dedup,$(DEPS_bias_activation)) | $(SIM_DIR)
-	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_bias_activation)) $<
-
-$(SIM_DIR)/weight_fifo_mmu.vvp: $(TEST_DIR)/weight_fifo_mmu_tb.sv $(call dedup,$(DEPS_weight_fifo_mmu)) | $(SIM_DIR)
-	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_weight_fifo_mmu)) $<
-
-$(SIM_DIR)/tpu_core.vvp: $(TEST_DIR)/tpu_core_tb.sv $(call dedup,$(DEPS_tpu_core)) | $(SIM_DIR)
-	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_tpu_core)) $<
-
-$(SIM_DIR)/uart_rx.vvp: $(TEST_DIR)/uart_rx_tb.sv $(call dedup,$(DEPS_uart_rx)) | $(SIM_DIR)
-	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_uart_rx)) $<
-
-$(SIM_DIR)/uart_tx.vvp: $(TEST_DIR)/uart_tx_tb.sv $(call dedup,$(DEPS_uart_tx)) | $(SIM_DIR)
-	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_uart_tx)) $<
-
-$(SIM_DIR)/spi_slave.vvp: $(TEST_DIR)/spi_slave_tb.sv $(call dedup,$(DEPS_spi_slave)) | $(SIM_DIR)
-	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_spi_slave)) $<
-
-$(SIM_DIR)/hps_bridge.vvp: $(TEST_DIR)/hps_bridge_tb.sv $(call dedup,$(DEPS_hps_bridge)) | $(SIM_DIR)
-	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_hps_bridge)) $<
-
-$(SIM_DIR)/tpu_sequencer.vvp: $(TEST_DIR)/tpu_sequencer_tb.sv $(call dedup,$(DEPS_tpu_sequencer)) | $(SIM_DIR)
-	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_tpu_sequencer)) $<
-
-$(SIM_DIR)/tpu_sequencer_4x2.vvp: $(TEST_DIR)/tpu_sequencer_4x2_tb.sv $(call dedup,$(DEPS_tpu_sequencer_4x2)) | $(SIM_DIR)
-	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_tpu_sequencer_4x2)) $<
-
-$(SIM_DIR)/tpu_sequencer_2x4.vvp: $(TEST_DIR)/tpu_sequencer_2x4_tb.sv $(call dedup,$(DEPS_tpu_sequencer_2x4)) | $(SIM_DIR)
-	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_tpu_sequencer_2x4)) $<
-
-$(SIM_DIR)/tpu_sequencer_4x4.vvp: $(TEST_DIR)/tpu_sequencer_4x4_tb.sv $(call dedup,$(DEPS_tpu_sequencer_4x4)) | $(SIM_DIR)
-	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_tpu_sequencer_4x4)) $<
+$(foreach t,$(TESTS),$(eval build-$(t): $(SIM_DIR)/$(t).vvp))
 
 # `make test-<name>` builds (if stale) and runs a single testbench, dumping
 # its VCD (if any) and console log into sim/
@@ -334,6 +250,9 @@ verilate-test: $(SB_MAC16_SIM) | $(SIM_DIR)
 		$$objdir/tb_tpu_top; \
 	done
 	@echo "verilate-test: all shapes passed"
+
+print-tests:
+	@echo $(TESTS)
 
 list:
 	@echo "Available tests (tests/<name>_tb.sv):"

@@ -18,12 +18,9 @@ SIM_DIR="sim"
 LOG_DIR="$SIM_DIR/logs"
 mkdir -p "$LOG_DIR"
 
-# Must match the TESTS list in the Makefile
-ALL_TESTS=(fifo pe pe_pair mmu accumulator systolic_data_setup weight_fifo bias activation \
-           unified_buffer \
-           mmu_accum accum_bias bias_activation weight_fifo_mmu tpu_core \
-           uart_rx uart_tx spi_slave tpu_sequencer tpu_sequencer_4x2 tpu_sequencer_2x4 \
-           tpu_sequencer_4x4)
+# The test list comes from the Makefile, which derives it from tests/*_tb.sv,
+# so there is no second list here to fall out of step.
+read -r -a ALL_TESTS <<< "$(make -s print-tests)"
 TESTS=("${@:-${ALL_TESTS[@]}}")
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BOLD='\033[1m'; NC='\033[0m'

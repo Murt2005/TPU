@@ -508,8 +508,7 @@ it wins once `infer.py` batches images. See [`docs/performance.md`](docs/perform
 ## 6. Current status and future work
 
 - **Simulation** — full datapath implemented and passing all 23 SystemVerilog
-  testbenches (`make test` runs 22 — `run_tests.sh` is missing `hps_bridge`, which
-  passes on its own via `make test-hps_bridge`), lint-clean across 4 configurations,
+  testbenches (`make test`), lint-clean across 4 configurations,
   and passing the full-chip Verilator suite across 12 shape/PHY/width combinations.
 - **pico2-ice hardware** — bring-up complete; `tests/hw_regression.py` (`make hw-test`)
   replays every simulation test vector plus int8/int16 boundary cases and a randomized

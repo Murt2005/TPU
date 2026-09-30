@@ -43,12 +43,9 @@ knobs must match the bitstream).
 
 1. Write `tests/<name>_tb.sv`. Print `PASSED` on success; use `$error`/`$fatal`
    (or a `[FAIL]` string) on failure — `run_tests.sh` classifies by those.
-2. In the top-level `Makefile`, register it in three places: a `DEPS_<name>`
-   line listing the RTL it needs, an entry in the `TESTS` list, and a
-   `build-<name>` + `$(SIM_DIR)/<name>.vvp` rule (copy an existing pair).
-3. Add the same name to `ALL_TESTS` in `run_tests.sh`. The script takes
-   dependencies from the Makefile but keeps its own list of names, so without
-   this step `make test` silently skips the new bench.
+2. Add one `DEPS_<name>` line to the top-level `Makefile` listing the RTL it
+   needs. That's all — the test list is built from the `tests/*_tb.sv` files,
+   and a bench without a `DEPS_` line stops the build with an error naming it.
 
 ## Style conventions
 

@@ -10,7 +10,7 @@ this is the complete one.
 | `README.md` | Entry point: quick start, toolchain, architecture walkthrough, status |
 | `CONTRIBUTING.md` | Dev setup, local quality gates, how to register a testbench, RTL house style |
 | `Makefile` | Simulation, lint, Verilator suite, sim bridge, and hardware-test automation; single-sources the RTL dependency graph `run_tests.sh` uses |
-| `run_tests.sh` | Builds and runs every (or a named subset of) testbench, printing a pass/fail summary. Keeps its own `ALL_TESTS` name list — currently missing `hps_bridge` |
+| `run_tests.sh` | Builds and runs every (or a named subset of) testbench, printing a pass/fail summary. Gets the test list from `make print-tests` |
 | `CLAUDE.md` | Agent steering file; nested ones in `rtl/`, `firmware/`, `fpga/de1soc/`, `mnist/` |
 | `tpu_host.py` | Host driver + CLI: the wire protocol, `matmul_tiled()`, and the four link backends (UART / SPI / HPS MMIO / Verilator sim) |
 | `verilator.vlt` | Verilator lint waivers |

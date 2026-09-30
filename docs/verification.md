@@ -8,12 +8,8 @@ cannot. A change is trusted when the tiers it can reach are green.
 23 testbenches under `tests/`, run through Icarus Verilog, printing a
 pass/fail summary. Fast; the inner development loop.
 
-> `make test` currently runs **22** of them: `run_tests.sh`'s `ALL_TESTS`
-> list is missing `hps_bridge`, which passes when run directly with
-> `make test-hps_bridge`.
-
 ```bash
-make test                 # the run_tests.sh list (see note above)
+make test                 # all of them
 make test-mmu             # one
 make build-mmu            # compile only
 make wave-mmu             # run + open the VCD in gtkwave
@@ -37,12 +33,11 @@ precisely so a row/column index confusion cannot pass by coincidence. This is
 how the `unified_buffer` ROWS/COLS indexing bug — harmless while `ROWS==COLS`
 — was caught.
 
-Registering a new bench takes **four** edits: in the `Makefile`, a
-`DEPS_<name>` line, an entry in `TESTS`, and a `build-<name>` +
-`$(SIM_DIR)/<name>.vvp` rule pair; then the same name in `run_tests.sh`'s
-`ALL_TESTS`. The script gets dependencies from the Makefile but keeps its own
-list of names, so skipping the last step silently drops the bench from
-`make test` — which is how `hps_bridge` fell out.
+Registering a new bench is one line: a `DEPS_<name>` entry in the `Makefile`
+listing the RTL it needs. The test list is built from the `tests/*_tb.sv`
+files themselves (`make print-tests`), and `run_tests.sh` reads it from there,
+so a bench can't be silently left out — one with no `DEPS_` line stops the
+build with an error naming it.
 
 ## Tier 2 — Verilator lint (`make lint`)
 

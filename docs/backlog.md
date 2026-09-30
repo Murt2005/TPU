@@ -66,10 +66,6 @@ traffic and USB bulk, so the payoff is small until the transport gets faster.
 
 ## Low / speculative
 
-**`run_tests.sh` drift.** Its `ALL_TESTS` list is missing `hps_bridge`, so
-`make test` runs 22 of 23 benches. One line; better still, have the script
-read `TESTS` from the Makefile so it can't drift again.
-
 **`tpu_host.py`'s RTL-time estimate.** `estimated_rtl_seconds()` costs every
 pass at a fixed 21 cycles (the 2×2 figure). A pass is `(R+3) + M + (R+C+6)`
 cycles ([`architecture.md`](architecture.md) §4.2), so the estimate
