@@ -27,11 +27,8 @@ firmware/build*/
 # Downloaded MNIST idx files (mnist/train_mnist.py fetches these; ~11MB, not tracked)
 mnist/data/
 
-# Python venv created directly in the project root (`python3 -m venv .`)
-bin/
-include/
-lib/
-pyvenv.cfg
+# Python venv (README §1.3: `python3 -m venv .venv`) and bytecode caches
+.venv/
 __pycache__/
 
 # Pre-reorganization docs, kept locally for reference only (superseded by docs/)

@@ -15,11 +15,10 @@ this is the complete one.
 | `verilator.vlt` | Verilator lint waivers |
 | `requirements.txt` | `pyserial`, `numpy` |
 | `.gitmodules` | Pins `firmware/pico-ice-sdk` to tinyvision-ai-inc's SDK |
-| `.gitignore` | Sim output, FPGA artifacts, Quartus output, firmware build dirs, MNIST data, the in-place venv, `olddocs/` |
+| `.gitignore` | Sim output, FPGA artifacts, Quartus output, firmware build dirs, MNIST data, `.venv/`, `olddocs/` |
 
-`bin/`, `lib/`, `include/`, `pyvenv.cfg`, `__pycache__/` are an in-place
-Python venv (`python3 -m venv .`) and bytecode caches. Gitignored, not
-documented further.
+`.venv/` is the Python virtual environment (README §1.3) and `__pycache__/`
+holds bytecode caches. Both gitignored.
 
 ## `rtl/` — synthesizable SystemVerilog
 
