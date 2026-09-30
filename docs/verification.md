@@ -101,15 +101,6 @@ validates the RTL, protocol and host driver, not the netlist — but it is the
 only way to run the host-side programs (`hw_regression.py`, `llm/infer.py`)
 at shapes and widths no bitstream has been built for.
 
-### The visualizer check (`make viz-check`)
-
-Not a tier of its own, but it follows the same idea: `viz/model.mjs`, the
-JavaScript port of `tpu_core` behind the datapath viewer, is compared
-register by register and cycle by cycle against Verilator traces of the real
-RTL (`make viz-check` at 4×4/M_TILE=4, `make viz-check-all` over six shapes).
-Run it after any datapath change, or the viewer stops being trustworthy. See
-`viz/README.md`.
-
 ## Tier 4 — Real hardware (`make hw-test`)
 
 `tests/hw_regression.py` against a flashed board. **The only tier that
@@ -156,7 +147,7 @@ Expected: 19/20 on the sampled set, matching the local numpy model exactly.
 | Changed | Run |
 |---|---|
 | One RTL module | `make test-<name>`, then `make test` |
-| Anything in the datapath or sequencer | `make test` + `make lint` + `make verilate-test` + `make viz-check-all` |
+| Anything in the datapath or sequencer | `make test` + `make lint` + `make verilate-test` |
 | Synthesis flags, primitives, or memory inference | all of the above **+ `make hw-test`** |
 | Wire protocol | all of the above + `mnist/infer.py` |
 | Firmware | `make hw-test` (there is no firmware sim tier) |

@@ -29,7 +29,6 @@ use hosted CI). Before opening a PR, run:
 make test           # build + run all testbenches, prints a pass/fail summary
 make lint           # Verilator --lint-only over the RTL (UART + SPI + 4x4 + HPS configs)
 make verilate-test  # full-chip C++ simulation across 12 shape/PHY/width combos
-make viz-check-all  # if you touched the datapath: keeps viz/model.mjs in step with the RTL
 ```
 
 `make test` (via `run_tests.sh`) returns a non-zero exit code if any testbench
@@ -68,5 +67,4 @@ The RTL follows a consistent house style — please match it:
 ## Commit / PR notes
 
 - Keep commits focused and messages short and descriptive.
-- Make sure `make test`, `make lint`, and `make verilate-test` all pass
-  (plus `make viz-check-all` for datapath changes).
+- Make sure `make test`, `make lint`, and `make verilate-test` all pass.

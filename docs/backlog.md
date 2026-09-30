@@ -107,4 +107,3 @@ These were open items in earlier planning docs and have shipped. Details in
 - The LC diet that made 4×4/M_TILE=4 fit (`-abc9 -dff` + BRAM UB)
 - `PSUM_WIDTH` as a build knob, and a per-pass ReLU bypass (`flags[2]`)
 - The `--link sim` transport, and TinyStories-1M running on it (`llm/`)
-- The datapath visualizer and its RTL-validated model (`viz/`)

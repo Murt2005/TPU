@@ -18,7 +18,7 @@ array — in simulation today, through the same host driver. Full design notes l
 | You have… | Go to |
 |---|---|
 | A pico2-ice board and want to run this on it | [§1 Quick start](#1-quick-start-on-a-pico2-ice) |
-| No board (yet) — just want to see it work | [§2 Without a board](#2-without-a-board-simulation--offline-mnist) — including the transformer and the datapath visualizer |
+| No board (yet) — just want to see it work | [§2 Without a board](#2-without-a-board-simulation--offline-mnist) — including a transformer running on the simulated array |
 | Curiosity about how a TPU actually works | [§3 How the design works](#3-how-the-design-works) |
 | A different FPGA, or want to change the array shape | [§5 FPGA build reference](#5-fpga-build-reference) |
 
@@ -253,11 +253,6 @@ python3 llm/infer.py --link sim --port sim/verilator/bridge/tb_tpu_top \
     --prompt "Once upon a time" -n 20
 ```
 
-**Watch the array compute.** [`viz/`](viz/README.md) is an interactive viewer:
-edit W/A/bias, step the clock, and watch the diagonal wavefront cross the array.
-Its JavaScript model is checked cycle-by-cycle against the RTL with
-`make viz-check-all`.
-
 ### 2.1 Simulation workflow reference
 
 **Prerequisites** — Icarus Verilog (`iverilog`/`vvp`), plus `gtkwave` for
@@ -289,8 +284,6 @@ make verilate-test
 make sim-bridge
                # build the Verilator model as a --link sim transport
                #   (SIM_ROWS/SIM_COLS/SIM_MTILE/SIM_PSUM pick the shape)
-make viz-check-all
-               # check the visualizer's JS model against RTL traces
 make list      # print every registered test name and its available targets
 make clean     # remove sim/ (compiled binaries, logs, waveform dumps)
 make hw-test PORT=/dev/cu.usbmodemXXXX [ARRAY_ROWS=2] [NUM_COLS=2] [M_TILE=2] [LINK=uart]
@@ -395,7 +388,6 @@ TPU/
 │   ├── model/mnist_2x2_int8.npz # quantized weights (committed, ~5KB)
 │   └── data/                    # downloaded MNIST idx files, gitignored
 ├── llm/                         # TinyStories-1M transformer on the array (§2)
-├── viz/                         # interactive datapath visualizer + its RTL check (§2)
 └── docs/                        # design reference — start at docs/README.md
 ```
 
@@ -569,11 +561,9 @@ it wins once `infer.py` batches images. See [`docs/performance.md`](docs/perform
   output identical to an exact int8 emulation. It needs `PSUM_WIDTH=32`, which no
   bitstream has been built with, so it runs against the Verilator model today
   (8×8/M_TILE=4, ~11–19 s/token).
-- **Datapath visualizer** — `viz/`: an interactive viewer backed by a cycle-accurate
-  JavaScript port of `tpu_core`, checked register-by-register against RTL traces
-  across six shapes (`make viz-check-all`). The same traces fed
-  [`docs/utilization.md`](docs/utilization.md), which measured that the array feeds
-  new rows only 9–16% of each pass.
+- **Utilization** — cycle-accurate RTL traces measured that the array feeds new rows
+  only 9–16% of each pass; [`docs/utilization.md`](docs/utilization.md) has the numbers
+  and what to do about them.
 - **Interactive demo** — `mnist/draw_demo.py`: draw a digit, classify it end-to-end on
   real pico2-ice silicon via `mnist/infer.py`'s multi-layer `matmul_tiled()` driver, with
   the board's LED flipping green→blue on completion (`firmware/main.c`'s LED command

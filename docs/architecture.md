@@ -385,14 +385,6 @@ without it the FPGA has no clock.
   `PSUM_WIDTH=32` and `act_bypass`, so today it runs against the Verilator
   model (`--link sim`) only. See `llm/README.md`.
 
-### 10.4 `viz/` — the datapath visualizer
-
-A cycle-accurate JavaScript port of `tpu_core` (`model.mjs`) behind an
-interactive viewer. It is kept honest by `make viz-check`, which compares it
-register by register, cycle by cycle, against Verilator traces of the real
-RTL across six shapes. It is the fastest way to *see* §3.1 happen. See
-`viz/README.md`.
-
 ## 11. Build flow
 
 **iCE40** (`fpga/ice40/Makefile`): yosys reads `rtl/*.sv`, `chparam`s the

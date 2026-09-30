@@ -9,7 +9,7 @@ this is the complete one.
 |---|---|
 | `README.md` | Entry point: quick start, toolchain, architecture walkthrough, status |
 | `CONTRIBUTING.md` | Dev setup, local quality gates, how to register a testbench, RTL house style |
-| `Makefile` | Simulation, lint, Verilator suite, sim bridge, visualizer check, and hardware-test automation; single-sources the RTL dependency graph `run_tests.sh` uses |
+| `Makefile` | Simulation, lint, Verilator suite, sim bridge, and hardware-test automation; single-sources the RTL dependency graph `run_tests.sh` uses |
 | `run_tests.sh` | Builds and runs every (or a named subset of) testbench, printing a pass/fail summary. Keeps its own `ALL_TESTS` name list — currently missing `hps_bridge` |
 | `CLAUDE.md` | Agent steering file; nested ones in `rtl/`, `firmware/`, `fpga/de1soc/`, `mnist/` |
 | `tpu_host.py` | Host driver + CLI: the wire protocol, `matmul_tiled()`, and the four link backends (UART / SPI / HPS MMIO / Verilator sim) |
@@ -132,24 +132,12 @@ See [`mnist.md`](mnist.md).
 
 Needs `PSUM_WIDTH=32`, so it runs against `make sim-bridge` today.
 
-## `viz/` — datapath visualizer
-
-| File | What |
-|---|---|
-| `README.md` | How the pieces fit, and how the model is kept honest |
-| `trace_tb.cpp` | Verilator `--trace` harness on `tpu_core`: one `RUN_TILE`, every internal signal dumped (`make sim-trace`) |
-| `vcd_to_trace.py` | VCD → per-cycle JSON timeline |
-| `model.mjs` | Cycle-accurate JavaScript port of the datapath |
-| `check_model.mjs` | Compares `model.mjs` to an RTL trace, cycle by cycle (`make viz-check`) |
-| `viewer.html` | The interactive page |
-
 ## `sim/` — generated
 
 `sim/sb_mac16_sim.v` is yosys's own `SB_MAC16` model, extracted at build time
 so `pe_pair_tb` and the Verilator builds check against a single source of
 truth. `sim/verilator/` holds per-shape object dirs, plus `bridge/` (the
-`--link sim` binary) and `trace/` (the visualizer harness). Entirely
-gitignored.
+`--link sim` binary). Entirely gitignored.
 
 ## `docs/` and `olddocs/`
 
