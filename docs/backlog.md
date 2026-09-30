@@ -50,7 +50,7 @@ still fits in ±32,767, or use a `PSUM_WIDTH=32` build (above). With the ReLU
 bypass now available, a retrained model could also drop the ReLU on its
 output layer.
 
-**`--link hps` in the host scripts.** `tpu_host.py` and `software/llm/infer.py`
+**`--link hps` in the host scripts.** The `tpu` CLI and `software/llm/infer.py`
 accept it; `tests/hw/hw_regression.py` and `software/mnist/infer.py` don't. Needed before
 DE1-SoC bring-up can run the regression on the board.
 
@@ -66,7 +66,7 @@ traffic and USB bulk, so the payoff is small until the transport gets faster.
 
 ## Low / speculative
 
-**`tpu_host.py`'s RTL-time estimate.** `estimated_rtl_seconds()` costs every
+**The driver's RTL-time estimate.** `estimated_rtl_seconds()` costs every
 pass at a fixed 21 cycles (the 2×2 figure). A pass is `(R+3) + M + (R+C+6)`
 cycles ([`architecture.md`](architecture.md) §4.2), so the estimate
 under-reports at larger shapes.

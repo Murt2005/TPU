@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tpu-host"
+version = "0.1.0"
+description = "Host driver for the TPUv1 reimplementation: wire protocol, links, tiled matmul"
+requires-python = ">=3.11"
+dependencies = ["numpy>=1.26", "pyserial>=3.5"]
+
+[project.scripts]
+tpu-host = "tpu.cli:main"
+
+[tool.setuptools]
+packages = ["tpu"]

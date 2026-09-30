@@ -30,11 +30,9 @@ runs on the host (rtl/ has no normalization unit).
 import argparse
 import json
 import os
-import sys
 
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import torch_bin
 
 

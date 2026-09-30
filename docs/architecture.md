@@ -19,7 +19,7 @@ layer sequencing, requantization, softmax, LayerNorm — is software.
  ┌──────────── host (laptop / HPS Linux) ────────────┐
  │ software/mnist/infer.py   software/llm/infer.py   tests/hw_regression│
  │            └────────┬─────────┘                    │
- │               tpu_host.py  TPU.matmul_tiled()      │  pads + tiles any M×K×N
+ │           tpu package (host/)  TPU.matmul_tiled()  │  pads + tiles any M×K×N
  │     link: uart │ spi │ hps (MmioLink) │ sim (SimLink)
  └───────────┬────┴──┬──┴───────┬───────┴──────┬──────┘
          USB-CDC  USB-CDC   /dev/mem mmap   subprocess pipe
@@ -346,7 +346,20 @@ These are the natural extension points; [`utilization.md`](utilization.md)
 
 ## 10. The software stack
 
-### 10.1 `tpu_host.py` — the driver
+### 10.1 `host/tpu/` — the driver
+
+A small installable package (`pip install -e host`; `requirements.txt` does
+it). `python3 -m tpu`, the `tpu-host` command and the root `tpu_host.py`
+wrapper are the same CLI.
+
+| Module | Holds |
+|---|---|
+| `protocol.py` | Opcodes, flag bits, status bytes, link constants — the Python copy of `rtl/core/tpu_pkg.sv` |
+| `links.py` | `MmioLink`, `SimLink`, `open_link()` |
+| `driver.py` | The `TPU` class |
+| `golden.py` | The reference numerics: exact int8 matmul, wrap to `PSUM_WIDTH`, optional ReLU. The one Python copy — the regression suite, the selftest, `software/mnist` and `software/llm` all use it |
+| `cli.py` | Argument parsing and `--selftest` |
+
 
 - **Links**: pyserial for `uart`/`spi` (the RP2350 bridges both as USB-CDC;
   `spi` changes only pacing and wire accounting), `MmioLink` for `hps`

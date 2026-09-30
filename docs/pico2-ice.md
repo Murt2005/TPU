@@ -57,7 +57,7 @@ requests. The UART baud divider is computed at *synthesis* time from
 ```
 boards/pico2-ice/firmware/main.c   ice_fpga_init(FPGA_DATA, AS_MHZ(12))
 boards/pico2-ice/fpga/Makefile   CLK_FREQ = 12000000
-tpu_host.py       DEFAULT_BAUD (matches BAUD_RATE)
+host/tpu/protocol.py  DEFAULT_BAUD (matches BAUD_RATE)
 ```
 
 Symptom of a mismatch: **garbled bytes, not silence.**
@@ -166,7 +166,7 @@ Two SDK bugs bit this project on real hardware and are fixed here:
 
 - **Silent byte drops.** The SDK's USB→UART bridge drops bytes once the
   RP2350's 32-deep UART TX FIFO fills — which any frame > 32 bytes triggers.
-  `main.c` uses a blocking bridge write; `tpu_host.py` additionally paces
+  `main.c` uses a blocking bridge write; the host driver additionally paces
   >32-byte writes to wire speed.
 - **A TinyUSB race that wedges the whole USB stack.**
   `ice_usb_uart0_to_cdc()` runs in the UART0 RX *interrupt* and calls

@@ -55,7 +55,7 @@ returning the biased sum unchanged; it is only observable on a `TILE_LAST`
 pass, since that is the only one activation fires on. `RUN` with `LEN=0` is
 equivalent to `flags=TILE_FIRST|TILE_LAST`, i.e. the original single-shot
 behaviour, so a host that never sends the byte still works. Bit positions
-are named in `rtl/core/tpu_pkg.sv` and mirrored in `tpu_host.py`. See
+are named in `rtl/core/tpu_pkg.sv` and mirrored in `host/tpu/protocol.py`. See
 [`architecture.md`](architecture.md) §6 for the accumulation semantics.
 
 ## 3. The batched commands
@@ -127,7 +127,8 @@ in `tests/hw/hw_regression.py`.
 
 ## 6. Host side
 
-`tpu_host.py` (repo root) implements all of the above:
+The `tpu` package in `host/` implements all of the above (`python3 -m tpu`,
+or the root `tpu_host.py` wrapper, is its CLI):
 
 - `TPU(rows, cols, m_tile, psum_width=16)` — frame sizes are derived from
   the shape and the PSUM width.

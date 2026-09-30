@@ -38,3 +38,9 @@ olddocs/
 # these; ~16MB, same rationale as software/mnist/data/ above -- reproducible, not
 # tracked). The scripts that build them ARE tracked.
 software/llm/model/
+
+# pip install -e ./host metadata
+host/*.egg-info/
+
+# macOS Finder metadata
+.DS_Store

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Multi-layer MNIST inference driver: feeds the trained+quantized MLP
 (software/mnist/train_mnist.py's mnist_2x2_int8.npz) through the real TPU, layer by
-layer, using tpu_host.TPU.matmul_tiled() for each layer's K-tiled matmul.
+layer, using tpu.TPU.matmul_tiled() for each layer's K-tiled matmul.
 
 The host does the inter-layer requantization that unified_buffer's 8-bit
 activation store forces on any multi-layer network: rtl/core/activation.sv's
@@ -26,16 +26,12 @@ Usage:
 """
 import argparse
 import os
-import sys
 import time
 
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-
-from train_mnist import IN_SIDE, downsample, hw_layer, load_mnist  # noqa: E402
-from tpu_host import TPU, FPGA_CLK_FREQ  # noqa: E402
+from train_mnist import IN_SIDE, downsample, hw_layer, load_mnist
+from tpu import FPGA_CLK_FREQ, TPU
 
 DEFAULT_MODEL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model", "mnist_2x2_int8.npz")
 
@@ -162,7 +158,7 @@ def main():
     p.add_argument("--m-tile", type=int, default=None,
                     help="M_TILE the flashed bitstream was built with (default: --rows)")
     p.add_argument("--link", choices=("uart", "spi"), default="uart",
-                    help="host-link PHY the board is running (see tpu_host.py --help)")
+                    help="host-link PHY the board is running (see python3 -m tpu --help)")
     p.add_argument("--no-offload", action="store_true",
                     help="force the host-tiled path even when the firmware "
                          "advertises the FW_MATMUL offload (A/B comparisons)")

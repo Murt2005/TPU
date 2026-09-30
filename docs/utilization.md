@@ -7,7 +7,7 @@ would look like.
 Every cycle count here was measured by tracing the RTL with a Verilator
 `--trace` harness (`viz/trace_tb.cpp` → `viz/vcd_to_trace.py`, since removed
 from the repo; recover them with `git show 9627dae:viz/trace_tb.cpp`). Byte counts are computed from the shipped tiling in
-`tpu_host.py`. Projections say so.
+`host/tpu/driver.py`. Projections say so.
 
 ## 1. The array is idle 84–93% of the time
 
@@ -181,7 +181,7 @@ answers `STATUS_ERR` and the sequencer returns to `S_IDLE`; a desynced
 instruction stream is unrecoverable without a distinguished sync word and a
 recovery path. That is real design work, not a detail.
 
-It is also a rewrite of `tpu_sequencer.sv`, `tpu_host.py` and
+It is also a rewrite of `tpu_sequencer.sv`, `host/tpu/driver.py` and
 `boards/pico2-ice/firmware/tpu_tile.c` together, with Tier 4 unavailable to catch mistakes.
 
 **The staged path is better.** Most of §4 #2's win needs exactly one new

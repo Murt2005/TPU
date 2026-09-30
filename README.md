@@ -87,7 +87,7 @@ the easiest fix — it ships all of the above in one tarball.
 **Python host driver** (needs Python 3.11+):
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt          # pyserial, numpy
+pip install -r requirements.txt          # pyserial, numpy, and the host/ driver package
 ```
 > ⚠️ Create the venv in `.venv/`, **not** the repo root. `venv` writes a
 > `.gitignore` containing `*` into its target directory, which would silently hide
@@ -304,8 +304,8 @@ Here are the major blocks, and how data moves between them:
   this implementation, a byte stream replaces the PCIe/DDR path: a UART over two GPIO
   pins (1 Mbaud by default — a synthesis-time knob, see §5.1), an SPI slave on the
   RP2350↔iCE40 bus, or (on the DE1-SoC) an Avalon-MM bridge from the board's ARM core.
-  All three present the identical interface to the sequencer. `tpu_host.py` is the
-  Python driver that sends weights/activations from the PC and reads back results.
+  All three present the identical interface to the sequencer. The `tpu` package
+  in `host/` is the Python driver that sends weights/activations from the PC and reads back results.
 - **Weight FIFO (weight fetcher)** — in the original TPUv1, pulls weight tiles from DRAM.
   Here, weights arrive over the host link and are pushed directly into the shadow bank
   of the Weight FIFO, then swapped in before each tile's compute phase. (The two banks
@@ -358,7 +358,8 @@ TPU/
 │   └── llm/           TinyStories-1M transformer on the array
 ├── docs/              design reference — start at docs/README.md
 ├── mk/                the Makefile's rules, split by tier
-├── tpu_host.py        host driver + CLI (UART / SPI / HPS / sim links)
+├── host/              the `tpu` Python package: driver, links, reference model, CLI
+├── tpu_host.py        compatibility wrapper: `python3 tpu_host.py` = `python3 -m tpu`
 └── Makefile, run_tests.sh, verilator.vlt, requirements.txt
 ```
 
@@ -490,7 +491,7 @@ it wins once `infer.py` batches images. See [`docs/performance.md`](docs/perform
   (validated at 2×2, 2×4, and 4×4 — 14/14 at each).
 - **Parameterized array shape** — every module including the sequencer takes
   `ARRAY_ROWS`/`NUM_COLS`/`M_TILE`; the shape is a build knob (§5.1) threaded from
-  `boards/pico2-ice/fpga/Makefile` through `tpu_host.py`. The largest shape that fits is
+  `boards/pico2-ice/fpga/Makefile` through the host driver's flags. The largest shape that fits is
   **4×4/M_TILE=4** at 4,935 LCs (93%), 8/8 DSPs, fMax 27.62 MHz. Getting there took
   breaking an apparent 8-PE ceiling: yosys `-dsp` maps one PE per `SB_MAC16` with no
   per-instance opt-out, so 16 PEs looked impossible against the chip's 8 blocks —
@@ -504,8 +505,7 @@ it wins once `infer.py` batches images. See [`docs/performance.md`](docs/perform
   passes summed in hardware before bias/ReLU ever runs — see its header comment
   and the `RUN` command's optional `LEN=1` flags byte (`rtl/core/tpu_sequencer.sv`).
   Verified in sim (`accumulator_tb`, `tpu_core_tb` Test 8,
-  `tpu_sequencer_tb` Test 7) and on real pico2-ice hardware (`tpu_host.py`'s
-  `TPU.matmul_tiled()`, `tests/hw/hw_regression.py`'s randomized multi-tile stress case).
+  `tpu_sequencer_tb` Test 7) and on real pico2-ice hardware (`tpu.TPU.matmul_tiled()`, `tests/hw/hw_regression.py`'s randomized multi-tile stress case).
 - **Inference latency: 8.0 s → 63.8 ms/image (125x)** — measured on real hardware, in
   seven stacked steps: batched wire commands (`CMD_RUN_TILE`, then `CMD_STREAM_RUN`
   streaming a whole K-run per round trip, 3.3x), `-dsp` synthesis (PE multiplies onto

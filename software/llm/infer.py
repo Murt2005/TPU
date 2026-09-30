@@ -46,9 +46,9 @@ import time
 
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from tokenizer import Tokenizer                      # noqa: E402
+from tpu import golden
+
+from tokenizer import Tokenizer
 
 MODEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model")
 
@@ -98,26 +98,19 @@ class NumpyBackend:
         if not self.exact:
             return a.astype(np.float32) @ (w_q.astype(np.float32) * w_s)
         a_q, a_s = _quantize_rows(np.atleast_2d(a))
-        acc = a_q.astype(np.int32) @ w_q.astype(np.int32)
-        return _wrap_psum(acc).astype(np.float32) * (a_s * w_s)
+        acc = golden.matmul(a_q, w_q, psum_width=32, relu=False)
+        return acc.astype(np.float32) * (a_s * w_s)
 
     def matmul_dyn(self, a, b):
         if not self.exact:
             return a.astype(np.float32) @ b.astype(np.float32)
         a_q, a_s = _quantize_rows(np.atleast_2d(a))
         b_q, b_s = _quantize_rows(np.atleast_2d(b))
-        acc = a_q.astype(np.int32) @ b_q.astype(np.int32)
-        return _wrap_psum(acc).astype(np.float32) * (a_s * b_s)
+        acc = golden.matmul(a_q, b_q, psum_width=32, relu=False)
+        return acc.astype(np.float32) * (a_s * b_s)
 
     def close(self):
         pass
-
-
-def _wrap_psum(acc, width=32):
-    """The accumulator does not saturate -- it wraps. Model that, so the
-    reference is wrong in exactly the same way the hardware would be."""
-    dt = {16: np.int16, 32: np.int32, 64: np.int64}[width]
-    return acc.astype(dt)
 
 
 def _quantize_rows(a):
@@ -129,7 +122,7 @@ def _quantize_rows(a):
 
 
 class TpuBackend:
-    """int8 matmuls on the array via tpu_host.matmul_tiled."""
+    """int8 matmuls on the array via tpu.TPU.matmul_tiled."""
 
     def __init__(self, tpu):
         self.tpu = tpu
@@ -334,7 +327,7 @@ def main():
     if not args.port:
         raise SystemExit("--port is required unless --offline "
                          "(for --link sim it is the `make sim-bridge` binary)")
-    from tpu_host import TPU
+    from tpu import TPU
     tpu = TPU(args.port, rows=args.rows, cols=args.cols, m_tile=args.m_tile,
               link=args.link, psum_width=args.psum_width)
     be = TpuBackend(tpu)

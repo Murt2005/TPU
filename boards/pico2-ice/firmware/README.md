@@ -20,8 +20,8 @@ RP2350 has to:
    from the RP2350's `GPOUT0`, not a crystal),
 2. Push the bitstream (`../fpga/tpu_top.bin`) onto the FPGA over
    USB-DFU,
-3. Bridge the TPU's host link to a USB-CDC serial port so `../../../tpu_host.py` on
-   the PC can talk to `tpu_sequencer.sv`'s wire protocol. That link is either
+3. Bridge the TPU's host link to a USB-CDC serial port so the host driver
+   (`../../../host/`) on the PC can talk to `tpu_sequencer.sv`'s wire protocol. That link is either
    the FPGA's UART pins (default build) or the shared RP2350↔iCE40 SPI bus
    (`TPU_LINK_SPI=ON`).
 
@@ -105,8 +105,8 @@ a mismatch gives garbled bytes rather than an obvious failure.
   - **Firmware commands**, captured instead of forwarded
     (`../../../docs/protocol.md` §5): `0xF1 FW_PROBE` answers `[0xAA][0x02]['T']
     [ver]` so the host can detect offload support; `0xF0 FW_MATMUL` takes
-    matmul dims plus raw W/bias/A in one bulk write, runs `tpu_host.py`
-    `matmul_tiled()`'s exact tiling loop against the FPGA (`LOAD_BIAS` per
+    matmul dims plus raw W/bias/A in one bulk write, runs the host driver's
+    `matmul_tiled()` exact tiling loop against the FPGA (`LOAD_BIAS` per
     output block, chained `STREAM_RUN` frames, zero-padding done during tile
     gather), and returns the whole int16 result — one USB round trip per
     matmul instead of one per frame. Results are bit-identical to the
@@ -175,7 +175,7 @@ a mismatch gives garbled bytes rather than an obvious failure.
 - **The FPGA bitstream/gateware.** That's `../fpga/` (RTL sources are
   `../../../rtl/` (plus `../top/`)). Apart from the two `FW_*` commands, this firmware knows
   nothing about the TPU protocol — that lives in `tpu_sequencer.sv` on the
-  FPGA side and its mirror in `../../../tpu_host.py` on the host side.
+  FPGA side and its mirror in `../../../host/tpu/` on the host side.
 
 ## Building
 

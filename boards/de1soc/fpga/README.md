@@ -77,13 +77,13 @@ and all the HPS/DDR3 pin assignments done — so you only add one component.
      of=/dev/fpga0`, exact device depends on your kernel/overlay).
 3. Copy the host driver to the board and run it *there*:
    ```sh
-   scp ../../../tpu_host.py ../../../requirements.txt root@<board-ip>:/root/
-   # on the board (needs numpy + root for /dev/mem):
+   scp -r ../../../tpu_host.py ../../../host root@<board-ip>:/root/
+   # on the board (needs numpy + pyserial, and root for /dev/mem):
    python3 tpu_host.py --port /dev/mem --link hps --rows 2 --cols 2 --selftest
    ```
-   Only `tpu_host.py` accepts `--link hps` so far; `tests/hw/hw_regression.py`
+   Only the `tpu` CLI (`tpu_host.py`) accepts `--link hps` so far; `tests/hw/hw_regression.py`
    and `software/mnist/infer.py` need `hps` added to their `--link` choices first
-   (both already go through `tpu_host.TPU`, so the change is small).
+   (both already go through `tpu.TPU`, so the change is small).
 
 ## Files here
 

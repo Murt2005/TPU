@@ -70,15 +70,15 @@ Then:
 scp output_files/<project>.rbf root@<board>:/root/tpu.rbf
 # on the board: configure via u-boot `fpga load` from the SD FAT partition,
 # or at runtime through the FPGA Manager (device depends on your kernel/overlay)
-scp ../../../tpu_host.py ../../../requirements.txt root@<board>:/root/
-# on the board (needs numpy + root for /dev/mem):
+scp -r ../../../tpu_host.py ../../../host root@<board>:/root/
+# on the board (needs numpy + pyserial, and root for /dev/mem):
 python3 tpu_host.py --port /dev/mem --link hps --rows 2 --cols 2 --selftest
 ```
 
-Only `tpu_host.py` accepts `--link hps` today. `tests/hw/hw_regression.py`
+Only the `tpu` CLI (`tpu_host.py`) accepts `--link hps` today. `tests/hw/hw_regression.py`
 (`--link {uart,spi,sim}`) and `software/mnist/infer.py` (`--link {uart,spi}`) need
 `hps` added to their `--link` choices before they can run on the board —
-a small change, since both go through `tpu_host.TPU`, but not yet made.
+a small change, since both go through `tpu.TPU`, but not yet made.
 
 ## 4. Cloud Quartus build (planned)
 

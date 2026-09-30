@@ -23,18 +23,13 @@ Usage:
     python3 software/mnist/draw_demo.py --offline   # no board -- pure numpy backend, no LED
 """
 import argparse
-import os
-import sys
 import tkinter as tk
 
 import numpy as np
 import serial
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-
-from infer import HardwareBackend, MNISTInference, OfflineBackend, load_model  # noqa: E402
-from tpu_host import TPU  # noqa: E402
+from infer import HardwareBackend, MNISTInference, OfflineBackend, load_model
+from tpu import TPU
 
 CANVAS_SIZE = 280   # 10x scale of a 28x28 MNIST image
 BRUSH_RADIUS = 14
@@ -197,7 +192,7 @@ def main():
     p.add_argument("--m-tile", type=int, default=None,
                     help="M_TILE the flashed bitstream was built with (default: --rows)")
     p.add_argument("--link", choices=("uart", "spi"), default="uart",
-                    help="host-link PHY the board is running (see tpu_host.py --help)")
+                    help="host-link PHY the board is running (see python3 -m tpu --help)")
     args = p.parse_args()
 
     if not args.offline and not args.port:

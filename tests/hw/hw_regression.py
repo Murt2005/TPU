@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Hardware regression suite for a real pico2-ice board running tpu_top.
 
-Extends tpu_host.py's single --selftest vector into the full set of cases
+Extends the host CLI's single --selftest vector into the full set of cases
 tests/sv/tpu_sequencer_tb.sv exercises in simulation (T1-T6), plus int8/int16
 boundary cases and a randomized stress run. A pass here means the design
 matches simulation across a much wider input space than the happy-path
@@ -20,13 +20,12 @@ Usage:
     python3 tests/hw/hw_regression.py --port ... --rows 2 --cols 4 --m-tile 2
 """
 import argparse
-import os
 import sys
 
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-from tpu_host import TPU, DEFAULT_BAUD  # noqa: E402
+from tpu import DEFAULT_BAUD, TPU
+from tpu import golden as tpu_golden
 
 # Default accumulator/bias width (rtl/core/tpu_sequencer.sv's PSUM_WIDTH, no
 # saturation). Overridden from the CLI when the model/bitstream is wider --
@@ -49,15 +48,7 @@ def golden(a, w, bias, psum_width=None, relu=True):
     passes the biased sum through unclamped.
     """
     pw = PSUM_WIDTH if psum_width is None else psum_width
-    a = np.asarray(a, dtype=np.int64)
-    w = np.asarray(w, dtype=np.int64)
-    bias = np.asarray(bias, dtype=np.int64)
-    r = a @ w + bias
-    # Wrap into pw bits, signed. int8/16/32/64 have numpy dtypes; anything
-    # else would need explicit masking, and the RTL requires a byte multiple.
-    dt = {8: np.int8, 16: np.int16, 32: np.int32, 64: np.int64}[pw]
-    rw = r.astype(dt)
-    return (np.maximum(rw, 0) if relu else rw).astype(dt)
+    return tpu_golden.matmul(a, w, bias, psum_width=pw, relu=relu)
 
 
 # Test vectors mirrored from tests/sv/tpu_sequencer_tb.sv Test 1/2/5/6 so a pass

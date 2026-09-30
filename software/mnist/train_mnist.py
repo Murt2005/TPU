@@ -42,7 +42,8 @@ import urllib.parse
 
 import numpy as np
 
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from tpu import golden
+
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 MODEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model")
 
@@ -207,11 +208,11 @@ def quantize_symmetric(tensor, n_bits=8):
 def hw_layer(x_int, w_int, b_int):
     """Mirror rtl/core/accumulator.sv + bias.sv + activation.sv exactly:
     wide-precision MAC, truncate to signed PSUM_WIDTH (non-saturating
-    wraparound, not clamping), then ReLU. Matches
-    tests/hw/hw_regression.py's golden(). Returns (raw_wide, truncated_i16, relu_out).
+    wraparound, not clamping), then ReLU. Uses the
+    shared reference model, tpu.golden. Returns (raw_wide, truncated_i16, relu_out).
     """
-    raw = x_int.astype(np.int64) @ w_int.astype(np.int64) + b_int.astype(np.int64)
-    truncated = raw.astype(np.int16)   # numpy wraps on overflow, same as the RTL register
+    raw = golden.accumulate(x_int, w_int, b_int)
+    truncated = golden.wrap(raw, 16)   # wraps on overflow, same as the RTL register
     relu = np.maximum(truncated, 0)
     return raw, truncated, relu
 
