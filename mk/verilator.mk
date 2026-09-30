@@ -1,5 +1,6 @@
 ## ============================================================================
-##  mk/verilator.mk — lint, the full-chip C++ bench, and the --link sim bridge
+##  mk/verilator.mk — lint (+ the protocol check), the full-chip C++ bench, and
+##  the --link sim bridge
 ## ============================================================================
 
 # Static lint over the whole synthesizable RTL tree (no simulation).
@@ -8,7 +9,13 @@
 # board's file set: the pico2-ice set carries pe_pair.sv plus yosys's
 # SB_MAC16 model (whole-file waiver in the .vlt: it's yosys's library, not
 # ours to lint); the DE1-SoC set has neither, exactly as Quartus sees it.
-lint: $(SB_MAC16_SIM)
+# Every copy of the wire-protocol constants (RTL package, host driver, C++
+# bench, firmware) must agree -- see tests/check_protocol.py. Part of lint:
+# it is a static check, and a drifted opcode is as silent as a width bug.
+check-protocol:
+	@python3 $(TEST_DIR)/check_protocol.py
+
+lint: $(SB_MAC16_SIM) check-protocol
 	$(VERILATOR) --lint-only -Wall --timing -sv verilator.vlt \
 		$(PICO_RTL) --top-module tpu_top
 	$(VERILATOR) --lint-only -Wall --timing -sv verilator.vlt \
@@ -104,4 +111,4 @@ verilate-test: $(SB_MAC16_SIM) | $(SIM_DIR)
 	done
 	@echo "verilate-test: all shapes passed"
 
-.PHONY: lint verilate-test sim-bridge
+.PHONY: check-protocol lint verilate-test sim-bridge

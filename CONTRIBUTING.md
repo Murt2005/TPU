@@ -27,7 +27,7 @@ use hosted CI). Before opening a PR, run:
 
 ```sh
 make test           # build + run all testbenches, prints a pass/fail summary
-make lint           # Verilator --lint-only over the RTL (UART + SPI + 4x4 + HPS configs)
+make lint           # protocol-constant check + Verilator lint (UART + SPI + 4x4 + HPS configs)
 make verilate-test  # full-chip C++ simulation across 12 shape/PHY/width combos
 ```
 

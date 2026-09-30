@@ -55,7 +55,8 @@ returning the biased sum unchanged; it is only observable on a `TILE_LAST`
 pass, since that is the only one activation fires on. `RUN` with `LEN=0` is
 equivalent to `flags=TILE_FIRST|TILE_LAST`, i.e. the original single-shot
 behaviour, so a host that never sends the byte still works. Bit positions
-are named in `rtl/core/tpu_pkg.sv` and mirrored in `host/tpu/protocol.py`. See
+are named in `rtl/core/tpu_pkg.sv` and mirrored in `host/tpu/protocol.py`
+(`make check-protocol` keeps every copy in step). See
 [`architecture.md`](architecture.md) §6 for the accumulation semantics.
 
 ## 3. The batched commands

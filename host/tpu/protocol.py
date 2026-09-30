@@ -15,6 +15,7 @@ CMD_RUN = 0x04
 CMD_RESET = 0x05
 CMD_RUN_TILE = 0x06
 CMD_STREAM_RUN = 0x07
+CMD_NOP = 0xFF          # ignored in S_IDLE, no response -- the SPI read-poll filler
 
 # RUN-family flags byte (CMD_RUN LEN=1, CMD_RUN_TILE payload[0],
 # CMD_STREAM_RUN frame header byte 0). Mirrors tpu_pkg's FLAG_* localparams.

@@ -39,7 +39,7 @@ files themselves (`make print-tests`), and `run_tests.sh` reads it from there,
 so a bench can't be silently left out — one with no `DEPS_` line stops the
 build with an error naming it.
 
-## Tier 2 — Verilator lint (`make lint`)
+## Tier 2 — Static checks (`make lint`)
 
 `-Wall` across four configurations, because a config-specific latch or
 width bug hides in the config you didn't build:
@@ -49,9 +49,18 @@ width bug hides in the config you didn't build:
 - `USE_SPI=1 USE_MAC16_PAIR=1 ARRAY_ROWS=4 NUM_COLS=4 M_TILE=4`
 - `tpu_top_hps` (the DE1-SoC top)
 
-Waivers live in `verilator.vlt`, including a whole-file waiver for
+Each top is linted with its own board's file set, so the DE1-SoC build is
+checked without `pe_pair.sv` or the `SB_MAC16` model, exactly as Quartus
+sees it. Waivers live in `verilator.vlt`, including a whole-file waiver for
 `sim/sb_mac16_sim.v` — that's yosys's own primitive library, extracted at
 build time, not ours to lint.
+
+`make lint` first runs `make check-protocol` (`tests/check_protocol.py`):
+the opcodes, flag bits and status bytes exist in four languages —
+`rtl/core/tpu_pkg.sv`, `host/tpu/protocol.py`,
+`tests/verilator/tb_tpu_top.cpp` and the firmware's `tpu_tile.c` — and
+nothing generates one from another. The check fails on any disagreement,
+and if the Python copy is missing anything the RTL package defines.
 
 ## Tier 3 — Verilator full-chip simulation (`make verilate-test`)
 

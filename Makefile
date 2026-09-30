@@ -7,7 +7,8 @@
 ##    make test-fifo    Build + run a single testbench (tests/sv/fifo_tb.sv)
 ##    make build-fifo   Compile a single testbench without running it
 ##    make wave-fifo    Run a testbench and open its VCD in gtkwave (if dumped)
-##    make lint         Verilator lint, 4 configurations
+##    make lint         Protocol-constant check + Verilator lint, 4 configurations
+##    make check-protocol  Just the protocol-constant check
 ##    make verilate-test  Full-chip Verilator bench, 12 shape/PHY/width combos
 ##    make sim-bridge   Build the Verilator model as a --link sim transport
 ##    make list         Show all available test targets

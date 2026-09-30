@@ -11,7 +11,7 @@ version; this is the complete one.
 | `CONTRIBUTING.md` | Dev setup, local quality gates, how to register a testbench, RTL house style |
 | `Makefile` | Entry point for simulation, lint, the Verilator suite, the sim bridge and hardware tests; defines the shared file sets and includes `mk/` |
 | `mk/sim.mk` | Icarus testbenches: the RTL dependency graph (`DEPS_<name>`), the test list (built from `tests/sv/*_tb.sv`), and `make test` |
-| `mk/verilator.mk` | `make lint` (4 configs), `make verilate-test` (12 combos), `make sim-bridge` |
+| `mk/verilator.mk` | `make check-protocol`, `make lint` (4 configs), `make verilate-test` (12 combos), `make sim-bridge` |
 | `mk/hw.mk` | `make hw-test` |
 | `run_tests.sh` | Builds and runs every (or a named subset of) testbench, printing a pass/fail summary. Gets the test list from `make print-tests` |
 | `tpu_host.py` | Compatibility wrapper: `python3 tpu_host.py` runs the `tpu` CLI and `import tpu_host` still works, with or without the package installed |
@@ -98,7 +98,7 @@ All four present the same byte-stream interface to `tpu_core`.
 | File | What |
 |---|---|
 | `pyproject.toml` | Package `tpu-host`; installs the `tpu` package and a `tpu-host` command |
-| `tpu/protocol.py` | Opcodes, flag bits, status bytes, link constants (mirrors `rtl/core/tpu_pkg.sv`) |
+| `tpu/protocol.py` | Opcodes, flag bits, status bytes, link constants (mirrors `rtl/core/tpu_pkg.sv`; checked by `make check-protocol`) |
 | `tpu/links.py` | `MmioLink` (DE1-SoC `/dev/mem`), `SimLink` (Verilator subprocess), `open_link()` |
 | `tpu/driver.py` | The `TPU` class: legacy commands, `run_tile`, `stream_run`, `matmul_tiled()`, the `FW_MATMUL` offload |
 | `tpu/golden.py` | The reference numerics every Python caller shares |
@@ -110,6 +110,7 @@ All four present the same byte-stream interface to `tpu_core`.
 |---|---|
 | `sv/` | 23 Icarus testbenches (`make test`) — list below |
 | `verilator/tb_tpu_top.cpp` | C++ full-chip bench: drives `tpu_top`'s real host pins (or injects bytes into `tpu_core` directly) across 12 shape/PHY/width combos; with `--bridge` it is the `--link sim` transport (`make sim-bridge`) |
+| `check_protocol.py` | Checks the four copies of the wire-protocol constants agree (`make check-protocol`, part of `make lint`) |
 | `hw/hw_regression.py` | 14-case regression against real silicon over the `tpu` driver (`make hw-test`) |
 
 **Unit** — `fifo_tb`, `pe_tb`, `pe_pair_tb`, `mmu_tb`, `bias_tb`,

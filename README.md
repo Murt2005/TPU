@@ -270,8 +270,9 @@ make wave-<name>     # run it, then open its VCD in gtkwave
 
 **Other targets:**
 ```bash
-make lint      # verilator --lint-only -Wall over all of rtl/ (audited waivers
-               #   live in verilator.vlt, each with a comment saying why)
+make lint      # protocol-constant check, then verilator --lint-only -Wall over each
+               #   board's file set (audited waivers live in verilator.vlt, each with
+               #   a comment saying why)
 make verilate-test
                # Verilator C++ full-chip testbench (tests/verilator/): drives
                #   tpu_top through its real host pins (UART at the hardware's
