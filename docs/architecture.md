@@ -274,8 +274,11 @@ The shape is a **build knob, not a redesign** — set in `boards/pico2-ice/fpga/
 and passed to yosys with `chparam`. The host must be told the same shape
 (`tpu_host.py --rows/--cols/--m-tile/--psum-width`); a mismatch gives
 wrong-length frames, not a clean error. **It must agree in four places:**
-`boards/pico2-ice/fpga/Makefile` → the bitstream → `tpu_host.py` flags → `make hw-test
-ARRAY_ROWS=/NUM_COLS=/M_TILE=`.
+`boards/pico2-ice/fpga/Makefile` → the bitstream → the host flags → `make
+hw-test`. Named configurations (`boards/pico2-ice/configs/*.mk`, loaded by
+`boards/pico2-ice/config.mk`) make that one name: `make CONFIG=4x4_spi` builds
+the bitstream, `make hw-test CONFIG=4x4_spi` tests it, and `make host-flags
+CONFIG=4x4_spi` prints the flags for everything else.
 
 ## 6. K-dimension tiling
 

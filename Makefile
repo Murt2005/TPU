@@ -13,7 +13,8 @@
 ##    make sim-bridge   Build the Verilator model as a --link sim transport
 ##    make list         Show all available test targets
 ##    make clean        Remove all simulation build artifacts
-##    make hw-test PORT=/dev/cu.usbmodemXXXX   Run tests/hw/hw_regression.py on a board
+##    make hw-test PORT=... [CONFIG=<name>]   Run tests/hw/hw_regression.py on a board
+##    make host-flags CONFIG=<name>           Print the host flags matching a config
 ##
 ##  The rules live in mk/: sim.mk (testbenches), verilator.mk (lint, full-chip
 ##  sim, sim bridge), hw.mk (hardware regression). FPGA builds are per board:
@@ -70,7 +71,8 @@ list:
 	@for t in $(TESTS); do echo "  make test-$$t"; done
 	@echo ""
 	@echo "Other targets: make test | make build-<name> | make wave-<name> | make lint |"
-	@echo "  make verilate-test | make sim-bridge | make hw-test PORT=... | make clean"
+	@echo "  make check-protocol | make verilate-test | make sim-bridge |"
+	@echo "  make hw-test PORT=... [CONFIG=<name>] | make host-flags CONFIG=<name> | make clean"
 
 clean:
 	rm -rf $(SIM_DIR)

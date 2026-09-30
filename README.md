@@ -187,10 +187,11 @@ nothing to train.
 Step 4 needs `tkinter`; on Homebrew Python, `brew install python-tk` if
 `import tkinter` fails. `--led-port` is optional.
 
-> **Built a non-default array shape?** Every host-side tool takes matching
-> `--rows` / `--cols` / `--m-tile` flags, and `make hw-test` takes
-> `ARRAY_ROWS=` / `NUM_COLS=` / `M_TILE=`. They must agree with what the bitstream
-> was built with, or the driver will refuse to run. `tpu_host.py --help` lists them all.
+> **Built a non-default configuration?** The host tools need flags that match the
+> bitstream (`--rows` / `--cols` / `--m-tile` / `--psum-width` / `--link`), or the
+> driver refuses to run. If you built with a named config (§5.1),
+> `make host-flags CONFIG=<name>` prints them, and `make hw-test CONFIG=<name>`
+> uses them.
 
 ### 1.8 Troubleshooting
 
@@ -287,7 +288,9 @@ make sim-bridge
                #   (SIM_ROWS/SIM_COLS/SIM_MTILE/SIM_PSUM pick the shape)
 make list      # print every registered test name and its available targets
 make clean     # remove sim/ (compiled binaries, logs, waveform dumps)
-make hw-test PORT=/dev/cu.usbmodemXXXX [ARRAY_ROWS=2] [NUM_COLS=2] [M_TILE=2] [LINK=uart]
+make hw-test PORT=/dev/cu.usbmodemXXXX [CONFIG=<name> | ARRAY_ROWS=2 NUM_COLS=2 M_TILE=2 LINK=uart]
+make host-flags CONFIG=<name>
+               # print the host flags matching a named config
                # real-hardware regression (§1.7); PORT is required, and the shape
                # flags must match the flashed bitstream's build knobs
 ```
@@ -403,7 +406,25 @@ make prog       # flash tpu_top.bin over USB DFU (board in normal run mode; igno
 make clean      # remove tpu_top.json/.asc/.bin
 ```
 
-**Build knobs** (accepted by every target above; all `chparam`'d into the
+**Named configurations** (`boards/pico2-ice/configs/`) set every knob at once, one
+per build that has been validated on hardware:
+
+| Config | Shape | Link, core clock | Firmware | Measured |
+|---|---|---|---|---|
+| `2x2_uart` | 2×2, M_TILE=2 | UART 1 Mbaud, 12 MHz | `build/` | default; ~316 ms/image |
+| `2x4_uart` | 2×4, M_TILE=2 | UART 1 Mbaud, 12 MHz | `build/` | ~240 ms/image |
+| `2x4_spi` | 2×4, M_TILE=2 | SPI, 24 MHz | `build-spi/` | 64.1 ms/image (offload) |
+| `4x4m2_spi` | 4×4, M_TILE=2, `pe_pair` | SPI, 24 MHz | `build-spi/` | 63.8 ms/image — fastest single-image |
+| `4x4_spi` | 4×4, M_TILE=4, `pe_pair` | SPI, 24 MHz | `build-spi/` | 80.3 ms/image single; the batching shape |
+
+```bash
+make CONFIG=4x4m2_spi && make prog CONFIG=4x4m2_spi
+make show-config CONFIG=4x4m2_spi       # the knobs, the firmware it needs, the host flags
+```
+Switching config rebuilds automatically — a settings stamp stops a bitstream
+from a previous config being reused.
+
+**Build knobs** (set individually, or on top of a `CONFIG`; all `chparam`'d into the
 bitstream at synthesis time — the matching host-side flags must agree, see
 `tpu_host.py --help`):
 ```bash
@@ -437,15 +458,15 @@ cmake -DPICO_BOARD=pico2_ice -DPICO_PLATFORM=rp2350-riscv \
 ninja                                  # then flash pico2_ice_bridge.uf2 as in §1.4
 
 # 2. Gateware, matching link + clock + shape
-cd ../../fpga && make USE_SPI=1 CLK_FREQ=24000000 \
-     USE_MAC16_PAIR=1 ARRAY_ROWS=4 NUM_COLS=4 M_TILE=2 && make prog
+cd ../../fpga && make CONFIG=4x4m2_spi && make prog CONFIG=4x4m2_spi
 
 # 3. Host, matching all three
-python3 software/mnist/infer.py --port /dev/cu.usbmodemXXXX --link spi \
-     --rows 4 --cols 4 --m-tile 2 --test-n 20
+cd ../../.. && python3 software/mnist/infer.py --port /dev/cu.usbmodemXXXX \
+     --link spi --rows 4 --cols 4 --m-tile 2 --test-n 20
+make hw-test CONFIG=4x4m2_spi PORT=/dev/cu.usbmodemXXXX
 ```
 Keep the UART build around as a bisect fallback — if the SPI path misbehaves, reflashing
-the plain `make` gateware plus the `build/` firmware gets you back to a known-good state.
+`make CONFIG=2x2_uart` gateware plus the `build/` firmware gets you back to a known-good state.
 
 ### 5.2 MNIST digit classification demo
 

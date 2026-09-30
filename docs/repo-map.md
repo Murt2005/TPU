@@ -12,7 +12,7 @@ version; this is the complete one.
 | `Makefile` | Entry point for simulation, lint, the Verilator suite, the sim bridge and hardware tests; defines the shared file sets and includes `mk/` |
 | `mk/sim.mk` | Icarus testbenches: the RTL dependency graph (`DEPS_<name>`), the test list (built from `tests/sv/*_tb.sv`), and `make test` |
 | `mk/verilator.mk` | `make check-protocol`, `make lint` (4 configs), `make verilate-test` (12 combos), `make sim-bridge` |
-| `mk/hw.mk` | `make hw-test` |
+| `mk/hw.mk` | `make hw-test` and `make host-flags`, both taking `CONFIG=` |
 | `run_tests.sh` | Builds and runs every (or a named subset of) testbench, printing a pass/fail summary. Gets the test list from `make print-tests` |
 | `tpu_host.py` | Compatibility wrapper: `python3 tpu_host.py` runs the `tpu` CLI and `import tpu_host` still works, with or without the package installed |
 | `verilator.vlt` | Verilator lint waivers |
@@ -64,9 +64,11 @@ All four present the same byte-stream interface to `tpu_core`.
 |---|---|
 | `top/tpu_top.sv` | Top level: UART or SPI PHY + `tpu_core` + the power-on-reset counter |
 | `top/pe_pair.sv` | Two PEs in one hand-instantiated `SB_MAC16` (dual-8×8 signed). iCE40-only, so it lives here rather than in `rtl/` |
-| `fpga/Makefile` | yosys → nextpnr-ice40 → icepack → dfu-util; all build knobs live here |
+| `config.mk` | Loads a named configuration; shared by `fpga/Makefile` and the root `mk/hw.mk` |
+| `configs/*.mk` | One file per hardware-validated build: `2x2_uart`, `2x4_uart`, `2x4_spi`, `4x4m2_spi`, `4x4_spi` |
+| `fpga/Makefile` | yosys → nextpnr-ice40 → icepack → dfu-util; all build knobs live here (`CONFIG=` sets them at once) |
 | `fpga/tpu_top.pcf` | iCE40 package-pin constraints |
-| `fpga/tpu_top.{json,asc,bin}` | Generated artifacts (gitignored) |
+| `fpga/tpu_top.{json,asc,bin}`, `fpga/.knobs` | Generated artifacts and the settings stamp (gitignored) |
 | `firmware/` | RP2350 firmware — below |
 
 **`boards/pico2-ice/firmware/`**

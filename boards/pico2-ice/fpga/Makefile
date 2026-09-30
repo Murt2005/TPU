@@ -14,6 +14,11 @@
 ##    make time        Print a static timing report (post-PnR fMax)
 ##    make prog        Flash tpu_top.bin over USB DFU (board must be in DFU mode)
 ##    make clean       Remove build artifacts
+##    make show-config Print the knobs in effect and the matching host flags
+##
+##  Named configurations (../configs/*.mk) set every knob at once:
+##    make CONFIG=4x4_spi && make prog CONFIG=4x4_spi
+##  Knobs given on the command line still override the config.
 ##
 ##  CLK_FREQ:
 ##    tpu_top's `clk` pin is not a fixed crystal -- it's exported by the
@@ -35,6 +40,11 @@ CORE_DIR   := ../../../rtl/core
 PERIPH_DIR := ../../../rtl/peripherals
 TOP_DIR    := ../top
 TOP     := tpu_top
+
+# Named configuration (see ../config.mk); must come before the ?= defaults
+# below so the config's values win over them.
+PICO_CONFIG_DIR := ../configs
+include ../config.mk
 PCF     := tpu_top.pcf
 
 CLK_FREQ ?= 12000000
@@ -107,7 +117,17 @@ RTL := $(CORE_DIR)/tpu_pkg.sv \
        $(CORE_DIR)/tpu_core.sv \
        $(TOP_DIR)/tpu_top.sv
 
-.PHONY: all json asc bin stat util time prog clean
+.PHONY: all json asc bin stat util time prog clean show-config FORCE
+
+# Every knob that changes the netlist. The build outputs depend on a stamp
+# of these, so switching CONFIG (or any knob) rebuilds instead of leaving a
+# stale tpu_top.bin from the previous settings ready to flash.
+KNOBS := CLK_FREQ=$(CLK_FREQ) BAUD_RATE=$(BAUD_RATE) ARRAY_ROWS=$(ARRAY_ROWS) \
+         NUM_COLS=$(NUM_COLS) M_TILE=$(M_TILE) PSUM_WIDTH=$(PSUM_WIDTH) \
+         USE_SPI=$(USE_SPI) USE_MAC16_PAIR=$(USE_MAC16_PAIR) ABC_FLAGS=$(ABC_FLAGS)
+
+.knobs: FORCE
+	@echo '$(KNOBS)' | cmp -s - $@ || echo '$(KNOBS)' > $@
 
 all: $(TOP).bin
 
@@ -118,7 +138,7 @@ bin: $(TOP).bin
 # -dsp maps pe.sv's int8 multiplies onto the UP5K's 8 hard SB_MAC16 blocks
 # instead of building them from LUTs (~251 -> ~36 LUTs per PE, see
 # docs/performance.md §2); bit-exact, validated by tests/hw/hw_regression.py.
-$(TOP).json: $(RTL)
+$(TOP).json: $(RTL) .knobs
 	$(YOSYS) -q -p "\
 		read_verilog -sv $(RTL); \
 		chparam -set CLK_FREQ $(CLK_FREQ) $(TOP); \
@@ -171,5 +191,11 @@ time: $(TOP).asc
 prog: $(TOP).bin
 	$(DFU_UTIL) -d 1209:b1c0 -a $(DFU_ALT_FLASH) -D $(TOP).bin -R
 
+show-config:
+	@echo "config:     $(or $(CONFIG),(none -- defaults and command-line knobs))"
+	@echo "knobs:      $(KNOBS)"
+	@echo "firmware:   boards/pico2-ice/firmware/$(PICO_FIRMWARE)"
+	@echo "host flags: $(PICO_HOST_FLAGS)"
+
 clean:
-	$(RM) $(TOP).json $(TOP).asc $(TOP).bin
+	$(RM) $(TOP).json $(TOP).asc $(TOP).bin .knobs

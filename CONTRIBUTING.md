@@ -36,8 +36,9 @@ fails, so it is safe to gate on. Use `make list` to see individual targets, and
 `make test-<name>` / `make wave-<name>` to run or waveform-view one testbench.
 
 If you have the hardware, `make hw-test PORT=/dev/cu.usbmodemXXXX` replays the
-sim vectors against a flashed board (the `ARRAY_ROWS`/`NUM_COLS`/`M_TILE`/`LINK`
-knobs must match the bitstream).
+sim vectors against a flashed board. The host flags must match the
+bitstream; pass the same `CONFIG=<name>` it was built with
+(`boards/pico2-ice/configs/`), or the individual knobs.
 
 ## Adding a testbench
 

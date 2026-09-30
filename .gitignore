@@ -10,6 +10,7 @@ boards/*/fpga/*.json
 boards/*/fpga/*.asc
 boards/*/fpga/*.bin
 boards/*/fpga/*.aig
+boards/*/fpga/.knobs
 
 # Quartus (DE1-SoC / Cyclone V) build output
 boards/de1soc/fpga/db/

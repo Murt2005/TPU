@@ -35,7 +35,33 @@ nothing listening on the DFU interface `dfu-util` needs.
 
 Targets: `json` (synth) · `asc` (P&R) · `bin` (pack) · `stat` (yosys cell
 counts) · `util` (nextpnr utilisation) · `time` (icetime fMax) · `prog` (DFU
-flash) · `clean`.
+flash) · `show-config` · `clean`.
+
+### Named configurations
+
+`boards/pico2-ice/configs/*.mk` each set every knob above for one build that
+has been validated on hardware; `boards/pico2-ice/config.mk` loads them for
+both the FPGA build and the root `make hw-test`.
+
+| Config | Shape | Link, core clock | Firmware | Measured |
+|---|---|---|---|---|
+| `2x2_uart` | 2×2, M_TILE=2 | UART 1 Mbaud, 12 MHz | `build/` | default; ~316 ms/image |
+| `2x4_uart` | 2×4, M_TILE=2 | UART 1 Mbaud, 12 MHz | `build/` | ~240 ms/image |
+| `2x4_spi` | 2×4, M_TILE=2 | SPI, 24 MHz | `build-spi/` | 64.1 ms/image (offload) |
+| `4x4m2_spi` | 4×4, M_TILE=2, `pe_pair` | SPI, 24 MHz | `build-spi/` | 63.8 ms/image — fastest single-image |
+| `4x4_spi` | 4×4, M_TILE=4, `pe_pair` | SPI, 24 MHz | `build-spi/` | 80.3 ms/image single; the batching shape |
+
+```bash
+make CONFIG=4x4_spi && make prog CONFIG=4x4_spi   # in boards/pico2-ice/fpga/
+make show-config CONFIG=4x4_spi                    # knobs, firmware, host flags
+make hw-test CONFIG=4x4_spi PORT=...               # at the repo root
+make host-flags CONFIG=4x4_spi                     # at the repo root
+```
+
+A knob on the command line still overrides the config. The build outputs
+depend on a stamp of every knob (`.knobs`), so switching configs rebuilds
+instead of leaving the previous config's `tpu_top.bin` ready to flash.
+Adding a config is one new `.mk` file.
 
 If `make time` fails with `Can't find chipdb file for device 5k` — a Homebrew
 path quirk, not an RTL problem:
@@ -184,8 +210,7 @@ BOOTSEL press needed. See `boards/pico2-ice/firmware/README.md` for the per-file
 
 ```bash
 python3 tpu_host.py --port /dev/cu.usbmodemXXXX --selftest       # one golden vector
-make hw-test PORT=/dev/cu.usbmodemXXXX \
-     ARRAY_ROWS=4 NUM_COLS=4 M_TILE=4 LINK=spi                   # full regression
+make hw-test PORT=/dev/cu.usbmodemXXXX CONFIG=4x4_spi                   # full regression
 python3 software/mnist/infer.py --port /dev/cu.usbmodemXXXX --test-n 20   # end-to-end accuracy
 ```
 

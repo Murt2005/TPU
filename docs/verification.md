@@ -113,8 +113,7 @@ the hand-instantiated `SB_MAC16` primitives are all trusted on the basis of
 this suite passing bit-exactly, not on inspection.
 
 ```bash
-make hw-test PORT=/dev/cu.usbmodemXXXX \
-     ARRAY_ROWS=4 NUM_COLS=4 M_TILE=4 LINK=spi
+make hw-test PORT=/dev/cu.usbmodemXXXX CONFIG=4x4_spi
 ```
 
 14 cases: every simulation vector replayed, int8/int16 boundary cases, a
