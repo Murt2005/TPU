@@ -40,6 +40,7 @@ $(SIM_DIR) $(LOG_DIR):
 include mk/sim.mk
 include mk/verilator.mk
 include mk/hw.mk
+include mk/isa.mk
 
 list:
 	@echo "Available tests (tests/sv/<name>_tb.sv):"
