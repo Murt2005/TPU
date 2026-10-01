@@ -1,27 +1,6 @@
 #!/usr/bin/env python3
-"""Interactive MNIST drawing demo: draw a digit, run it through the real
-TPU (software/mnist/infer.py's multi-layer driver), watch the board's LED flip from
-green to blue when the on-chip inference completes.
-
-Draws directly into a numpy array in parallel with the visible Tkinter
-canvas strokes (no PIL/screen-capture dependency -- matches this repo's
-pyserial+numpy-only footprint), then normalizes the drawing the same way
-the MNIST dataset itself was prepared (crop to the digit's bounding box,
-scale the longest side to 20 px, paste into a 28x28 frame centered by
-center of mass) before the usual 28x28 -> IN_SIDExIN_SIDE downsample and
-mnist.infer.MNISTInference. Without that normalization the MLP -- which
-has no translation invariance -- sees off-center/full-frame drawings as
-pixel patterns it never trained on (a 3 px shift alone drops MNIST test
-accuracy from 97% to 23%).
-
-LED control rides the board's *second* USB-CDC port ("RP2040 logs",
-otherwise idle -- see boards/pico2-ice/firmware/main.c) as a one-byte 'g'/'b' command,
-entirely separate from the TPU protocol on the first port.
-
-Usage:
-    python3 software/mnist/draw_demo.py --port /dev/cu.usbmodemXXXX --led-port /dev/cu.usbmodemYYYY
-    python3 software/mnist/draw_demo.py --offline   # no board -- pure numpy backend, no LED
-"""
+"""draw a digit, classify it on the TPU, and flip the board's LED green -> blue
+over the otherwise-idle second CDC port"""
 import argparse
 import tkinter as tk
 
@@ -47,9 +26,7 @@ def _stamp_circle(img, cx, cy, r, value=255):
 
 
 def _resize_block_mean(img, out_h, out_w):
-    """Block-average a uint8 image to (out_h, out_w) float32 in [0,1] --
-    train_mnist.downsample()'s pooling, generalized to rectangular shapes.
-    Strokes come out antialiased like real MNIST rather than hard-edged."""
+    """train_mnist.downsample()'s pooling for any shape; keeps strokes antialiased"""
     h, w = img.shape
     edges_r = np.round(np.linspace(0, h, out_h + 1)).astype(int)
     edges_c = np.round(np.linspace(0, w, out_w + 1)).astype(int)
@@ -64,14 +41,9 @@ def _resize_block_mean(img, out_h, out_w):
 
 
 def normalize_drawing(img, box=20, side=28):
-    """MNIST-style normalization of a drawing (any resolution, 0=background):
-    crop to the ink's bounding box, scale the longest side to `box` px, paste
-    into a side x side frame positioned so the center of mass lands at the
-    frame's center -- the same preprocessing the MNIST digits were prepared
-    with, which the model therefore expects. Returns (side, side) uint8.
-
-    The caller guarantees img has at least one nonzero pixel.
-    """
+    """crop, scale to `box` px and center by mass, as MNIST was prepared: the MLP has
+    no translation invariance (a 3 px shift drops accuracy from 97% to 23%).
+    img must have at least one nonzero pixel"""
     ys, xs = np.nonzero(img)
     crop = img[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
     h, w = crop.shape

@@ -1,6 +1,6 @@
 `timescale 1ns / 1ps
 
-// TPU Core: board-neutral sequencer + datapath
+// TPU core: board-neutral sequencer + datapath
 module tpu_core #(
     parameter int WEIGHT_WIDTH = 8,
     parameter int FIFO_DEPTH   = 4,   // must be a power of 2 & >= ARRAY_ROWS
@@ -21,7 +21,7 @@ module tpu_core #(
     input  logic       tx_busy
 );
 
-    //  unified_buffer address width
+    // unified_buffer address width
     localparam int UB_ADDR_W = (M_TILE > 1) ? $clog2(M_TILE) : 1;
 
     // weight_fifo
@@ -124,7 +124,7 @@ module tpu_core #(
     logic signed [NUM_COLS-1:0][PSUM_WIDTH-1:0] biased_row;
     logic               biased_valid;
 
-    // Activation write port is tied off for now
+    // layer-to-layer write-back port, not wired up yet
     logic signed [ARRAY_ROWS-1:0][7:0] ub_act_dummy;
     assign ub_act_dummy = '0;
 

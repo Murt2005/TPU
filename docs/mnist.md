@@ -105,7 +105,7 @@ Add `--rows/--cols/--m-tile` and `--link` to match the flashed bitstream.
 
 | File | What |
 |---|---|
-| `software/mnist/train_mnist.py` | Train + quantize; the header comment is the authoritative note on all the constraints above |
+| `software/mnist/train_mnist.py` | Train + quantize, around the constraints in §2–3 |
 | `software/mnist/infer.py` | Multi-layer driver; `HardwareBackend` (via `tpu.TPU.matmul_tiled()`) and `OfflineBackend` (numpy), plus `--compare` and `--no-offload` |
 | `software/mnist/draw_demo.py` | Tkinter drawing demo; `--offline` runs boardless |
 | `software/mnist/model/mnist_2x2_int8.npz` | Committed pre-trained weights |

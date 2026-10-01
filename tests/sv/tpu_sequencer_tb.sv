@@ -1,9 +1,7 @@
 `timescale 1ns / 1ps
 
-// tpu_sequencer_tb — end-to-end sequencer test.
-// Uses direct rx_data/rx_valid injection; tx_busy held low (instant accept).
-// Avoids: dynamic arrays, open-array task args, `return` in tasks (iverilog limits).
-
+// end-to-end sequencer test via direct rx_data/rx_valid injection, tx_busy held low
+// avoids dynamic arrays, open-array task args and `return` in tasks (iverilog limits)
 module tpu_sequencer_tb;
 
     localparam int WEIGHT_WIDTH = 8;
@@ -144,18 +142,13 @@ module tpu_sequencer_tb;
         rx_valid = 1'b0;
     endtask
 
-    // STREAM_RUN payload bytes are sent paced: the sequencer spends one
-    // pipeline pass (~25 cycles) between tiles NOT consuming rx bytes, and
-    // relies on the UART byte cadence (10*CLK_FREQ/BAUD ≈ 1042 cycles at
-    // 12 MHz/115200) to cover that window. host_send_byte's back-to-back
-    // 2-cycle spacing would violate the real link's timing and drop bytes;
-    // 60 cycles/byte models the cadence floor the design actually assumes.
+    // pace STREAM_RUN bytes at 60 cycles: the sequencer ignores RX for a pass between tiles
     task automatic sr_send_byte(input logic [7:0] b);
         host_send_byte(b);
         repeat (60) @(posedge clk);
     endtask
 
-    // One STREAM_RUN tile: weights in natural row-major order, then acts.
+    // one STREAM_RUN tile: weights in natural row-major order, then acts
     task automatic sr_send_tile(
         input logic signed [7:0] w00, w01, w10, w11,
         input logic signed [7:0] a00, a01, a10, a11
@@ -166,7 +159,7 @@ module tpu_sequencer_tb;
         sr_send_byte(8'(a10)); sr_send_byte(8'(a11));
     endtask
 
-    // Simulate a UART framing error: uart_rx latches rx_error (no rx_valid
+    // simulate a UART framing error: uart_rx latches rx_error (no rx_valid
     // for the corrupted byte) and clears it on the next good byte.
     task automatic inject_framing_error;
         @(posedge clk); #1;
@@ -175,11 +168,7 @@ module tpu_sequencer_tb;
         rx_error_in = 1'b0;
     endtask
 
-    // TX byte capture. Concurrent: a response can start while the stimulus
-    // side is still pacing out a STREAM_RUN frame's bytes (tx_busy is tied
-    // low, so the whole response fires within a few cycles) — polling for
-    // tx_valid only after sending would miss those 1-cycle pulses. Capture
-    // every byte as it happens; collect_n just waits for the count.
+    // capture TX bytes concurrently: a response can start while a STREAM_RUN frame is still going out
     logic [7:0] rx_buf [10];   // big enough for longest RUN response
     integer     cap_idx = 0;
 
@@ -190,9 +179,6 @@ module tpu_sequencer_tb;
         end
     end
 
-    // Wait until n response bytes have been captured, then reset the
-    // capture index (protocol is strictly request/response, so each
-    // response is fully consumed before the next command is sent).
     task automatic collect_n(integer n);
         integer timeout;
         timeout = 0;
@@ -209,7 +195,7 @@ module tpu_sequencer_tb;
         cap_idx = 0;
     endtask
 
-    // Sends LOAD_WEIGHTS, LOAD_BIAS, LOAD_ACT, RUN, then checks 10-byte response
+    // sends LOAD_WEIGHTS, LOAD_BIAS, LOAD_ACT, RUN, then checks 10-byte response
     task automatic do_compute(
         input logic signed [7:0] w00, w01, w10, w11,
         input logic signed [15:0] b0, b1,
@@ -219,7 +205,7 @@ module tpu_sequencer_tb;
     );
         logic signed [15:0] gr0c0, gr0c1, gr1c0, gr1c1;
 
-        // LOAD_WEIGHTS: CMD=01, LEN=4, [w10,w11,w00,w01]
+        // load_weights: cmd=01, len=4, [w10,w11,w00,w01]
         host_send_byte(8'h01);
         host_send_byte(8'h04);
         host_send_byte(8'(w10));
@@ -245,7 +231,7 @@ module tpu_sequencer_tb;
             errors++;
         end
 
-        // LOAD_ACT: CMD=03, LEN=4, [a00,a01,a10,a11]
+        // load_act: cmd=03, len=4, [a00,a01,a10,a11]
         host_send_byte(8'h03);
         host_send_byte(8'h04);
         host_send_byte(8'(a00));
@@ -285,11 +271,7 @@ module tpu_sequencer_tb;
         repeat (20) @(posedge clk);
     endtask
 
-    // Sends LOAD_WEIGHTS + LOAD_ACT, then RUN with a 1-byte tile-flags
-    // payload (LEN=1): flags[0]=TILE_FIRST, flags[1]=TILE_LAST. When
-    // last=0, expects a bare ACK (STATUS_OK, LEN=0) -- bias/activation never
-    // fire, so there is no result to check yet. When last=1, expects the
-    // usual 8-byte result, checked against the given expected rows.
+    // RUN with a flags byte; last=0 expects a bare ACK
     task automatic do_tiled_run(
         input logic signed [7:0] w00, w01, w10, w11,
         input logic signed [7:0] a00, a01, a10, a11,
@@ -300,7 +282,7 @@ module tpu_sequencer_tb;
         logic [7:0] flags;
         logic signed [15:0] gr0c0, gr0c1, gr1c0, gr1c1;
 
-        // LOAD_WEIGHTS: CMD=01, LEN=4, [w10,w11,w00,w01]
+        // load_weights: cmd=01, len=4, [w10,w11,w00,w01]
         host_send_byte(8'h01);
         host_send_byte(8'h04);
         host_send_byte(8'(w10));
@@ -313,7 +295,7 @@ module tpu_sequencer_tb;
             errors++;
         end
 
-        // LOAD_ACT: CMD=03, LEN=4, [a00,a01,a10,a11]
+        // load_act: cmd=03, len=4, [a00,a01,a10,a11]
         host_send_byte(8'h03);
         host_send_byte(8'h04);
         host_send_byte(8'(a00));
@@ -364,10 +346,7 @@ module tpu_sequencer_tb;
         repeat (20) @(posedge clk);
     endtask
 
-    // RUN_TILE (0x06): weights + acts + flags in ONE frame. Weights go over
-    // the wire in NATURAL row-major order (w00,w01,w10,w11) -- the sequencer
-    // does the bottom-first reorder internally, unlike legacy LOAD_WEIGHTS.
-    // When last=0 expects a bare ACK; when last=1 checks the 8-byte result.
+    // RUN_TILE: weights in natural row-major order; last=0 expects a bare ACK
     task automatic do_run_tile(
         input logic signed [7:0] w00, w01, w10, w11,
         input logic signed [7:0] a00, a01, a10, a11,
@@ -435,17 +414,15 @@ module tpu_sequencer_tb;
 
         $display("\n=== Starting tpu_sequencer Testbench ===\n");
 
-        // Test 1: happy path
-        // W=[[4,5],[2,3]], A=[[1,2],[3,4]], bias=[100,200]
-        // A@W = [[8,11],[20,27]] + bias = [[108,211],[120,227]], ReLU same
+        // test 1: W=[[4,5],[2,3]], A=[[1,2],[3,4]], bias=[100,200] -> [[108,211],[120,227]]
         $display("[Test 1] Happy path: A@W + bias + ReLU");
         do_compute(4,5,2,3, 16'sd100,16'sd200, 1,2,3,4, 16'sd108,16'sd211,16'sd120,16'sd227, "T1");
 
-        // Test 2: zero weights, negative bias → all ReLU clamped to 0
+        // test 2: zero weights, negative bias → all ReLU clamped to 0
         $display("[Test 2] Zero weights + neg bias → all zeros");
         do_compute(0,0,0,0, -16'sd10,-16'sd20, 0,0,0,0, 16'sd0,16'sd0,16'sd0,16'sd0, "T2");
 
-        // Test 3: RESET command
+        // test 3: RESET command
         $display("[Test 3] RESET command");
         host_send_byte(8'h05);
         host_send_byte(8'h00);
@@ -458,11 +435,11 @@ module tpu_sequencer_tb;
         end
         repeat (10) @(posedge clk);
 
-        // Post-reset compute should still work
+        // post-reset compute should still work
         $display("[Test 3b] Post-reset compute");
         do_compute(4,5,2,3, 16'sd100,16'sd200, 1,2,3,4, 16'sd108,16'sd211,16'sd120,16'sd227, "T3b");
 
-        // Test 4: unknown CMD → STATUS_ERR. 0xEE, not 0xFF: 0xFF is CMD_NOP,
+        // test 4: unknown CMD → STATUS_ERR. 0xEE, not 0xFF: 0xFF is CMD_NOP,
         // the SPI read-poll filler, silently ignored in S_IDLE (see below).
         $display("[Test 4] Unknown CMD 0xEE → STATUS_ERR");
         host_send_byte(8'hEE);
@@ -476,9 +453,7 @@ module tpu_sequencer_tb;
         end
         repeat (10) @(posedge clk);
 
-        // Test 4b: CMD_NOP (0xFF) in S_IDLE is ignored — no response, and the
-        // next real command still parses correctly (its first byte must be
-        // taken as CMD, not as a stale LEN).
+        // test 4b: NOP is ignored and the next command still parses
         $display("[Test 4b] CMD_NOP 0xFF ignored in S_IDLE");
         host_send_byte(8'hFF);
         host_send_byte(8'hFF);
@@ -493,34 +468,16 @@ module tpu_sequencer_tb;
         end
         do_compute(4,5,2,3, 16'sd100,16'sd200, 1,2,3,4, 16'sd108,16'sd211,16'sd120,16'sd227, "T4b post-NOP");
 
-        // Test 5: negative arithmetic + ReLU
-        // W=[[-1,-2],[-3,-4]], A=[[-1,1],[2,-2]], bias=[0,0]
-        // row0: (-1)(-1)+(1)(-3)=-2+( -3)? Wait:
-        // A@W: A=acts, W=weights. MMU computes A*W.
-        // row0=[a00,a01]=[-1,1], W col0=[w00,w10]=[-1,-3], W col1=[w01,w11]=[-2,-4]
-        // result[0][0] = -1*-1 + 1*-3 = 1-3 = -2 → ReLU → 0
-        // result[0][1] = -1*-2 + 1*-4 = 2-4 = -2 → ReLU → 0
-        // row1=[a10,a11]=[2,-2]
-        // result[1][0] = 2*-1 + (-2)*-3 = -2+6 = 4 → ReLU → 4
-        // result[1][1] = 2*-2 + (-2)*-4 = -4+8 = 4 → ReLU → 4
+        // test 5: negative arithmetic, A@W = [[-2,-2],[4,4]] -> [[0,0],[4,4]]
         $display("[Test 5] Negative arithmetic + ReLU clamp");
         do_compute(-1,-2,-3,-4, 16'sd0,16'sd0, -1,1,2,-2, 16'sd0,16'sd0,16'sd4,16'sd4, "T5");
 
-        // Test 6: identity matrix
-        // W=[[1,0],[0,1]], A=[[10,20],[30,40]], bias=[0,0]
-        // → [[10,20],[30,40]]
+        // test 6: identity
         $display("[Test 6] Identity weight matrix");
         do_compute(1,0,0,1, 16'sd0,16'sd0, 10,20,30,40, 16'sd10,16'sd20,16'sd30,16'sd40, "T6");
 
-        // Test 7: K-dim tiling over the wire protocol.
-        // Y = A_full @ W_full, A_full 2x4, W_full 4x2, split into two K-tiles:
-        //   K-tile0: A0=[[1,2],[5,6]]  W0=[[1,0],[0,1]]  -> A0@W0=[[1,2],[5,6]]
-        //   K-tile1: A1=[[3,4],[7,8]]  W1=[[2,0],[0,2]]  -> A1@W1=[[6,8],[14,16]]
-        //   Y = [[7,10],[19,22]], bias=[0,0], all positive -> ReLU no-op.
-        // Pass 1 (first=1,last=0) must return a bare ACK; pass 2
-        // (first=0,last=1) adds to the pass-1 running sum and returns the
-        // real result -- proving hardware-side K-tiling works end-to-end
-        // over the UART command protocol, not just at the datapath level.
+        // test 7: K-tiling over the wire, two 2x2 K-tiles -> [[7,10],[19,22]];
+        // pass 1 returns a bare ACK
         $display("[Test 7] K-dim tiling over the wire (LEN=1 RUN flags)");
         host_send_byte(8'h02);   // LOAD_BIAS = [0,0]
         host_send_byte(8'h04);
@@ -537,9 +494,7 @@ module tpu_sequencer_tb;
         do_tiled_run(2,0,0,2, 3,4,7,8, 1'b0, 1'b1,
                      16'sd7,16'sd10,16'sd19,16'sd22, "T7 K-tile1");
 
-        // Test 8: RUN_TILE single-shot — the exact worked example from
-        // docs/protocol.md §3: bias=[100,200] preloaded, then
-        // one 06 09 03 ... frame returning AA 08 6C 00 D3 00 78 00 E3 00.
+        // test 8: RUN_TILE single-shot, bias [100,200] preloaded
         $display("[Test 8] RUN_TILE single frame (doc §3.1 worked example)");
         host_send_byte(8'h02);   // LOAD_BIAS = [100,200]
         host_send_byte(8'h04);
@@ -553,7 +508,7 @@ module tpu_sequencer_tb;
         do_run_tile(4,5,2,3, 1,2,3,4, 1'b1, 1'b1,
                     16'sd108,16'sd211,16'sd120,16'sd227, "T8 RUN_TILE");
 
-        // Test 9: K-dim tiling via RUN_TILE — same math as Test 7, but one
+        // test 9: K-dim tiling via RUN_TILE — same math as test 7, but one
         // frame per K-tile instead of three, and natural-order weights.
         $display("[Test 9] K-dim tiling via RUN_TILE frames");
         host_send_byte(8'h02);   // LOAD_BIAS = [0,0]
@@ -570,7 +525,7 @@ module tpu_sequencer_tb;
         do_run_tile(2,0,0,2, 3,4,7,8, 1'b0, 1'b1,
                     16'sd7,16'sd10,16'sd19,16'sd22, "T9 K-tile1");
 
-        // Test 10: framing error mid-frame → explicit STATUS_ERR (not a
+        // test 10: framing error mid-frame → explicit STATUS_ERR (not a
         // silent drop), and the sequencer recovers for the next command.
         $display("[Test 10] UART framing error mid-frame -> STATUS_ERR + recovery");
         host_send_byte(8'h01);   // CMD_LOAD_WEIGHTS
@@ -589,11 +544,7 @@ module tpu_sequencer_tb;
         $display("[Test 10b] Post-framing-error compute");
         do_compute(4,5,2,3, 16'sd100,16'sd200, 1,2,3,4, 16'sd108,16'sd211,16'sd120,16'sd227, "T10b");
 
-        // Test 11: STREAM_RUN — the doc §3.2 worked example (plus the flags
-        // byte this implementation adds): two identity-weight tiles in ONE
-        // frame, datapath accumulates, single response.
-        //   tile0: W=I, A=[[1,2],[3,4]]; tile1: W=I, A=[[5,6],[7,8]]
-        //   Y = [[6,8],[10,12]], bias=[0,0]
+        // test 11: two identity tiles in one STREAM_RUN frame -> [[6,8],[10,12]]
         $display("[Test 11] STREAM_RUN: 2 tiles, one frame, one response");
         host_send_byte(8'h02);   // LOAD_BIAS = [0,0]
         host_send_byte(8'h04);
@@ -626,9 +577,7 @@ module tpu_sequencer_tb;
         end
         repeat (20) @(posedge clk);
 
-        // Test 12: a K-run spanning TWO STREAM_RUN frames via the flags
-        // byte (first=1,last=0 then first=0,last=1) — the multi-frame
-        // continuation MNIST's K=144 layer needs. Same math as Test 7.
+        // test 12: a K-run across two STREAM_RUN frames, same math as test 7
         $display("[Test 12] STREAM_RUN K-run across two frames (flags chunking)");
         host_send_byte(8'h07);
         host_send_byte(8'h0A);   // LEN = 2 + 1*8 = 10
@@ -661,7 +610,7 @@ module tpu_sequencer_tb;
         end
         repeat (20) @(posedge clk);
 
-        // Test 13: malformed STREAM_RUN headers answer STATUS_ERR up front.
+        // test 13: malformed STREAM_RUN headers answer STATUS_ERR up front
         $display("[Test 13] STREAM_RUN header validation");
         host_send_byte(8'h07);
         host_send_byte(8'h0A);   // LEN says 1 tile...
@@ -682,7 +631,7 @@ module tpu_sequencer_tb;
             $error("[FAIL] T13b LEN mismatch: expected STATUS_ERR, got 0x%02X", rx_buf[0]);
             errors++;
         end else $display("[PASS] T13b: LEN/K_TILES mismatch rejected");
-        // The 9 unsent frame bytes were never transmitted, so the sequencer
+        // the 9 unsent frame bytes were never transmitted, so the sequencer
         // is back in S_IDLE — a normal compute must still work.
         repeat (10) @(posedge clk);
         $display("[Test 13c] Post-reject compute");

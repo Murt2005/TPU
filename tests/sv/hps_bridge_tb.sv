@@ -1,13 +1,6 @@
 `timescale 1ns / 1ps
 
-// hps_bridge_tb — unit test for the DE1-SoC HPS Avalon-MM host PHY.
-//
-// Drives the Avalon slave the way the ARM HPS would (register writes/reads over
-// the lightweight bridge) and checks the byte-stream side the sequencer sees:
-//   - host -> FPGA: a write to TXDATA emits one rx_valid pulse with the byte
-//   - FPGA -> host: a sequencer tx_valid raises tx_busy; the byte is read back
-//     from RXDATA; the read clears tx_busy; STATUS reflects RX_AVAIL correctly
-//   - the tx holding register is not overwritten while a byte is pending
+// hps_bridge: drives the avalon slave the way the HPS would and checks the byte stream
 module hps_bridge_tb;
 
     logic        clk = 0;
@@ -46,7 +39,7 @@ module hps_bridge_tb;
         else begin $display("[FAIL] %s", msg); errors++; end
     endtask
 
-    // One Avalon write (host -> slave), returns after the clock edge that
+    // one avalon write (host -> slave), returns after the clock edge that
     // latches it.
     task avs_wr(input [1:0] a, input [31:0] d);
         @(negedge clk);
@@ -58,7 +51,7 @@ module hps_bridge_tb;
         avs_write     = 1'b0;
     endtask
 
-    // One Avalon read (fixed read latency 1): assert read, and one edge later
+    // one avalon read (fixed read latency 1): assert read, and one edge later
     // avs_readdata holds the value.
     task avs_rd(input [1:0] a, output [31:0] d);
         @(negedge clk);
@@ -79,20 +72,20 @@ module hps_bridge_tb;
         repeat (3) @(posedge clk);
         @(negedge clk); reset = 0;
 
-        // --- host -> FPGA: write TXDATA, expect a single rx_valid pulse ---
+        // host -> FPGA: write TXDATA, expect a single rx_valid pulse
         avs_wr(REG_TXDATA, 32'h0000_005A);
         // after the write edge, rx_valid should be high for exactly one cycle
         check(rx_valid === 1'b1 && rx_data === 8'h5A, "TXDATA write -> rx_valid + rx_data=0x5A");
         @(posedge clk); @(negedge clk);
         check(rx_valid === 1'b0, "rx_valid deasserts after one cycle");
 
-        // --- STATUS idle: TX_SPACE=1, RX_AVAIL=0 ---
+        // STATUS idle: TX_SPACE=1, RX_AVAIL=0
         avs_rd(REG_STATUS, rd);
         check(rd[0] === 1'b1, "STATUS TX_SPACE=1 when idle");
         check(rd[1] === 1'b0, "STATUS RX_AVAIL=0 when no tx byte pending");
         check(tx_busy === 1'b0, "tx_busy low when idle");
 
-        // --- FPGA -> host: sequencer offers a byte ---
+        // FPGA -> host: sequencer offers a byte
         @(negedge clk);
         tx_data  = 8'hA5;
         tx_valid = 1'b1;
@@ -105,7 +98,7 @@ module hps_bridge_tb;
         avs_rd(REG_STATUS, rd);
         check(rd[1] === 1'b1, "STATUS RX_AVAIL=1 with a tx byte pending");
 
-        // --- holding register must not be overwritten while pending ---
+        // holding register must not be overwritten while pending
         @(negedge clk);
         tx_data  = 8'h3C;
         tx_valid = 1'b1;

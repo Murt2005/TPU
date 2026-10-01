@@ -17,9 +17,7 @@ module bias_tb;
     int errors = 0;
     int row_idx = 0;
 
-    // Expected output rows, populated per-test below and consumed in order
-    // by the self-checking monitor. Sized generously; only the first
-    // `expected_count` entries are checked.
+    // expected rows, consumed in order by the monitor
     localparam int MAX_ROWS = 16;
     logic signed [PSUM_WIDTH-1:0] expected_rows [MAX_ROWS][NUM_COLS];
     int expected_count = 0;
@@ -31,7 +29,7 @@ module bias_tb;
 
     always #5 clk = ~clk;
 
-    // Self-checking monitor: fires whenever a biased row comes out
+    // self-checking monitor: fires whenever a biased row comes out
     always @(posedge clk) begin
         if (!reset && out_row_valid) begin
             if (row_idx >= expected_count) begin
@@ -52,9 +50,6 @@ module bias_tb;
         end
     end
 
-    // Drive one row in on a posedge-aligned cycle (mirrors accumulator_tb
-    // style of stimulating on @(negedge clk) so values are stable for the
-    // following posedge sample).
     task automatic drive_row(input logic signed [PSUM_WIDTH-1:0] row0,
                               input logic signed [PSUM_WIDTH-1:0] row1,
                               input logic signed [PSUM_WIDTH-1:0] bias0,
@@ -86,29 +81,29 @@ module bias_tb;
 
         $display("\n Starting bias Testbench \n");
 
-        // Test 1: basic positive bias add
+        // test 1: basic positive bias add
         $display(" Test 1: basic positive bias add ");
         push_expected(16'sd13, 16'sd16); // 8+5, 11+5
         drive_row(16'sd8, 16'sd11, 16'sd5, 16'sd5);
 
-        // Let it drain through the register and settle before next test
+        // let it drain through the register and settle before next test
         repeat (2) @(negedge clk);
 
-        // Test 2: negative bias, including a sign flip to negative
+        // test 2: negative bias, including a sign flip to negative
         $display(" Test 2: negative bias (sign flip) ");
         push_expected(-16'sd2, 16'sd0); // 8 + (-10) = -2, 11 + (-11) = 0
         drive_row(16'sd8, 16'sd11, -16'sd10, -16'sd11);
 
         repeat (2) @(negedge clk);
 
-        // Test 3: zero bias is a pure pass-through
+        // test 3: zero bias is a pure pass-through
         $display(" Test 3: zero bias pass-through ");
         push_expected(16'sd20, 16'sd27);
         drive_row(16'sd20, 16'sd27, 16'sd0, 16'sd0);
 
         repeat (2) @(negedge clk);
 
-        // Test 4: back-to-back rows, different bias per column each cycle,
+        // test 4: back-to-back rows, different bias per column each cycle,
         // no bubble cycle in between (pipeline must not stall or merge rows)
         $display(" Test 4: back-to-back rows, no stall ");
         push_expected(16'sd9,  16'sd1);   // row A: 8+1, 11+(-10)
@@ -127,7 +122,7 @@ module bias_tb;
         in_row_valid = 1'b0;
         repeat (2) @(negedge clk);
 
-        // Test 5: in_row_valid low must not produce an output row, even
+        // test 5: in_row_valid low must not produce an output row, even
         // if in_row / in_bias happen to hold stale nonzero data
         $display(" Test 5: invalid input produces no output ");
         in_row[0] = 16'sd99; in_row[1] = 16'sd99;
@@ -143,22 +138,8 @@ module bias_tb;
             $display("[PASS] No spurious row while in_row_valid low");
         end
 
-        // Test 6: reset held mid-stream with no row in flight.
-        //
-        // Earlier draft of this test tried to race reset against an
-        // in-flight row to prove suppression, but that race is ambiguous
-        // by construction: the monitor observes out_row_valid one cycle
-        // after the DUT's always_ff computes it (separate always blocks,
-        // NBA semantics), so asserting reset "on the next edge" after
-        // driving a row does NOT actually prevent that row from being
-        // observed -- it only prevents the row *after* it. Trying to
-        // test the wrong edge boundary here just encodes a fragile
-        // implementation detail rather than a real correctness property.
-        //
-        // What's actually worth testing: while reset is held (with the
-        // pipeline idle), out_row_valid must stay low the whole time, and
-        // operation must resume cleanly the cycle after reset drops --
-        // with no stale or spurious row appearing from the reset itself.
+        // test 6: out_row_valid stays low while reset is held, and nothing spurious follows it
+        // racing reset against an in-flight row only tests NBA ordering, so it isn't attempted
         $display(" Test 6: reset mid-stream (idle pipeline) ");
         reset = 1'b1;
         in_row_valid = 1'b0;
@@ -185,9 +166,7 @@ module bias_tb;
             $display("[PASS] No spurious row during reset");
         end
 
-        // Test 7: post-reset operation resumes normally (matches the
-        // accumulator's real A@W output: [[8,11],[20,27]] with a uniform
-        // +100 bias, the kind of scenario bias_relu / tpu_core will use)
+        // test 7: normal operation after reset
         $display(" Test 7: post-reset normal operation ");
         @(negedge clk);
         push_expected(16'sd108, 16'sd111);

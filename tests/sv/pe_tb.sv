@@ -1,7 +1,7 @@
 `timescale 1ns / 1ps
 
 module pe_tb;
-    // Clock & Reset
+    // clock & reset
     logic                clk;
     logic                reset;
 
@@ -26,11 +26,11 @@ module pe_tb;
 
     pe uut (.*);
 
-    // Clock (100MHz clock period = 10ns)
+    // clock (100MHz clock period = 10ns)
     always #5 clk = ~clk;
 
-    // SELF-CHECKING COMPUTE TASK
-    // Drive the inputs on one clock cycle and read back the output on the subsequent clock cycle.
+    // self-checking compute task
+    // drive the inputs on one clock cycle and read back the output on the subsequent clock cycle.
     task check_compute(
         input logic signed [7:0]  test_activation,
         input logic               test_act_valid,
@@ -89,7 +89,7 @@ module pe_tb;
         @(posedge clk);
         #1 reset = 0;
 
-        // Test 1: load weight and turn off loading_phase (Weight = 5)
+        // test 1: load weight and turn off loading_phase (weight = 5)
         $display("--- Test 1: loading Weight and capturing ---");
         @(posedge clk);
         #1;
@@ -105,30 +105,30 @@ module pe_tb;
         in_weight       = 8'sd0;
         in_weight_valid = 1'b0;
 
-        // Test 2: compute phase tests
+        // test 2: compute phase tests
         $display("\n--- Test 2: compute phase tests ---");
         
-        // Test Case A: Normal Positive Values (5 * 3 + 10 = 25)
-        // Format: check_compute(act, act_v, psum, psum_v, exp_psum, exp_psum_v, exp_act, exp_act_v)
+        // test case A: normal positive values (5 * 3 + 10 = 25)
+        // format: check_compute(act, act_v, psum, psum_v, exp_psum, exp_psum_v, exp_act, exp_act_v)
         check_compute(8'sd3, 1'b1, 16'sd10, 1'b1, 16'sd25, 1'b1, 8'sd3, 1'b1);
         
-        // Test Case B: Negative Activation (5 * -2 + 0 = -10)
+        // test case B: negative activation (5 * -2 + 0 = -10)
         check_compute(-8'sd2, 1'b1, 16'sd0, 1'b1, -16'sd10, 1'b1, -8'sd2, 1'b1);
         
-        // Test Case C: Valid Bubble Handling
-        // Datapath should reject computation, assert 0 on outputs, and de-assert valid tags
+        // test case C: valid bubble handling
+        // datapath should reject computation, assert 0 on outputs, and de-assert valid tags
         check_compute(8'sd4, 1'b0, 16'sd20, 1'b1, 16'sd20, 1'b1, 8'sd4, 1'b0);
 
-        // Test Case D: Valid Bubble Handling
+        // test case D: valid bubble handling
         check_compute(8'sd6, 1'b1, 16'sd10, 1'b0, 16'sd30, 1'b1, 8'sd6, 1'b1);
         
-        // Test Case D: Zero Handling (5 * 0 + 100 = 100)
+        // test case D: zero handling (5 * 0 + 100 = 100)
         check_compute(8'sd0, 1'b1, 16'sd100, 1'b1, 16'sd100, 1'b1, 8'sd0, 1'b1);
         
-        // Test Case E: Boundary Processing - Max positive 8-bit input (5 * 127 + 0 = 635)
+        // test case E: boundary processing - max positive 8-bit input (5 * 127 + 0 = 635)
         check_compute(8'sd127, 1'b1, 16'sd0, 1'b1, 16'sd635, 1'b1, 8'sd127, 1'b1);
 
-        // Test 3: compute phase tests with negative weight
+        // test 3: compute phase tests with negative weight
         $display("\n--- Test 3: compute phase with negative weight ---");
         @(posedge clk);
         #1;
@@ -149,7 +149,7 @@ module pe_tb;
         // negative weight * negative activation -> positive: (-4 * -3) + 0 = 12
         check_compute(-8'sd3, 1'b1, 16'sd0, 1'b1, 16'sd12, 1'b1, -8'sd3, 1'b1); 
 
-        // Test 4: loading phase without capturing weights (pure pass through)
+        // test 4: loading phase without capturing weights (pure pass through)
         $display("\n--- Test 4: load weights without capturing");
         @(posedge clk);
         #1;
@@ -176,7 +176,7 @@ module pe_tb;
         // weight_reg should still be -4, NOT overwritten to 9: (-4*2)+0 = -8
         check_compute(8'sd2, 1'b1, 16'sd0, 1'b1, -16'sd8, 1'b1, 8'sd2, 1'b1);
 
-        // Return datapath variables back to idle
+        // return datapath variables back to idle
         @(posedge clk);
         #1;
         in_activation_valid  = 1'b0;
@@ -196,7 +196,7 @@ module pe_tb;
         $finish;
     end
 
-    // --- WAVEFORM LOGGING ---
+    // waveform logging
     initial begin
         $dumpfile("pe_simulation.vcd");
         $dumpvars(0, pe_tb);

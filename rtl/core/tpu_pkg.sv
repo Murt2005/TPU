@@ -1,6 +1,6 @@
 `timescale 1ns / 1ps
 
-// TPU pkg: shared host<->FPGA wire-protocol constants
+// TPU package: host<->FPGA wire-protocol constants
 package tpu_pkg;
 
     localparam logic [7:0] CMD_LOAD_WEIGHTS = 8'h01;

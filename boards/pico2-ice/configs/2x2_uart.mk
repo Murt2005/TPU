@@ -1,6 +1,4 @@
-# 2x2 array, UART link at 1 Mbaud, 12 MHz core. The default build and the
-# bisect fallback. Measured: 2,138 LCs (40%), 4/8 DSP, 30.66 MHz fMax;
-# make hw-test 14/14; MNIST ~316 ms/image.
+# default build and the bisect fallback
 ARRAY_ROWS     := 2
 NUM_COLS       := 2
 M_TILE         := 2

@@ -1,44 +1,6 @@
 #!/usr/bin/env python3
-"""Run TinyStories (GPT-Neo) with its linear layers on the TPU.
-
-    # against the Verilator model
-    make sim-bridge
-    python3 software/llm/infer.py --link sim --port sim/verilator/bridge/tb_tpu_top \
-        --rows 8 --cols 8 --m-tile 4 --psum-width 32 \
-        --prompt "Once upon a time" --n 20
-
-    # no accelerator at all -- same arithmetic, pure numpy
-    python3 software/llm/infer.py --offline --prompt "Once upon a time" --n 20
-
-    # both, side by side
-    python3 software/llm/infer.py --link sim --port ... --compare
-
-What runs where
----------------
-The TPU computes `Y = A @ W` for the six linear layers per block (q, k, v,
-out_proj, mlp.c_fc, mlp.c_proj) plus the tied lm_head. Everything else --
-embedding lookup, LayerNorm, softmax, GELU, residuals -- runs on the host,
-because the hardware has exactly one operation and it is a matmul.
-
-Attention's own two matmuls (QK^T and AV) stay on the host by default. They
-are real matmuls and --tpu-attention will put them on the array, but at
-d_head=4 they are ~0.25% of the model's arithmetic while costing 32 extra
-round trips per layer, so the default spends simulated cycles where the work
-actually is.
-
-Quantization
-------------
-Weights are int8 with a per-output-channel scale (software/llm/export.py). Activations
-are quantized dynamically, per matmul, from their own max -- no calibration
-set, no train/serve skew. The array's int32 accumulator (PSUM_WIDTH=32) holds
-the products; the host divides by (act_scale * weight_scale) and adds the
-float bias afterwards.
-
-The accumulator width matters: at K=256 (the MLP down-projection) int8
-products can reach 256*127*127 = 4.1M, which a 16-bit PSUM would wrap into
-noise. This model needs PSUM_WIDTH=32 and will refuse to run on a 16-bit
-build.
-"""
+"""tinystories (GPT-Neo) with its linear layers on the TPU; LayerNorm, softmax,
+GELU and residuals stay on the host. needs PSUM_WIDTH=32 (see README.md)"""
 import argparse
 import os
 import sys
@@ -53,9 +15,6 @@ from tokenizer import Tokenizer
 MODEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model")
 
 
-# --------------------------------------------------------------------------
-# Host-side ops the hardware has no unit for
-# --------------------------------------------------------------------------
 def layernorm(x, g, b, eps):
     mu = x.mean(-1, keepdims=True)
     var = x.var(-1, keepdims=True)
@@ -63,7 +22,7 @@ def layernorm(x, g, b, eps):
 
 
 def gelu_new(x):
-    """The tanh approximation, which is what GPT-Neo's `gelu_new` is."""
+    """tanh approximation, which is what GPT-Neo's gelu_new is"""
     return 0.5 * x * (1.0 + np.tanh(
         np.sqrt(2.0 / np.pi) * (x + 0.044715 * np.power(x, 3.0))))
 
@@ -74,21 +33,9 @@ def softmax(x, axis=-1):
     return e / e.sum(axis=axis, keepdims=True)
 
 
-# --------------------------------------------------------------------------
-# Backends: the only thing that differs is where A @ W happens
-# --------------------------------------------------------------------------
 class NumpyBackend:
-    """Host reference, in one of two modes.
-
-    exact=False: int8 weights dequantized to float, float activations. This
-    is the "what the model should do" baseline.
-
-    exact=True: bit-for-bit what the array does -- activations quantized the
-    same way, an integer matmul accumulated in int32, then the same rescale.
-    Comparing the TPU against THIS separates a hardware or protocol bug from
-    ordinary quantization error, which comparing against the float path
-    cannot do.
-    """
+    """host reference. exact=True reproduces the array bit for bit, so comparing
+    against it separates hardware bugs from quantization error"""
 
     def __init__(self, exact=False):
         self.exact = exact
@@ -114,7 +61,7 @@ class NumpyBackend:
 
 
 def _quantize_rows(a):
-    """Dynamic per-tensor int8 quantization of an activation block."""
+    """dynamic per-tensor int8 quantization"""
     amax = float(np.abs(a).max())
     scale = amax / 127.0 if amax > 0 else 1.0
     q = np.rint(a / scale).clip(-127, 127).astype(np.int8)
@@ -122,7 +69,6 @@ def _quantize_rows(a):
 
 
 class TpuBackend:
-    """int8 matmuls on the array via tpu.TPU.matmul_tiled."""
 
     def __init__(self, tpu):
         self.tpu = tpu
@@ -138,8 +84,7 @@ class TpuBackend:
     def _run(self, a_q, w_q):
         self.calls += 1
         self.macs += a_q.shape[0] * a_q.shape[1] * w_q.shape[1]
-        # bias=0 and act_bypass=True: the bias is float and added by the
-        # caller, and a transformer has no ReLU anywhere in it.
+        # bias is float and added by the caller; a transformer has no ReLU
         return self.tpu.matmul_tiled(a_q, w_q, bias=None, act_bypass=True)
 
     def matmul(self, a, w_q, w_s):
@@ -157,9 +102,6 @@ class TpuBackend:
         self.tpu.close()
 
 
-# --------------------------------------------------------------------------
-# GPT-Neo forward pass
-# --------------------------------------------------------------------------
 class Model:
     def __init__(self, path):
         z = np.load(path)
@@ -173,17 +115,12 @@ class Model:
         self.dh = self.d // self.H
 
     def _lin(self, be, x, i, tag):
-        """One quantized linear layer plus its float bias."""
         z = self.z
         y = be.matmul(x, z[f"l{i}.{tag}_w"], z[f"l{i}.{tag}_s"])
         return y + z[f"l{i}.{tag}_b"]
 
     def forward(self, be, ids, cache, tpu_attention=False):
-        """One decode step: feed the last token, return logits over the vocab.
-
-        `cache` holds per-layer (k, v) for every position seen so far, so each
-        step does O(1) projections instead of recomputing the prefix.
-        """
+        """one decode step: feed the last token, return logits"""
         z = self.z
         pos = len(ids) - 1
         if pos >= self.n_ctx:
@@ -207,16 +144,12 @@ class Model:
 
             ctx = np.empty((self.H, self.dh), np.float32)
             for hd in range(self.H):
-                # GPT-Neo does NOT scale by 1/sqrt(d_head) -- the scale is
-                # folded into initialization. Adding one here would flatten
-                # the distribution and change the model.
+                # GPT-Neo does not scale by 1/sqrt(d_head): it's folded into the weights
                 if tpu_attention:
                     s = be.matmul_dyn(qh[hd][None, :], Kh[hd].T)[0]
                 else:
                     s = qh[hd] @ Kh[hd].T
-                # Decoding one token at a time, every cached position is in
-                # the past, so the causal mask is already satisfied. A local
-                # layer additionally only attends the last `window` positions.
+                # one token at a time, the causal mask is already satisfied; local layers see the last `window`
                 if self.layer_types[i] == 1 and len(kc) > self.window:
                     s = s.copy()
                     s[: len(kc) - self.window] = -1e9
@@ -249,7 +182,6 @@ def generate(model, be, tk, prompt, n, temperature, top_k, seed, tpu_attention,
     cache = model.new_cache()
     out_ids = []
     t0 = time.time()
-    # Prime the cache on the prompt, then generate.
     for step in range(len(ids) - 1 + n):
         fed = ids + out_ids
         logits = model.forward(be, fed[: min(len(fed), step + 1)], cache,

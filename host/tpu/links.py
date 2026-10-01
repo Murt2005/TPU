@@ -1,10 +1,4 @@
-"""Transports for the host<->TPU byte stream.
-
-Every link is a duck-typed stand-in for serial.Serial (write / read /
-reset_input_buffer / close / baudrate), so the driver above it does not know
-which one it is talking to. uart and spi are plain pyserial on the RP2350's
-USB-CDC port -- the firmware does the SPI -- so they need no class here.
-"""
+"""transports for the host<->TPU byte stream; each is a duck-typed serial.Serial"""
 import mmap
 import os
 import select
@@ -22,29 +16,9 @@ LINKS = ("uart", "spi", "hps", "sim")
 
 
 class MmioLink:
-    """Duck-typed drop-in for serial.Serial that reaches the DE1-SoC's
-    hps_bridge (rtl/peripherals/hps_bridge.sv) over the Cyclone V lightweight HPS->FPGA
-    bridge via /dev/mem. It exposes the small slice of the pyserial API the
-    TPU class uses (write/read/reset_input_buffer/close/baudrate) so nothing
-    else in this driver changes -- only the transport does.
+    """the DE1-SoC's hps_bridge over /dev/mem; runs on the board's ARM. untested on hardware"""
 
-    This runs ON the board's ARM Linux (not on the host PC): tpu_host.py is
-    copied to the DE1-SoC and invoked there with `--link hps --port /dev/mem`.
-    The byte-level wire protocol is identical to the UART/SPI links.
-
-    hps_bridge register map (word offsets within the Avalon component):
-        0x0  TXDATA (w)  host->FPGA byte  (writing pushes one rx byte)
-        0x4  RXDATA (r)  FPGA->host byte  (reading pops it)
-        0x8  STATUS (r)  bit0 TX_SPACE=1 always, bit1 RX_AVAIL=byte waiting
-
-    NOTE: unvalidated on hardware from this repo yet -- the register contract
-    matches hps_bridge.sv / hps_bridge_tb.sv, but confirm the base address and
-    the component's Qsys offset for your generated system. LWH2F_BASE is the
-    standard Cyclone V lightweight bridge base; `offset` is the hps_bridge
-    component's base assigned in Platform Designer (page-aligned).
-    """
-
-    LWH2F_BASE  = 0xFF20_0000      # Cyclone V lightweight HPS->FPGA bridge base
+    LWH2F_BASE  = 0xFF20_0000      # cyclone V lightweight HPS->FPGA bridge base
     SPAN        = 0x1000           # one page is plenty for 3 registers
     TXDATA      = 0x0
     RXDATA      = 0x4
@@ -88,7 +62,6 @@ class MmioLink:
         return bytes(out)
 
     def reset_input_buffer(self):
-        # drain any FPGA->host bytes still pending in the bridge
         while self._rd32(self.STATUS) & self.ST_RX_AVAIL:
             _ = self._rd32(self.RXDATA)
 
@@ -100,21 +73,7 @@ class MmioLink:
 
 
 class SimLink:
-    """Duck-typed drop-in for serial.Serial that drives a Verilator model of
-    tpu_core, run as a subprocess in bridge mode
-    (tests/verilator/tb_tpu_top.cpp --bridge, built by `make sim-bridge`).
-
-    The byte-level wire protocol is identical to the UART/SPI/HPS links, so
-    everything above this -- matmul_tiled's zero-padding, K-tiling and
-    STREAM_RUN chaining -- is the same code that drives real silicon. Only
-    --link changes. That is the point: a model debugged here runs on the
-    board without touching the driver.
-
-    The bridge answers one frame at a time and never volunteers bytes, so
-    reads are framed exactly like the hardware links'. Simulation is slow
-    (a STREAM_RUN frame is tens of thousands of simulated cycles), hence the
-    much larger default timeout.
-    """
+    """a Verilator model of tpu_core as a subprocess (make sim-bridge); the same bytes as silicon"""
 
     def __init__(self, port, timeout=120.0):
         self.timeout = timeout
@@ -155,9 +114,7 @@ class SimLink:
         return bytes(out)
 
     def reset_input_buffer(self):
-        # The resync filler in _resync_and_probe_shape provokes a STATUS_ERR
-        # per bogus frame; drain them so the next real response is not read
-        # from the middle of that chatter.
+        # drain the STATUS_ERR chatter the resync filler provokes
         while True:
             r, _, _ = select.select([self._p.stdout], [], [], 0.5)
             if not r:
@@ -174,14 +131,11 @@ class SimLink:
 
 
 def open_link(link, port, baud, timeout):
-    """Open the transport for `link` (one of LINKS)."""
     if link not in LINKS:
         raise ValueError(f"link must be one of {LINKS}, got {link!r}")
     if link == "hps":
-        # memory-mapped bridge on the DE1-SoC (runs on the board's ARM)
         return MmioLink(port, timeout=timeout)
     if link == "sim":
-        # Simulated cycles are far slower than wall-clock serial; give the
-        # model room rather than inheriting the 2 s hardware default.
+        # simulation is far slower than any serial link
         return SimLink(port, timeout=max(timeout, 120.0))
     return serial.Serial(port, baud, timeout=timeout)

@@ -1,23 +1,6 @@
 `timescale 1ns / 1ps
 
-// pe_pair_tb — equivalence testbench.
-//
-// Instantiates one pe_pair (whose SB_MAC16 comes from yosys's ice40
-// cells_sim.v, i.e. the exact netlist primitive that ships to hardware)
-// next to two chained behavioral pe.sv references wired the way mmu.sv
-// wires adjacent rows of a column:
-//
-//   TB ──weight──▶ top PE ──weight──▶ bottom PE
-//   TB ──psum────▶ top PE ──psum────▶ bottom PE
-//   TB ──act_t───▶ top PE            (activations are per-row,
-//   TB ──act_b────────────▶ bottom PE  both driven by the TB)
-//
-// Each design's bottom PE is fed from its OWN top PE's outputs, and
-// every output of the pair is compared against the references on every
-// falling clock edge after reset release — pe_pair must be cycle-
-// accurate bit-exact through randomized weight-loading bursts, valid
-// bubbles, psum pass-through, and int8 boundary values.
-
+// pe_pair vs two chained pe.sv, cycle for cycle, against yosys's own SB_MAC16 model
 module pe_pair_tb;
 
     logic clk = 1'b0;
@@ -33,7 +16,7 @@ module pe_pair_tb;
     logic signed [7:0]  weight_in = '0;
     logic               weight_valid_in = 1'b0;
 
-    // ---------------- uut: pe_pair ----------------
+    // uut: pe_pair
     logic signed [7:0]  u_oa_t, u_oa_b, u_ow_t, u_ow_b;
     logic               u_oav_t, u_oav_b, u_owv_t, u_owv_b;
     logic signed [15:0] u_ops_t, u_ops_b;
@@ -58,7 +41,7 @@ module pe_pair_tb;
         .out_weight_b(u_ow_b),     .out_weight_valid_b(u_owv_b)
     );
 
-    // ---------------- reference: two behavioral pe.sv ----------------
+    // reference: two behavioral pe.sv
     logic signed [7:0]  r_oa_t, r_oa_b, r_ow_t, r_ow_b;
     logic               r_oav_t, r_oav_b, r_owv_t, r_owv_b;
     logic signed [15:0] r_ops_t, r_ops_b;
@@ -92,7 +75,7 @@ module pe_pair_tb;
     int checks = 0;
     bit checking = 1'b0;
 
-    // Cycle-by-cycle equivalence check on the falling edge
+    // cycle-by-cycle equivalence check on the falling edge
     always @(negedge clk) begin
         if (checking) begin
             checks++;
@@ -145,9 +128,9 @@ module pe_pair_tb;
         @(posedge clk);
         #1 checking = 1'b1;
 
-        // Alternate randomized weight-loading bursts and compute bursts
+        // alternate randomized weight-loading bursts and compute bursts
         for (int phase = 0; phase < 80; phase++) begin
-            // -- loading burst --
+            // loading burst
             @(posedge clk); #1;
             loading_phase = 1'b1;
             act_valid_t = 1'b0; act_valid_b = 1'b0; psum_valid_in = 1'b0;
@@ -162,7 +145,7 @@ module pe_pair_tb;
             weight_valid_in = 1'b0;
             weight_in       = '0;
 
-            // -- compute burst --
+            // compute burst
             repeat ($urandom_range(8, 40)) begin
                 act_t         = rand_i8();
                 act_b         = rand_i8();

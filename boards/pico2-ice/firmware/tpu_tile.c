@@ -1,57 +1,5 @@
-/*
- * tpu_tile -- SPI host link + on-RP2350 matmul tiling offload
- * (TPU_LINK_SPI=1 builds only; pairs with USE_SPI=1 gateware).
- *
- * Two jobs, both driving spi0 on the shared RP2350<->iCE40 config bus
- * (GPIO numbers from pico-ice-sdk src/ice_fpga_data.c's pico2_spibus; the
- * iCE40-side pins are in boards/pico2-ice/fpga/tpu_top.pcf):
- *
- * 1. CDC<->SPI bridge (moved here from main.c, unchanged in behavior):
- *    forwards the host's [CMD][LEN][payload] frames to the FPGA as MOSI
- *    writes. SPI is master-driven, so responses are READ by polling: after
- *    a complete frame has been forwarded, the bridge clocks 0xFF filler
- *    (CMD_NOP, ignored by the sequencer) and watches MISO for the first
- *    non-0x00 byte = STATUS, then forwards LEN and the payload
- *    (rtl/peripherals/spi_slave.sv's write-then-poll protocol).
- *
- * 2. Matmul offload (docs/protocol.md §5): two command bytes
- *    are CAPTURED off the host stream instead of forwarded -- the FPGA
- *    never sees them, so any CMD the sequencer understands still passes
- *    through byte-identically (tests/hw/hw_regression.py needs no changes):
- *
- *      0xF1 FW_PROBE   LEN=0. Answered locally with [0xAA][0x02]['T'][ver]
- *                      so the host can detect offload support; firmware
- *                      without this file forwards 0xF1 to the FPGA, which
- *                      rejects the unknown CMD -- an unambiguous "no".
- *      0xF0 FW_MATMUL  LEN=9 header [M:u16le][K:u16le][N:u16le][rows]
- *                      [cols][m_tile], then a RAW bulk payload (not LEN-
- *                      framed; sizes derive from the dims): W = K*N int8
- *                      row-major, bias = N int16 LE, A = M*K int8
- *                      row-major, then 1 checksum byte (sum of all bulk
- *                      bytes mod 256). The firmware runs tpu_host.py
- *                      matmul_tiled()'s exact tiling loop against the FPGA
- *                      -- LOAD_BIAS per (M,N) block, the block's K-run as
- *                      chained STREAM_RUN frames, zero-padding built into
- *                      tile gather -- and answers [0xAA][0x00] followed by
- *                      the RAW full result, 2*M*N bytes int16 LE row-major
- *                      (or [0xFF][0x00] and nothing on bad dims/checksum/
- *                      SPI failure). One USB round trip per layer instead
- *                      of one per LOAD_BIAS/STREAM_RUN frame -- the
- *                      ~0.5 ms/transaction USB tax leaves the inner loop.
- *
- * Shared-bus + clock invariants (same as the M2 bridge this absorbs):
- *  - Never poll mid-command-frame: a poll's 0xFF would land inside the
- *    frame's payload. The host-stream state machine below polls only
- *    between frames.
- *  - The SPI flash shares the bus AND the FPGA's chip-select net, so it is
- *    put into deep power-down once at startup (0xB9), and the stale
- *    STATUS_ERR the FPGA queues in response to that frame is drained.
- *  - write <= FPGA_CLK/6 (sequencer drops RX bytes during its ~35 clk
- *    inter-tile STREAM_RUN window), read <= FPGA_CLK/8 (spi_slave's TX
- *    engine samples SCK through a 2FF synchronizer in the FPGA clock
- *    domain). FPGA core clock is 24 MHz for SPI builds (TPU_TILE_FPGA_CLK_MHZ
- *    in tpu_tile.h; the gateware must be built with matching CLK_FREQ).
- */
+/* SPI host link + FW_PROBE/FW_MATMUL offload for TPU_LINK_SPI builds (see README.md)
+ * poll only between frames: a 0xFF filler mid-frame would land in the payload */
 
 #if TPU_LINK_SPI
 
@@ -76,30 +24,25 @@
 #define TPU_SPI_WRITE_HZ 4000000   /* = 24 MHz FPGA clock / 6 */
 #define TPU_SPI_READ_HZ  3000000   /* = 24 MHz FPGA clock / 8 */
 
-/* FPGA wire protocol (tpu_host.py / rtl/core/tpu_sequencer.sv) */
+/* wire protocol, checked against the RTL by make check-protocol */
 #define CMD_LOAD_BIAS   0x02
 #define CMD_STREAM_RUN  0x07
 #define STATUS_OK       0xAA
 
-/* Firmware-captured commands (never forwarded to the FPGA) */
+/* captured here, never forwarded to the FPGA */
 #define FW_MATMUL       0xF0
 #define FW_PROBE        0xF1
 #define FW_HDR_LEN      9
 #define FW_MAGIC        'T'
 #define FW_VERSION      1
 
-/* Per-response poll budget. The RTL answers in microseconds; this only
- * trips if the link is physically broken or the gateware shape mismatches
- * the frame we built (sequencer stuck waiting for payload bytes). */
+/* only trips on a broken link or a gateware shape mismatch */
 #define FPGA_RESP_TIMEOUT_US 100000
 
-/* Host gone mid-frame/mid-bulk guard: a crashed host session can leave the
- * stream state machine expecting payload bytes that never come, which
- * would desync every later session. A live host never pauses this long
- * inside a frame (writes are atomic at USB speed). */
+/* a host that dies mid-frame would desync every later session */
 #define HOST_IDLE_RESET_US 1000000
 
-/* -- low-level SPI helpers (moved from main.c) --------------------------- */
+/* -- SPI helpers ---------------------------------------------------------- */
 
 static void tpu_cs(bool active) {
     gpio_put(TPU_SPI_CS_PIN, !active);
@@ -112,9 +55,8 @@ static uint8_t tpu_spi_xfer_byte(uint8_t out) {
     return in;
 }
 
-/* Flash deep power-down + drain of the FPGA's resulting error response
- * (the FPGA slave also sees the 0xB9 frame: 0xB9 parses as an unknown CMD
- * and the trailing 0x00 as its LEN, so it queues one STATUS_ERR). */
+/* the flash shares CS with the FPGA: power it down, then drain the STATUS_ERR
+ * the sequencer queues for the 0xB9 0x00 it also saw */
 static void tpu_spi_quiesce_flash(void) {
     uint8_t dpd[2] = { 0xB9, 0x00 };
     tpu_cs(true);
@@ -153,10 +95,8 @@ static void cdc_write_all(const uint8_t *buf, uint32_t n) {
     tud_cdc_n_write_flush(ICE_USB_UART0_CDC);
 }
 
-/* -- one FPGA transaction: write a frame, poll its response --------------
- * Every command frame gets exactly one queued response; it MUST be drained
- * before the next frame (spi_slave's TX FIFO is shallow). payload/plen_out
- * receive the response body; returns true iff STATUS_OK arrived in time. */
+/* -- one FPGA transaction ------------------------------------------------- */
+/* drain each response before the next frame: spi_slave's TX FIFO is shallow */
 static bool fpga_transact(const uint8_t *frame, uint32_t flen,
                           uint8_t *payload, uint8_t *plen_out) {
     spi_set_baudrate(TPU_SPI, TPU_SPI_WRITE_HZ);
@@ -170,8 +110,7 @@ static bool fpga_transact(const uint8_t *frame, uint32_t flen,
         tpu_cs(true);
         uint8_t status = tpu_spi_xfer_byte(0xFF);
         if (status != 0x00) {
-            /* Response started: LEN and payload bytes are already queued
-             * (the sequencer pushes ~30x faster than this read clock). */
+            /* the rest is already queued: the sequencer outpaces this read clock */
             uint8_t len = tpu_spi_xfer_byte(0xFF);
             for (uint32_t i = 0; i < len; i++) payload[i] = tpu_spi_xfer_byte(0xFF);
             tpu_cs(false);
@@ -186,9 +125,7 @@ static bool fpga_transact(const uint8_t *frame, uint32_t flen,
 
 /* -- FW_MATMUL state ------------------------------------------------------ */
 
-/* Caps sized for comfort, not need (MNIST layer 1 is W=9216 A=288 out=256;
- * RP2350 has 520 KB SRAM). The dims header is validated against them and
- * oversize requests get a clean STATUS_ERR after the bulk is drained. */
+/* generous caps (MNIST layer 1 needs W=9216); oversize requests get STATUS_ERR */
 #define MAX_W_BYTES    (64 * 1024)
 #define MAX_A_BYTES    (16 * 1024)
 #define MAX_BIAS_BYTES (1024)
@@ -211,9 +148,8 @@ static uint32_t bulk_csum;
 static uint8_t  bulk_rx_csum;
 static bool     bulk_active;
 
-/* -- host-stream state machine -------------------------------------------
- * Mirrors the sequencer's own [CMD][LEN][payload] framing so polling and
- * FW-command capture both happen only at frame boundaries. */
+/* -- host-stream state machine -------------------------------------------- */
+/* tracks [CMD][LEN][payload] framing so polls and FW capture happen between frames */
 enum host_state { HS_CMD, HS_LEN, HS_PAYLOAD };
 static enum host_state hs = HS_CMD;
 static bool     fw_frame;        /* current frame is FW_MATMUL/FW_PROBE     */
@@ -223,7 +159,7 @@ static uint8_t  hdr_buf[FW_HDR_LEN];
 static uint32_t hdr_got;
 static uint32_t last_rx_us;
 
-/* FPGA-bound bytes from the current CDC chunk, batched into one CS frame */
+/* batched into one CS frame */
 static uint8_t  fwd_buf[64];
 static uint32_t fwd_n;
 
@@ -246,10 +182,7 @@ static void fw_respond(uint8_t status) {
     cdc_write_all(hdr, 2);
 }
 
-/* The tiling loop -- a line-for-line port of tpu_host.py matmul_tiled()'s
- * wire traffic. Zero-padding to tile multiples happens in the gather
- * expressions (out-of-range reads as 0, out-of-range result lanes
- * discarded), so no padded copies are materialized. */
+/* port of the host's matmul_tiled(); padding happens in the gather, never copied */
 static bool fw_run_tiles(void) {
     const uint32_t rows = dims.rows, cols = dims.cols, mt = dims.m_tile;
     const uint32_t stb = rows * cols + mt * rows;   /* stream_tile_bytes */
@@ -436,8 +369,7 @@ void tpu_tile_service(void) {
     }
 
     if (bulk_active || hs != HS_CMD) {
-        /* Mid-frame: never inject poll filler. But if the host died here,
-         * reset the stream state so the next session starts in sync. */
+        /* mid-frame: no poll filler, but resync if the host went away */
         if (time_us_32() - last_rx_us > HOST_IDLE_RESET_US) {
             bulk_active = false;
             hs = HS_CMD;
@@ -445,8 +377,7 @@ void tpu_tile_service(void) {
         return;
     }
 
-    /* Between frames and idle: poll for a queued FPGA response and forward
-     * it to the host (responses to pass-through frames). */
+
     spi_set_baudrate(TPU_SPI, TPU_SPI_READ_HZ);
     tpu_cs(true);
     uint8_t status = tpu_spi_xfer_byte(0xFF);

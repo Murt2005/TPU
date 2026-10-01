@@ -1,4 +1,4 @@
-"""The TPU driver: one systolic-array core behind any link in links.py."""
+"""the TPU driver: one systolic-array core behind any link in links.py"""
 import struct
 import time
 
@@ -14,13 +14,7 @@ from .protocol import (
 
 
 class TPU:
-    """One systolic-array TPU core, reachable over a UART link.
-
-    rows/cols/m_tile must match the ARRAY_ROWS/NUM_COLS/M_TILE the bitstream
-    was built with (boards/pico2-ice/fpga/Makefile) -- the wire protocol's payload sizes are
-    synthesis-time constants on the FPGA side, so a shape mismatch shows up
-    as STATUS_ERR or a UART timeout, not a wrong answer.
-    """
+    """one TPU core; rows/cols/m_tile/psum_width must match the flashed bitstream"""
 
     def __init__(self, port, baud=DEFAULT_BAUD, timeout=2.0,
                  rows=2, cols=2, m_tile=None, probe=True, link="uart",
@@ -28,9 +22,6 @@ class TPU:
         self.rows = rows            # ARRAY_ROWS: K-tile depth
         self.cols = cols            # NUM_COLS:   N-tile width
         self.m_tile = rows if m_tile is None else m_tile  # M rows per RUN
-        # PSUM_WIDTH: bias and result elements are psum_bytes LE each on the
-        # wire. Must match the bitstream's PSUM_WIDTH (boards/pico2-ice/fpga/Makefile);
-        # a mismatch is a frame-length error, not a wrong answer.
         if psum_width not in PSUM_DTYPE:
             raise ValueError(f"psum_width must be one of "
                              f"{sorted(PSUM_DTYPE)}, got {psum_width}")
@@ -42,50 +33,23 @@ class TPU:
         self.stream_tile_bytes = self.rows * self.cols + self.m_tile * self.rows
         self.max_stream_tiles = (255 - 2) // self.stream_tile_bytes
         self.ser = open_link(link, port, baud, timeout)
-        # cmd byte -> [call count, wire bytes tx (incl. CMD/LEN header), wire bytes rx]
-        # Lets a caller measure exactly how many bytes crossed the wire per command
-        # type, to separate UART transmission time from actual RTL execution time
-        # (see docs/performance.md §1).
+        # cmd -> (calls, wire bytes tx, wire bytes rx), for latency attribution
         self.stats = {}
-        # FPGA-side work done on the offload path, invisible to self.stats'
-        # wire counts (the tile frames run RP2350->FPGA, not host->board);
-        # tracked separately so estimated_rtl_seconds() stays honest.
+        # FPGA work the firmware drives during FW_MATMUL, invisible to stats
         self.offload_tiles = 0      # STREAM_RUN tiles the firmware drove
         self.offload_cmds = 0       # LOAD_BIAS frames the firmware drove
         self.offload = False
         if probe:
             self._resync_and_probe_shape()
-            # Firmware matmul offload (FW_MATMUL, boards/pico2-ice/firmware/tpu_tile.c) only
-            # exists behind the SPI bridge; older firmware answers the probe
-            # with the FPGA's STATUS_ERR for the unknown CMD.
+            # older firmware forwards FW_PROBE and the FPGA rejects it
             if offload and link == "spi":
                 self.offload = self._probe_offload()
 
     def _resync_and_probe_shape(self):
-        """Recover a possibly-desynced sequencer, then verify this driver's
-        shape matches the flashed bitstream's -- turning the two ways a shape
-        mismatch otherwise surfaces (an opaque STATUS_ERR, or a desynced
-        sequencer that silently eats the *next* session's bytes as leftover
-        payload and times out) into one immediate, explicit error.
-
-        Resync: a crashed/mismatched previous session can leave the
-        sequencer mid-frame in S_RECV_PAYLOAD, waiting on up to 255 payload
-        bytes. Feeding it 258 zero bytes completes any such frame (the
-        remainder parse as CMD=0x00/LEN=0 pairs, each answered with a
-        harmless STATUS_ERR), after which it is guaranteed back in S_IDLE;
-        the error chatter is then discarded and a RESET restores a clean
-        datapath.
-
-        Shape probe: a LEN=0 RUN's response LEN is the device's
-        PSUM_BYTES*M_TILE*NUM_COLS -- all three synthesis-time constants --
-        so comparing it against this driver's expectation catches a
-        mismatched bitstream before any real traffic is sent. Note it cannot
-        tell WHICH of the four disagrees, only that the product does."""
-        # The sim link spawns a fresh Verilator process whose DUT comes up
-        # reset, so it cannot be mid-frame and there is nothing to resync
-        # from. Skipping the filler also avoids paying ~129 bogus frames'
-        # worth of simulated cycles on every connect. The shape probe below
-        # still runs -- that is the part worth having.
+        """flush a half-received frame, reset, then check the result length matches
+        our shape. 258 zero bytes complete any pending frame; the junk responses are
+        discarded"""
+        # a fresh sim process can't be mid-frame, and skipping the filler saves ~129 simulated frames
         if self.link != "sim":
             filler = bytes(258)  # max LEN(255) + CMD/LEN header margin
             byte_s = 10 / self.ser.baudrate
@@ -109,11 +73,6 @@ class TPU:
             )
 
     def _probe_offload(self):
-        """True iff the firmware advertises the FW_MATMUL offload. The
-        TPU_LINK_SPI firmware answers FW_PROBE locally with [magic, version];
-        anything else -- older firmware forwards the frame to the FPGA,
-        whose sequencer rejects the unknown CMD with STATUS_ERR -- means no
-        offload support."""
         try:
             return self._send_cmd(FW_PROBE) == FW_PROBE_MAGIC
         except TPUError:
@@ -128,7 +87,7 @@ class TPU:
     def __exit__(self, *_exc_info):
         self.close()
 
-    # -- wire-level helpers --------------------------------------------
+    # wire-level helpers
 
     def _read_exact(self, n):
         buf = self.ser.read(n)
@@ -143,11 +102,9 @@ class TPU:
     def _send_cmd(self, cmd, payload=b""):
         wire_tx = bytes([cmd, len(payload)]) + payload
         if self.link in ("spi", "hps", "sim") or len(wire_tx) <= BRIDGE_FIFO_BYTES:
-            # spi/hps have no USB-CDC bridge FIFO to pace against; write directly.
             self.ser.write(wire_tx)
         else:
-            # Paced write: never let more than one UART FIFO's worth be in
-            # flight ahead of the wire (see protocol.py's BRIDGE_* comment).
+            # never more than one UART FIFO's worth in flight
             byte_s = 10 / self.ser.baudrate  # 8N1 = 10 bits/byte
             for i in range(0, len(wire_tx), BRIDGE_CHUNK_BYTES):
                 chunk = wire_tx[i:i + BRIDGE_CHUNK_BYTES]
@@ -172,45 +129,26 @@ class TPU:
         self.offload_cmds = 0
 
     def uart_wire_seconds(self):
-        """Real seconds spent shifting bits across the host link itself,
-        computed from every byte actually seen on the wire since the last
-        reset_stats(). UART: 8N1 = 10 bits/byte at the CDC baud rate. SPI:
-        8 bits/byte at the bridge's write clock (SPI_WIRE_HZ) -- a lower
-        bound, since response bytes drain at the slower read clock plus
-        poll-filler overhead. On the FW_MATMUL offload path this counts the
-        host<->firmware CDC bytes only; the firmware separately re-drives
-        the (padded) tiles over SPI, so it is an even looser lower bound
-        there."""
+        """seconds spent on the host link itself; a lower bound for SPI and the offload path"""
         total_bytes = sum(bytes_tx + bytes_rx for _, bytes_tx, bytes_rx in self.stats.values())
         if self.link == "spi":
             return total_bytes * 8 / SPI_WIRE_HZ
         return total_bytes * 10 / self.ser.baudrate
 
     def estimated_rtl_seconds(self, clk_freq=FPGA_CLK_FREQ):
-        """Estimated wall-clock time actually spent inside tpu_core's
-        datapath (no UART, no USB) -- RUN costs 21 cycles dispatch-to-result
-        (docs/architecture.md §3, cycle-accurate from the RTL);
-        LOAD_*/RESET just latch a register file and ACK, budgeted at a
-        conservative 2 cycles since that path isn't cycle-counted in the docs
-        the way RUN is. clk_freq defaults to the 12 MHz this repo's firmware
-        exports to the FPGA (boards/pico2-ice/firmware/main.c's ice_fpga_init call, must match
-        boards/pico2-ice/fpga/Makefile's CLK_FREQ)."""
-        run_like = (CMD_RUN, CMD_RUN_TILE)  # RUN_TILE unpacks in the same
-        # dispatch cycle RUN's flags do, then runs the identical pipeline
+        """rough time inside tpu_core at a fixed 21 cycles per pass (the 2x2 figure)"""
+        run_like = (CMD_RUN, CMD_RUN_TILE)
         run_calls = sum(self.stats.get(cmd, (0, 0, 0))[0] for cmd in run_like)
-        # A STREAM_RUN frame runs one ~21-cycle pass per tile; recover the
-        # tile count from the wire bytes (4 header bytes per frame).
+        # tile count from wire bytes: 4 header bytes per frame
         n_sr, tx_sr, _ = self.stats.get(CMD_STREAM_RUN, (0, 0, 0))
         stream_tiles = max(0, tx_sr - 4 * n_sr) // self.stream_tile_bytes
-        # FW_MATMUL/FW_PROBE never reach the FPGA; the offload_* counters
-        # carry the tile/bias work the firmware drove on FW_MATMUL's behalf.
         other_calls = sum(n for cmd, (n, _, _) in self.stats.items()
                           if cmd not in run_like + (CMD_STREAM_RUN, FW_MATMUL, FW_PROBE))
         cycles = ((run_calls + stream_tiles + self.offload_tiles) * 21
                   + (other_calls + self.offload_cmds) * 2)
         return cycles / clk_freq
 
-    # -- protocol commands ------------------------------------------------
+    # protocol commands
 
     def _check_w(self, w):
         w = np.asarray(w, dtype=np.int8)
@@ -231,39 +169,22 @@ class TPU:
         return np.frombuffer(resp, dtype=self.psum_dtype).reshape(self.m_tile, self.cols)
 
     def load_weights(self, w):
-        """w: (rows x cols) array-like, standard row-major, int8 signed.
-        Reordered on the wire to bottom-row-first as tpu_sequencer.sv
-        expects."""
+        """w: (rows, cols) int8; sent bottom row first, as LOAD_WEIGHTS expects"""
         w = self._check_w(w)
         self._send_cmd(CMD_LOAD_WEIGHTS, np.ascontiguousarray(w[::-1]).tobytes())
 
     def load_bias(self, b):
-        """b: length-cols array-like, per-output-column bias, psum_width-wide."""
         b = np.asarray(b, dtype=self.psum_dtype)
         if b.shape != (self.cols,):
             raise ValueError(f"bias must have shape ({self.cols},), got {b.shape}")
         self._send_cmd(CMD_LOAD_BIAS, b.astype(self.psum_dtype).tobytes())
 
     def load_activations(self, a):
-        """a: (m_tile x rows) array-like, standard row-major, int8 signed."""
         a = self._check_a(a)
         self._send_cmd(CMD_LOAD_ACT, a.tobytes())
 
     def run(self, first=True, last=True, act_bypass=False):
-        """Executes one RUN pass; returns an (m_tile x cols) int16 matrix,
-        or None.
-
-        first/last drive the accumulator's K-dim tiling (rtl/core/accumulator.sv):
-        first=True overwrites its persistent running sum with this pass's
-        result (start of a new K-reduction); first=False adds to it
-        (continuing one). last=True forwards the now-final sum through
-        bias/ReLU and returns the usual 8-byte result; last=False leaves it
-        in the accumulator for a later pass to add to -- bias/activation
-        never fire for that pass, so this returns None rather than a
-        result (there isn't one yet). first=last=True (the defaults) is
-        the original single-shot matmul, sent as LEN=0 for wire
-        compatibility with hosts that never send the flags byte.
-        """
+        """one pass; returns (m_tile, cols) when last, else None (the sum stays in the accumulator)"""
         if first and last and not act_bypass:
             payload = b""
         else:
@@ -274,15 +195,7 @@ class TPU:
         return self._parse_result(resp, "RUN")
 
     def run_tile(self, w, a, first=True, last=True, act_bypass=False):
-        """One K-tile pass -- LOAD_WEIGHTS + LOAD_ACT + RUN folded into a
-        single CMD_RUN_TILE round trip (3x fewer transactions per tile; see
-        docs/protocol.md §3). w is (rows x cols), a is
-        (m_tile x rows), both int8 row-major; unlike load_weights(), the
-        weights go over the wire in natural row-major order -- the sequencer
-        does the bottom-first reorder internally. first/last have exactly
-        run()'s K-tiling semantics; returns the (m_tile x cols) int16 result
-        when last=True, else None. Bias is not part of the frame -- call
-        load_bias() once per output block."""
+        """one K-tile in one RUN_TILE frame; bias comes from load_bias()"""
         w = self._check_w(w)
         a = self._check_a(a)
         flags = pack_flags(first, last, act_bypass)
@@ -292,15 +205,7 @@ class TPU:
         return self._parse_result(resp, "RUN_TILE")
 
     def stream_run(self, w_tiles, a_tiles, first=True, last=True, act_bypass=False):
-        """A whole K-run (or a chunk of one) in a single CMD_STREAM_RUN
-        round trip: up to self.max_stream_tiles (w, a) tile pairs,
-        accumulated tile-by-tile in the datapath
-        (docs/protocol.md §3). Weights go in natural row-major
-        order, like run_tile(). first/last apply to the frame's first/last
-        tile respectively, so a K-run longer than one frame chains:
-        first=True,last=False / False,False / ... / False,last=True.
-        Returns the (m_tile x cols) int16 result when last=True, else None.
-        Bias is not part of the frame -- load_bias() once per block."""
+        """up to max_stream_tiles K-tiles in one STREAM_RUN frame; first/last apply to the frame's ends"""
         if len(w_tiles) != len(a_tiles):
             raise ValueError("need one activation tile per weight tile")
         k_tiles = len(w_tiles)
@@ -318,37 +223,15 @@ class TPU:
         self._send_cmd(CMD_RESET)
 
     def matmul(self, a, w, bias=None):
-        """Convenience wrapper: load activations/weights/bias, then RUN."""
         self.load_activations(a)
         self.load_weights(w)
         self.load_bias(np.zeros(self.cols, dtype=np.int16) if bias is None else bias)
         return self.run()
 
     def matmul_tiled(self, a, w, bias=None, offload=None, act_bypass=False):
-        """Y = ReLU(A @ W + bias) for shapes beyond the raw hardware tile.
-        a: (M,K) int8 array-like, w: (K,N) int8 array-like, bias: (N,)
-        int16 array-like (defaults to zero). Any M, K, N -- dimensions that
-        don't divide the tile shape are zero-padded on the wire and the
-        padding is sliced back off the result (zero K-columns add nothing
-        to the products; padded N-columns get bias 0 and are discarded, so
-        the answer is exactly the un-padded matmul's).
-
-        Tiles the K dimension into rows-deep weight-reload passes
-        accumulated in hardware (rtl/core/accumulator.sv's persistent PSUM), and
-        the M/N dimensions into (m_tile x cols) blocks run one at a time.
-        Each (M,N) block's whole K-run goes over the wire as CMD_STREAM_RUN
-        frames (stream_run()) of up to self.max_stream_tiles tiles each --
-        one round trip per frame instead of one (RUN_TILE) or three
-        (legacy) per K-tile. Bias/ReLU are applied once per (M,N) block, on
-        that block's final K-tile pass, exactly matching a single un-tiled
-        matmul.
-
-        offload: None (default) uses the firmware FW_MATMUL fast path when
-        the connected firmware advertises it (self.offload) -- the whole
-        loop above runs on the RP2350 with ONE USB round trip, bit-identical
-        results. False forces the host-tiled path (A/B testing, regression
-        bisecting); True demands the offload and raises if unavailable.
-        """
+        """act(A @ W + bias) for any M, K, N: zero-pads to the tile grid, chains STREAM_RUN
+        frames per output block, and slices the padding off. offload: None uses FW_MATMUL
+        when the firmware has it, False forces the host path, True requires it"""
         a = np.asarray(a, dtype=np.int8)
         w = np.asarray(w, dtype=np.int8)
         if a.ndim != 2 or w.ndim != 2:
@@ -362,9 +245,7 @@ class TPU:
         if bias.shape != (n,):
             raise ValueError(f"bias must have shape ({n},), got {bias.shape}")
 
-        # FW_MATMUL's tiling loop is compiled into the firmware with a
-        # 16-bit result element and no flags-byte plumbing, so neither a
-        # widened PSUM nor a ReLU bypass can go through it.
+        # the firmware is int16-only with no flags byte
         offload_blocked = None
         if self.psum_bytes != 2:
             offload_blocked = f"psum_width={self.psum_width} (firmware is int16-only)"
@@ -379,8 +260,7 @@ class TPU:
                 raise TPUError(f"firmware matmul offload requested but "
                                f"incompatible with {offload_blocked}")
         use_offload = (self.offload if offload is None else offload) and not offload_blocked
-        # Degenerate/oversize shapes stay on the host path (the u16 wire
-        # dims cap at 65535; M*K etc. of 0 make an empty result anyway).
+        # u16 dims on the wire
         if use_offload and 0 < min(m, k, n) and max(m, k, n) <= 0xFFFF:
             return self._matmul_offload(a, w, bias, m, k, n)
 
@@ -413,11 +293,7 @@ class TPU:
         return out[:m, :n]
 
     def _matmul_offload(self, a, w, bias, m, k, n):
-        """FW_MATMUL fast path (boards/pico2-ice/firmware/tpu_tile.c): ship the whole
-        unpadded W/bias/A in one bulk CDC write; the RP2350 runs exactly
-        matmul_tiled()'s LOAD_BIAS + chained-STREAM_RUN loop against the
-        FPGA over SPI (zero-padding included) and returns the full de-tiled
-        (M,N) int16 result. Inputs are pre-validated by matmul_tiled()."""
+        """one bulk CDC write; the RP2350 runs matmul_tiled()'s loop and returns the whole result"""
         header = struct.pack("<BBHHHBBB", FW_MATMUL, 9, m, k, n,
                              self.rows, self.cols, self.m_tile)
         bulk = (np.ascontiguousarray(w).tobytes()
@@ -435,7 +311,6 @@ class TPU:
             raise TPUError(
                 f"FW_MATMUL failed: STATUS=0x{status:02X} (dims/checksum "
                 f"rejected by the firmware, or an SPI-side frame failed)")
-        # Mirror the FPGA work the firmware just drove (see reset_stats).
         blocks = -(-m // self.m_tile) * -(-n // self.cols)
         self.offload_tiles += blocks * -(-k // self.rows)
         self.offload_cmds += blocks   # one LOAD_BIAS per block

@@ -7,11 +7,8 @@ module tpu_core_tb;
     logic clk;
     logic reset;
 
-    // ==========================================
-    // 1. Signals & Glue Logic
-    // ==========================================
 
-    // Weight FIFO External Interfaces
+    // weight FIFO external interfaces
     logic write_enable_col_0, write_enable_col_1;
     logic signed [WEIGHT_WIDTH-1:0] write_data_col_0, write_data_col_1;
     logic swap_banks;
@@ -27,7 +24,7 @@ module tpu_core_tb;
     logic signed [1:0][WEIGHT_WIDTH-1:0] wf_col;
     logic [1:0] wf_col_valid;
 
-    // Unified Buffer control signals (host write / UB read)
+    // unified buffer control signals (host write / UB read)
     logic        host_write_addr;              // 1-bit: ROWS=2 → ADDR_WIDTH=1
     logic signed [1:0][7:0] host_write_data;
     logic        host_write_valid;
@@ -43,32 +40,32 @@ module tpu_core_tb;
     assign ub_act_write_dummy[0] = 8'sd0;
     assign ub_act_write_dummy[1] = 8'sd0;
 
-    // Skewed activation data from SDS → MMU
+    // skewed activation data from SDS → MMU
     logic signed [1:0][7:0] skewed_act_data;
     logic              [1:0] skewed_act_valid;
 
-    // Accumulator inputs/outputs
+    // accumulator inputs/outputs
     logic signed [1:0][15:0] accum_in_data;
     logic              [1:0] accum_in_valid;
     logic signed [1:0][15:0] acc_row_out;
     logic               acc_row_valid;
     logic               acc_pass_done;
-    // K-tiling control -- tied first=last=1 (single-shot) except Test 8.
+    // K-tiling control -- tied first=last=1 (single-shot) except test 8
     logic               tile_first = 1'b1;
     logic               tile_last  = 1'b1;
 
-    // Bias
+    // bias
     logic signed [1:0][15:0] in_bias;
     logic signed [1:0][15:0] biased_row;
     logic               biased_valid;
 
-    // Activation (final stage)
+    // activation (final stage)
     logic signed [1:0][15:0] final_row_out;
     logic               final_row_valid;
 
     int errors = 0;
 
-    // Output monitor queue
+    // output monitor queue
     logic [31:0] result_queue[$];
 
     always_ff @(posedge clk) begin
@@ -84,7 +81,7 @@ module tpu_core_tb;
         .host_write_addr(host_write_addr),
         .host_write_data(host_write_data),
         .host_write_valid(host_write_valid),
-        // Host read unused in single-layer tests
+        // host read unused in single-layer tests
         .host_read_addr(1'b0),
         .host_read_data(),
         .host_read_en(1'b0),
@@ -93,7 +90,7 @@ module tpu_core_tb;
         .ub_read_en(ub_read_en),
         .ub_read_data(ub_read_data),
         .ub_read_valid(ub_read_valid),
-        // Activation write-back unused (single-layer, no bank swap)
+        // activation write-back unused (single-layer, no bank swap)
         .act_write_data(ub_act_write_dummy),
         .act_write_valid(1'b0),
         .act_write_addr_reset(1'b0),
@@ -141,14 +138,14 @@ module tpu_core_tb;
     );
 
     activation #(.NUM_COLS(2), .PSUM_WIDTH(16)) u_act (
-        .bypass(1'b0),   // ReLU always on in this bench
+        .bypass(1'b0),   // relu always on in this bench
         .clk(clk), .reset(reset),
         .in_row(biased_row), .in_row_valid(biased_valid),
         .out_row(final_row_out), .out_row_valid(final_row_valid)
     );
 
 
-    // Pre-load a 2×2 activation matrix into the UB active bank (row by row).
+    // pre-load a 2×2 activation matrix into the UB active bank (row by row)
     task automatic write_activations_to_ub(input int a00, input int a01,
                                             input int a10, input int a11);
         host_write_addr    = 1'b0;
@@ -161,9 +158,6 @@ module tpu_core_tb;
         host_write_valid = 0;
     endtask
 
-    // Trigger two consecutive UB reads (rows 0 then 1).
-    // The UB's 2-cycle read latency means data arrives at SDS 2 cycles
-    // after ub_read_en — the pipeline handles the rest automatically.
     task automatic stream_activations_from_ub();
         ub_read_addr = 1'b0; ub_read_en = 1;
         @(posedge clk); #1;
@@ -172,7 +166,7 @@ module tpu_core_tb;
         ub_read_en = 0;
     endtask
 
-    // Load two weight rows into the shadow bank (bottom row first).
+    // load two weight rows into the shadow bank (bottom row first)
     task automatic load_weights(input int w00, input int w01,
                                 input int w10, input int w11);
         write_enable_col_0 = 1; write_data_col_0 = 8'(w10);
@@ -185,7 +179,7 @@ module tpu_core_tb;
         @(posedge clk); #1;
     endtask
 
-    // Swap shadow → active then drain weights into the MMU.
+    // swap shadow → active then drain weights into the MMU
     task automatic trigger_weight_load();
         swap_banks = 1;
         @(posedge clk); #1;
@@ -197,7 +191,7 @@ module tpu_core_tb;
         @(posedge clk); #1;
     endtask
 
-    // Block until the next row appears in result_queue, then check it.
+    // block until the next row appears in result_queue, then check it
     task automatic await_row(input int exp0, input int exp1,
                              input string row_name);
         logic [31:0] raw_val;
@@ -228,7 +222,7 @@ module tpu_core_tb;
         end
     endtask
 
-    // Block until acc_pass_done pulses (used for non-final K-tile passes,
+    // block until acc_pass_done pulses (used for non-final K-tile passes,
     // where tile_last=0 means final_row_valid/result_queue never fire).
     task automatic await_pass_done(input string label);
         int timeout_cnt;
@@ -265,12 +259,7 @@ module tpu_core_tb;
 
         $display("\n=== Starting TPU Core Integration Test Suite ===");
 
-        // ------------------------------------------------------------------
-        // Test 1 – Happy path: basic compute.
-        // W=[[4,5],[2,3]], A=[[1,2],[3,4]], bias=[100,200]
-        // A@W = [[8,11],[20,27]], biased = [[108,211],[120,227]]
-        // ReLU: all positive -> same.
-        // ------------------------------------------------------------------
+        // test 1: W=[[4,5],[2,3]], A=[[1,2],[3,4]], bias=[100,200] -> [[108,211],[120,227]]
         $display("\n[Test 1] Happy Path: Basic Compute");
         write_activations_to_ub(1, 2, 3, 4);
         load_weights(4, 5, 2, 3);
@@ -280,11 +269,7 @@ module tpu_core_tb;
         await_row(108, 211, "Test 1 - Row 0");
         await_row(120, 227, "Test 1 - Row 1");
 
-        // ------------------------------------------------------------------
-        // Test 2 – Zero weights & activations (bias check).
-        // W=[[0,0],[0,0]], A=[[0,0],[0,0]], bias=[-10,-20]
-        // biased = [[-10,-20],[-10,-20]]; ReLU -> [0,0].
-        // ------------------------------------------------------------------
+        // test 2: all zero with bias [-10,-20] -> clamped to 0
         $display("\n[Test 2] Zero Weights & Activations (ReLU clamps negative bias)");
         in_bias[0] = -16'sd10; in_bias[1] = -16'sd20;
         write_activations_to_ub(0, 0, 0, 0);
@@ -295,12 +280,7 @@ module tpu_core_tb;
         await_row(0, 0, "Test 2 - Row 0");
         await_row(0, 0, "Test 2 - Row 1");
 
-        // ------------------------------------------------------------------
-        // Test 3 – Negative signed arithmetic.
-        // W=[[-1,-2],[-3,-4]], A=[[-1,1],[2,-2]], bias=[0,0]
-        // A@W row0 = [-2,-2] → ReLU → [0,0]
-        // A@W row1 = [4,4]   → ReLU → [4,4]
-        // ------------------------------------------------------------------
+        // test 3: negative arithmetic, A@W = [[-2,-2],[4,4]] -> [[0,0],[4,4]]
         $display("\n[Test 3] Negative Signed Arithmetic (ReLU clamps negative MACs)");
         in_bias[0] = 16'sd0; in_bias[1] = 16'sd0;
         write_activations_to_ub(-1, 1, 2, -2);
@@ -311,17 +291,13 @@ module tpu_core_tb;
         await_row(0, 0, "Test 3 - Row 0");
         await_row(4, 4, "Test 3 - Row 1");
 
-        // ------------------------------------------------------------------
-        // Test 4 – Gapped streaming (stall recovery).
-        // W=[[1,0],[0,1]], A: row0=[10,20] then 5-cycle gap then row1=[30,40]
-        // A@W row0=[10,20], row1=[30,40]. All positive -> ReLU no-op.
-        // ------------------------------------------------------------------
+        // test 4: a 5-cycle gap between rows
         $display("\n[Test 4] Gapped Streaming (Stall Recovery)");
         write_activations_to_ub(10, 20, 30, 40);
         load_weights(1, 0, 0, 1);
         trigger_weight_load();
 
-        // Stream row 0 from UB, pause, then row 1
+        // stream row 0 from UB, pause, then row 1
         ub_read_addr = 1'b0; ub_read_en = 1;
         @(posedge clk); #1;
         ub_read_en = 0;
@@ -333,11 +309,7 @@ module tpu_core_tb;
         await_row(10, 20, "Test 4 - Row 0");
         await_row(30, 40, "Test 4 - Row 1");
 
-        // ------------------------------------------------------------------
-        // Test 5 – Double buffering / back-to-back matrices.
-        // Matrix A: W=I, A=[[5,15],[25,35]], bias=[0,0] -> [[5,15],[25,35]]
-        // Matrix B: W=2*I, A=[[10,10],[20,20]], bias=[0,0] -> [[20,20],[40,40]]
-        // ------------------------------------------------------------------
+        // test 5: back-to-back matrices, W=I then W=2I
         $display("\n[Test 5] Double Buffering / Back-to-Back Matrices");
         in_bias[0] = 16'sd0; in_bias[1] = 16'sd0;
 
@@ -346,14 +318,14 @@ module tpu_core_tb;
         trigger_weight_load();
         stream_activations_from_ub();
 
-        // Load Matrix B weights into shadow while Matrix A computes
+        // load matrix B weights into shadow while matrix A computes
         $display("  -> Loading Matrix B weights into shadow while Matrix A computes...");
         load_weights(2, 0, 0, 2);
 
         await_row(5,  15, "Test 5 - Matrix A Row 0");
         await_row(25, 35, "Test 5 - Matrix A Row 1");
 
-        // Write Matrix B activations to UB then compute
+        // write matrix B activations to UB then compute
         write_activations_to_ub(10, 10, 20, 20);
         trigger_weight_load();
         stream_activations_from_ub();
@@ -361,10 +333,7 @@ module tpu_core_tb;
         await_row(20, 20, "Test 5 - Matrix B Row 0");
         await_row(40, 40, "Test 5 - Matrix B Row 1");
 
-        // ------------------------------------------------------------------
-        // Test 6 – ReLU clamp via large negative bias.
-        // W=I, A=[[3,7],[5,2]], bias=[-100,-100] -> all negative -> [[0,0],[0,0]]
-        // ------------------------------------------------------------------
+        // test 6: bias [-100,-100] clamps everything
         $display("\n[Test 6] ReLU Clamp: large negative bias overrides positive MAC");
         in_bias[0] = -16'sd100; in_bias[1] = -16'sd100;
         write_activations_to_ub(3, 7, 5, 2);
@@ -375,11 +344,7 @@ module tpu_core_tb;
         await_row(0, 0, "Test 6 - Row 0");
         await_row(0, 0, "Test 6 - Row 1");
 
-        // ------------------------------------------------------------------
-        // Test 7 – Partial ReLU clamp (col0 clamped, col1 passes through).
-        // W=[[2,0],[0,3]], A=[[1,1],[1,1]], bias=[-5,50]
-        // A@W = [[2,3],[2,3]]; biased = [[-3,53],[-3,53]]; ReLU = [[0,53],[0,53]]
-        // ------------------------------------------------------------------
+        // test 7: bias [-5,50] clamps col0 only -> [[0,53],[0,53]]
         $display("\n[Test 7] Partial ReLU Clamp: col0 clamped, col1 passes through");
         in_bias[0] = -16'sd5; in_bias[1] = 16'sd50;
         write_activations_to_ub(1, 1, 1, 1);
@@ -390,20 +355,8 @@ module tpu_core_tb;
         await_row(0, 53, "Test 7 - Row 0");
         await_row(0, 53, "Test 7 - Row 1");
 
-        // ------------------------------------------------------------------
-        // Test 8 – K-dim tiling through the full datapath (weight reload +
-        // activation stream), not just synthetic partial sums.
-        //
-        // Y = A_full @ W_full, A_full 2x4, W_full 4x2, split into two 2x2
-        // K-tiles:
-        //   K-tile0: A0=[[1,2],[5,6]]  W0=[[1,0],[0,1]]  -> A0@W0=[[1,2],[5,6]]
-        //   K-tile1: A1=[[3,4],[7,8]]  W1=[[2,0],[0,2]]  -> A1@W1=[[6,8],[14,16]]
-        //   Y = [[7,10],[19,22]], bias=[0,0], all positive -> ReLU no-op.
-        //
-        // Pass 1 (tile_first=1, tile_last=0): must NOT produce a final_row_valid
-        // (bias/activation never fire) -- only pass_done, then the running sum
-        // is left inside the accumulator for pass 2 to add to.
-        // ------------------------------------------------------------------
+        // test 8: K-tiling through the full datapath, two 2x2 K-tiles -> [[7,10],[19,22]].
+        // pass 1 (first=1,last=0) must only raise pass_done, never final_row_valid
         $display("\n[Test 8] K-dim tiling: two weight-reload passes, hardware-side accumulation");
         in_bias[0] = 16'sd0; in_bias[1] = 16'sd0;
 
@@ -431,7 +384,6 @@ module tpu_core_tb;
 
         tile_first = 1'b1; tile_last = 1'b1;   // restore single-shot default
 
-        // ------------------------------------------------------------------
         $display("\n=== SIMULATION COMPLETE ===");
         if (errors == 0) begin
             $display(">>> ALL INTEGRATION TESTS PASSED <<<");

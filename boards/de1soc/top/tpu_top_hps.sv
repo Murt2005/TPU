@@ -1,33 +1,19 @@
 `timescale 1ns / 1ps
 
-// tpu_top_hps — DE1-SoC (Cyclone V) top-level.
-//
-// Pairs the board-neutral tpu_core (rtl/core/tpu_core.sv) with the HPS Avalon-MM
-// bridge PHY (rtl/peripherals/hps_bridge.sv) and a power-on-reset generator. This is the
-// module you instantiate as a component inside the Platform Designer (Qsys)
-// system, wiring avs_* to the HPS lightweight HPS->FPGA bridge (h2f_lw) and
-// clk to the fabric clock the bridge is clocked from. The pico2-ice serial
-// top is boards/pico2-ice/top/tpu_top.sv; both wrap the same core.
-//
-// There are no chip pins here beyond clk/reset_n and the Avalon bus — the bus
-// is an internal fabric connection (to the HPS), not FPGA IO, which is exactly
-// why the DE1-SoC needs a separate top from the serial-pin tpu_top.
+// DE1-SoC top: hps_bridge + tpu_core + power-on reset; instantiated as a Qsys component
 module tpu_top_hps #(
     parameter int WEIGHT_WIDTH = 8,
     parameter int FIFO_DEPTH   = 4,   // must be a power of 2, >= ARRAY_ROWS
     parameter int ARRAY_ROWS   = 2,
     parameter int NUM_COLS     = 2,
     parameter int M_TILE       = ARRAY_ROWS,
-    // See rtl/core/tpu_core.sv -- widening this changes the host wire format.
     parameter int PSUM_WIDTH   = 16,
     parameter int USE_MAC16_PAIR = 0
 ) (
     input  logic clk,
     input  logic reset_n,
 
-    // Avalon-MM slave to the HPS lightweight bridge. See rtl/peripherals/hps_bridge.sv for
-    // the register map. Configure the Qsys slave as fixed read latency 1, no
-    // waitrequest, clocked by this clk.
+    // qsys slave settings: fixed read latency 1, no waitrequest, clocked by clk
     input  logic [1:0]  avs_address,
     input  logic        avs_read,
     output logic [31:0] avs_readdata,
@@ -35,10 +21,7 @@ module tpu_top_hps #(
     input  logic [31:0] avs_writedata
 );
 
-    // Power-on-reset generator (see boards/pico2-ice/top/tpu_top.sv for the full rationale):
-    // holds reset for the first 256 cycles after configuration so every
-    // module's registers pass through their `if (reset)` branch at least once,
-    // regardless of reset_n's level at config.
+    // power-on reset, same reason as tpu_top: don't rely on reset_n pulsing
     logic [7:0] por_ctr = '0;
     logic       por_done = 1'b0;
     always_ff @(posedge clk) begin
@@ -51,7 +34,6 @@ module tpu_top_hps #(
     logic rst;
     assign rst = ~reset_n | ~por_done;
 
-    // Host byte streams between the HPS bridge and the core
     logic [7:0] rx_byte;
     logic       rx_valid;
     logic       tx_byte_valid;

@@ -1,6 +1,6 @@
 `timescale 1ns / 1ps
 
-// Unified Buffer: double-banked on-chip activation store
+// unified buffer: double-banked on-chip activation store
 module unified_buffer #(
     parameter int ROWS       = 2,
     parameter int COLS       = 2,

@@ -1,10 +1,6 @@
 #!/bin/sh
-# Download TinyStories-1M and quantize it into software/llm/model/.
-#
-# Everything this produces is gitignored and reproducible: the checkpoint and
-# tokenizer come from Hugging Face, the .npz is built by software/llm/export.py.
-#
-# Usage:  ./llm/fetch.sh [model-id]        (default roneneldan/TinyStories-1M)
+# download TinyStories-1M and quantize it into model/ (gitignored, reproducible)
+# usage: ./fetch.sh [model-id]
 set -e
 MODEL="${1:-roneneldan/TinyStories-1M}"
 DIR="$(cd "$(dirname "$0")" && pwd)"

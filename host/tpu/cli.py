@@ -1,58 +1,5 @@
-"""Command-line interface for the TPU host driver (`python3 -m tpu`,
-`tpu-host`, or `python3 tpu_host.py`).
-
-Host-side driver for the UART command protocol implemented by
-rtl/core/tpu_sequencer.sv. Talks to one ARRAY_ROWS x NUM_COLS systolic array
-(rows/cols/m_tile below, matching what the bitstream was built with --
-boards/pico2-ice/fpga/Makefile's ARRAY_ROWS/NUM_COLS/M_TILE): load an int8 weight matrix and
-an int8 activation matrix, optionally a per-column int16 bias, then RUN to
-get back Y = ReLU(A @ W + bias) as an (m_tile x cols) int16 matrix.
-
-Protocol (8-N-1, host-initiates everything -- see rtl/core/tpu_sequencer.sv).
-All payload sizes derive from the array shape: W_BYTES = rows*cols,
-A_BYTES = m_tile*rows, B_BYTES = psum_bytes*cols,
-RESULT_BYTES = psum_bytes*m_tile*cols  (psum_bytes = PSUM_WIDTH/8, default 2)
-(the LEN values shown are for the default 2x2/M_TILE=2 shape):
-
-    Host -> FPGA:  [CMD][LEN][payload[LEN]]
-    FPGA -> Host:  [STATUS][LEN][payload[LEN]]   (STATUS: 0xAA=OK, 0xFF=ERR)
-
-    0x01 LOAD_WEIGHTS  LEN=W_BYTES(4)  int8, rows bottom-first, row-major within
-    0x02 LOAD_BIAS     LEN=B_BYTES(4)  per-column signed LE, psum_bytes each
-    0x03 LOAD_ACT      LEN=A_BYTES(4)  int8, row-major
-    0x04 RUN           LEN=0  -> RESULT_BYTES(8) signed LE, row-major
-               or       LEN=1  [flags] -- K-tiling variant, see TPU.run()
-    0x05 RESET         LEN=0
-    0x06 RUN_TILE      LEN=1+W_BYTES+A_BYTES(9)  [flags, w bytes, a bytes] --
-                              LOAD_WEIGHTS+LOAD_ACT+RUN folded into one
-                              round trip; weights in NATURAL row-major order
-                              (no bottom-first reorder on the wire), response
-                              identical to RUN's. See TPU.run_tile().
-    0x07 STREAM_RUN    LEN=2+(W_BYTES+A_BYTES)*K  [flags, K_TILES, tiles...]
-                              -- a whole K-run (up to max_stream_tiles) in
-                              ONE round trip, accumulated tile-by-tile in
-                              the datapath. flags[0]=TILE_FIRST applies to
-                              the frame's first tile, flags[1]=TILE_LAST to
-                              its last, so longer K-runs span multiple
-                              frames. Response: result bytes on a TILE_LAST
-                              frame, else a bare ACK. See TPU.stream_run().
-
-Firmware commands (TPU_LINK_SPI firmware only -- boards/pico2-ice/firmware/tpu_tile.c
-captures these off the CDC stream; the FPGA never sees them, and firmware
-without support forwards them to the FPGA, which rejects the unknown CMD):
-
-    0xF0 FW_MATMUL     LEN=9  [M:u16][K:u16][N:u16][rows][cols][m_tile],
-                              then RAW bulk (un-LEN-framed): W (K*N int8
-                              row-major), bias (N int16 LE), A (M*K int8
-                              row-major), 1 checksum byte (sum mod 256).
-                              The RP2350 runs matmul_tiled()'s whole tiling
-                              loop against the FPGA locally and answers
-                              [0xAA][0x00] + 2*M*N RAW result bytes (int16
-                              LE row-major) -- one USB round trip per layer
-                              instead of one per tile frame.
-    0xF1 FW_PROBE      LEN=0  -> [0xAA][0x02]['T'][version] if the firmware
-                              supports FW_MATMUL. See TPU._probe_offload().
-"""
+"""command-line interface for the TPU host driver (python3 -m tpu, tpu-host, or
+tpu_host.py). the wire protocol is specified in docs/protocol.md"""
 import argparse
 import sys
 
@@ -63,11 +10,7 @@ from .driver import TPU
 from .protocol import DEFAULT_BAUD
 
 
-# -- golden self-test -----------------------------------------------------
-# Exact vectors from tests/sv/tpu_sequencer_tb.sv "Test 1": W=[[4,5],[2,3]],
-# A=[[1,2],[3,4]], bias=[100,200] -> ReLU(A@W + bias) = [[108,211],[120,227]].
-# Already verified bit-for-bit in simulation; running it against real
-# hardware is a datapath smoke test, not a numerics test.
+# test 1 of tests/sv/tpu_sequencer_tb.sv: a datapath smoke test, not a numerics test
 SELFTEST_W = np.array([[4, 5], [2, 3]], dtype=np.int8)
 SELFTEST_A = np.array([[1, 2], [3, 4]], dtype=np.int8)
 SELFTEST_BIAS = np.array([100, 200], dtype=np.int16)
@@ -78,9 +21,7 @@ def selftest(tpu):
     if (tpu.rows, tpu.cols, tpu.m_tile) == (2, 2, 2):
         w, a, b, expected = SELFTEST_W, SELFTEST_A, SELFTEST_BIAS, SELFTEST_EXPECTED
     else:
-        # Non-default shape: no hand-verified simulation goldens, so use
-        # seeded-random vectors checked against the same numpy math the
-        # RTL testbenches compute their expectations with.
+        # no hand-checked vectors at other shapes: seeded random against the reference
         rng = np.random.default_rng(0)
         w = rng.integers(-9, 10, size=(tpu.rows, tpu.cols), dtype=np.int8)
         a = rng.integers(-9, 10, size=(tpu.m_tile, tpu.rows), dtype=np.int8)
@@ -98,8 +39,6 @@ def selftest(tpu):
 
 
 def parse_ints(s):
-    """Parse '1,2,3,4' into a flat int list; reshaped against the array
-    shape (--rows/--cols/--m-tile) in main()."""
     try:
         return [int(x) for x in s.split(",")]
     except ValueError:

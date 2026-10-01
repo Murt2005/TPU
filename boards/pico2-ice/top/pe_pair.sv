@@ -1,41 +1,7 @@
 `timescale 1ns / 1ps
 
-// pe_pair
-// -------
-// Two complete processing elements packed onto ONE hand-instantiated
-// SB_MAC16 in dual-8x8 signed mode (MODE_8x8=1, A_SIGNED/B_SIGNED=1):
-// the top half multiplies A[15:8]*B[15:8] (product F) into the top
-// 16-bit ADDSUB with upper input C, the bottom half multiplies
-// A[7:0]*B[7:0] (product G) into the bottom ADDSUB with upper input D,
-// and both halves latch their sum in the DSP's own output register
-// ({TOP,BOT}OUTPUT_SELECT=1). One DSP block therefore provides both
-// PEs' multiply + psum-add + pipeline register; only weight capture,
-// activation forwarding, and the valid bits remain in fabric (pe.sv
-// minus its multiplier).
-//
-// The port list is exactly two pe.sv interfaces (_t = top PE, _b =
-// bottom PE) sharing clk/reset/loading_phase/capture_weight, so mmu.sv
-// can instantiate one pe_pair in place of the two `pe`s of adjacent
-// rows (r, r+1) in a column with identical wiring: the top half's
-// registered psum output leaves on out_partial_sum_t, routes through
-// fabric (mmu's existing psum_out[r] -> psum_in[r+1] nets), and
-// re-enters as in_partial_sum_b -> the DSP's D input -- that fabric
-// hop IS the inter-PE pipeline register the systolic array needs.
-//
-// Bit-exactness vs. pe.sv (verified cycle-accurate by pe_pair_tb):
-//   - pe.sv computes out <= w*a + (psum_valid ? psum : 0) when the
-//     activation is valid, else passes psum through: out <= psum.
-//     The DSP adder always computes F + C (resp. G + D), so we gate
-//     the inputs instead: activation forced to 0 when invalid (product
-//     0 => adder passes C through), C forced to 0 only in the
-//     "valid activation, invalid psum" case.
-//   - pe.sv clears its psum output synchronously during loading_phase;
-//     we force both adder inputs to 0 during loading_phase so the DSP
-//     output register clears on the same edge (ORST is used for reset
-//     only, where the async-vs-sync difference is unobservable: reset
-//     is held across many cycles and released between edges).
-//   - 16-bit wraparound: the DSP truncates each product to 16 bits and
-//     adds mod 2^16, matching pe.sv's 16-bit signed arithmetic.
+// two PEs on one SB_MAC16 in dual-8x8 signed mode; ports are two pe.sv interfaces
+// (_t = row r, _b = row r+1) so mmu.sv swaps it in for a pair of pe instances
 module pe_pair (
     input  logic                clk,
     input  logic                reset,
@@ -123,8 +89,9 @@ module pe_pair (
         end
     end
 
-    // Input gating that maps pe.sv's conditional MAC onto the DSP's
-    // unconditional "product + upper input" adders (see header).
+    // the DSP always adds product + upper input, so gate the inputs to reproduce
+    // pe.sv: act 0 when invalid passes psum through, upper 0 when psum is invalid,
+    // both 0 while loading to match pe.sv's synchronous psum clear
     logic signed [7:0] act_gated_t, act_gated_b;
     logic       [15:0] upper_t, upper_b;
 

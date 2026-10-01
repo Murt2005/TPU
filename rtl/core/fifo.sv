@@ -1,6 +1,6 @@
 `timescale 1ns / 1ps
 
-// Generic circular-queue FIFO.
+// generic circular-queue FIFO
 module fifo #(
     parameter int WIDTH = 16,
     parameter int DEPTH = 4  // must be a power of 2
@@ -20,8 +20,7 @@ module fifo #(
 
     localparam int PTR_WIDTH = $clog2(DEPTH);
 
-    // plain if/$fatal instead of an SVA immediate assertion since unfortunately yosys's
-    // built-in Verilog frontend doesn't parse the `assert (...) else ...;` form
+    // if/$fatal, not an SVA assert: yosys's frontend can't parse `assert ... else`
     initial begin
         if ((1 << PTR_WIDTH) != DEPTH)
             $fatal(1, "fifo: DEPTH=%0d is not a power of 2 ( wraps at %0d)", DEPTH, (1 << PTR_WIDTH));

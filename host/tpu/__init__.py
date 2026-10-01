@@ -1,8 +1,4 @@
-"""Host driver for the TPU: `from tpu import TPU`.
-
-Modules: protocol (wire constants), links (transports), driver (the TPU
-class), golden (reference numerics), cli (`python3 -m tpu`).
-"""
+"""host driver for the TPU: `from tpu import TPU`"""
 from . import golden
 from .driver import TPU
 from .links import LINKS, MmioLink, SimLink, TPUError

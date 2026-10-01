@@ -1,19 +1,6 @@
 `timescale 1ns / 1ps
 
-// uart_tx_tb — self-checking testbench for uart_tx.
-//
-// Sends bytes through uart_tx and decodes the resulting tx_serial waveform
-// bit-by-bit to reconstruct the transmitted byte, then compares against
-// what was sent.
-//
-// Tests:
-//   1. Single byte 0x55
-//   2. Single byte 0xAA
-//   3. Back-to-back bytes (no gap): 0x01 0x02 0x03
-//   4. tx_busy gate: second byte suppressed while tx_busy high
-//   5. 0x00 (all-zero data)
-//   6. 0xFF (all-one data)
-
+// uart_tx: decodes tx_serial bit by bit
 module uart_tx_tb;
 
     localparam int CLK_FREQ   = 50_000_000;
@@ -41,7 +28,7 @@ module uart_tx_tb;
 
     always #(CLK_PERIOD/2) clk = ~clk;
 
-    // Task: wait until tx_busy goes low (inter-frame gap / idle)
+    // task: wait until tx_busy goes low (inter-frame gap / idle)
     task automatic wait_idle();
         int timeout = 0;
         while (tx_busy) begin
@@ -54,27 +41,27 @@ module uart_tx_tb;
         end
     endtask
 
-    // Task: sample tx_serial to decode one 8N1 frame.
-    // Waits for start bit, then samples each bit at mid-period.
+    // task: sample tx_serial to decode one 8N1 frame
+    // waits for start bit, then samples each bit at mid-period.
     task automatic recv_byte(output logic [7:0] received);
-        // Wait for start bit (falling edge)
+        // wait for start bit (falling edge)
         while (tx_serial !== 1'b0) @(posedge clk);
 
-        // Now at the very start of the start bit.
-        // Advance to mid-start-bit to confirm it's still 0
+        // now at the very start of the start bit
+        // advance to mid-start-bit to confirm it's still 0
         repeat (TICKS_BIT / 2) @(posedge clk);
         if (tx_serial !== 1'b0) begin
             $error("[FAIL] Start bit is not 0 at mid-bit sample");
             errors++;
         end
 
-        // Sample 8 data bits at mid-bit of each bit period
+        // sample 8 data bits at mid-bit of each bit period
         for (int i = 0; i < 8; i++) begin
             repeat (TICKS_BIT) @(posedge clk);
             received[i] = tx_serial;
         end
 
-        // Verify stop bit
+        // verify stop bit
         repeat (TICKS_BIT) @(posedge clk);
         if (tx_serial !== 1'b1) begin
             $error("[FAIL] Stop bit is not 1");
@@ -82,7 +69,7 @@ module uart_tx_tb;
         end
     endtask
 
-    // Task: send one byte through DUT and verify the decoded result
+    // task: send one byte through DUT and verify the decoded result
     task automatic send_and_check(input logic [7:0] b, input string label);
         logic [7:0] decoded;
 
@@ -113,14 +100,14 @@ module uart_tx_tb;
 
         $display("\n=== Starting uart_tx Testbench ===\n");
 
-        // Test 1 & 2: single bytes
+        // test 1 & 2: single bytes
         $display(" Test 1: byte 0x55");
         send_and_check(8'h55, "T1 0x55");
 
         $display(" Test 2: byte 0xAA");
         send_and_check(8'hAA, "T2 0xAA");
 
-        // Test 3: back-to-back bytes (assert tx_valid the moment tx_busy drops)
+        // test 3: back-to-back bytes (assert tx_valid the moment tx_busy drops)
         $display(" Test 3: back-to-back 0x01 0x02 0x03");
         begin
             logic [7:0] seq3_0, seq3_1, seq3_2;
@@ -150,12 +137,12 @@ module uart_tx_tb;
             end
         end
 
-        // Test 4: tx_busy gate — pulse tx_valid while tx_busy is high,
+        // test 4: tx_busy gate — pulse tx_valid while tx_busy is high,
         //         second byte must be silently dropped (no extra frame).
         $display(" Test 4: tx_busy gate — dropped byte");
         begin
             logic [7:0] decoded;
-            // Start a legitimate transmission of 0xBB
+            // start a legitimate transmission of 0xBB
             wait_idle();
             @(posedge clk);
             tx_data  = 8'hBB;
@@ -163,7 +150,7 @@ module uart_tx_tb;
             @(posedge clk);
             tx_valid = 1'b0;
 
-            // While that is transmitting, attempt to queue 0xCC
+            // while that is transmitting, attempt to queue 0xCC
             // (tx_busy should be high now)
             @(posedge clk);
             if (tx_busy) begin
@@ -173,7 +160,7 @@ module uart_tx_tb;
                 tx_valid = 1'b0;
             end
 
-            // Decode what actually arrived on the wire
+            // decode what actually arrived on the wire
             recv_byte(decoded);
             if (decoded !== 8'hBB) begin
                 $error("[FAIL] T4: expected 0xBB, got 0x%02X", decoded);
@@ -182,13 +169,13 @@ module uart_tx_tb;
                 $display("[PASS] T4: 0xBB received correctly");
             end
 
-            // After 0xBB finishes, wait a bit and make sure no extra frame
+            // after 0xBB finishes, wait a bit and make sure no extra frame
             // appears (0xCC should NOT have been sent)
             begin
                 integer spurious;
                 spurious = 0;
                 wait_idle();
-                // Wait 2 bit-periods on idle line — any transition = spurious
+                // wait 2 bit-periods on idle line — any transition = spurious
                 repeat (TICKS_BIT * 2) begin
                     @(posedge clk);
                     if (tx_serial === 1'b0) spurious = spurious + 1;
@@ -202,7 +189,7 @@ module uart_tx_tb;
             end
         end
 
-        // Test 5 & 6: boundary values
+        // test 5 & 6: boundary values
         $display(" Test 5: byte 0x00 (all zeros)");
         send_and_check(8'h00, "T5 0x00");
 

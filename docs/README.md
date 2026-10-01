@@ -46,5 +46,7 @@ Working on the code:
   conclusions live in `performance.md`'s history section, clearly dated —
   not as present-tense claims elsewhere.
 - **The source is authoritative for protocol details.**
-  `rtl/core/tpu_sequencer.sv`'s header comment is the normative command table;
-  [`protocol.md`](protocol.md) explains it but does not replace it.
+  [`protocol.md`](protocol.md) is the normative wire-protocol spec;
+  `rtl/core/tpu_sequencer.sv` implements it.
+- **Code comments are sparse on purpose.** They mark decisions and low-level
+  traps next to the code; the explanations live here.

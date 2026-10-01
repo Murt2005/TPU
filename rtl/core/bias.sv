@@ -1,6 +1,6 @@
 `timescale 1ns / 1ps
 
-// Bias-add unit
+// bias-add unit
 module bias #(
     parameter int NUM_COLS   = 2,
     parameter int PSUM_WIDTH = 16

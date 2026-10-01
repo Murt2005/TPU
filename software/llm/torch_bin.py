@@ -1,23 +1,11 @@
 #!/usr/bin/env python3
-"""Read a PyTorch .bin checkpoint without PyTorch.
-
-A .bin is a zip: `<name>/data.pkl` holds a pickled state dict whose tensors
-are persistent-id references, and `<name>/data/<k>` holds each tensor's raw
-storage bytes. Unpickling normally needs torch to resolve `torch.FloatStorage`
-and `torch._utils._rebuild_tensor_v2`; this module stubs both and rebuilds
-plain numpy arrays instead.
-
-Only what a dense transformer checkpoint uses is supported: contiguous
-(or transposable) float/int storages, no sparse tensors, no nested modules.
-A stride the loader cannot express as a numpy view raises rather than
-silently returning wrong numbers.
-"""
+"""read a PyTorch .bin checkpoint without PyTorch: stub the storage classes the
+pickle names and rebuild numpy arrays. strides numpy can't express raise"""
 import pickle
 import zipfile
 
 import numpy as np
 
-# torch storage class name -> numpy dtype
 _DTYPES = {
     "FloatStorage": np.float32,
     "HalfStorage": np.float16,
@@ -52,11 +40,9 @@ class _Unpickler(pickle.Unpickler):
             return _rebuild_tensor_v2
         if module == "collections" and name == "OrderedDict":
             return dict
-        # Anything else in a plain state dict is metadata we do not need.
         return lambda *a, **k: None
 
     def persistent_load(self, pid):
-        # ('storage', <storage_cls>, key, location, numel)
         _tag, storage_cls, key, _loc, _numel = pid
         name = storage_cls if isinstance(storage_cls, str) else storage_cls()
         return _Storage(key, name)
@@ -66,7 +52,7 @@ def _read_storage(zf, prefix, st):
     with zf.open(f"{prefix}/data/{st.key}") as fh:
         raw = fh.read()
     if st.dtype_name == "BFloat16Storage":
-        # bf16 is the top 16 bits of an fp32; widen by left-shifting into place.
+        # bf16 is the top half of an fp32
         u16 = np.frombuffer(raw, dtype="<u2").astype(np.uint32) << 16
         return u16.view(np.float32) if u16.dtype == np.uint32 else u16.astype(np.float32)
     dt = _DTYPES.get(st.dtype_name)
@@ -76,7 +62,6 @@ def _read_storage(zf, prefix, st):
 
 
 def load(path):
-    """Return {name: np.ndarray} for a PyTorch .bin state dict."""
     zf = zipfile.ZipFile(path)
     pkl = [n for n in zf.namelist() if n.endswith("/data.pkl")]
     if not pkl:
@@ -96,7 +81,6 @@ def load(path):
         if stride == expected:
             out[name] = flat[off:off + n].reshape(size).copy()
         else:
-            # Non-contiguous: express as strided view over the flat storage.
             itemsize = flat.dtype.itemsize
             out[name] = np.lib.stride_tricks.as_strided(
                 flat[off:], shape=size,

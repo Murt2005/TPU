@@ -1,15 +1,5 @@
-## ============================================================================
-##  mk/hw.mk — real-hardware regression against a flashed pico2-ice
-## ============================================================================
-
-# The host flags must match the flashed bitstream. Easiest: name the same
-# config the bitstream was built with (boards/pico2-ice/configs/):
-#
-#   make hw-test CONFIG=4x4_spi PORT=/dev/cu.usbmodemXXXX
-#   make host-flags CONFIG=4x4_spi        # the flags for tpu_host.py etc.
-#
-# Or give the knobs individually (ARRAY_ROWS/NUM_COLS/M_TILE/PSUM_WIDTH, and
-# LINK=uart|spi); the defaults match the default bitstream.
+# host flags must match the flashed bitstream: pass the CONFIG it was built with,
+# or the knobs individually
 PICO_CONFIG_DIR := boards/pico2-ice/configs
 include boards/pico2-ice/config.mk
 

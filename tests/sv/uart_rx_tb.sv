@@ -1,17 +1,6 @@
 `timescale 1ns / 1ps
 
-// uart_rx_tb — self-checking testbench for uart_rx.
-//
-// Drives synthetic UART waveforms at 115200 baud (with 50 MHz system clock)
-// and checks that the received bytes match the sent ones.
-//
-// Tests:
-//   1. Single byte 0x55 (alternating 0/1, good toggle stress test)
-//   2. Single byte 0xAA
-//   3. Multi-byte sequence 0x01 0x04 0xDE 0xAD
-//   4. Glitch rejection: start pulse shorter than half-bit, must NOT produce a byte
-//   5. Framing error: stop bit driven low
-
+// uart_rx: synthetic waveforms at 115200 baud, 50 MHz
 module uart_rx_tb;
 
     localparam int CLK_FREQ   = 50_000_000;
@@ -39,10 +28,10 @@ module uart_rx_tb;
 
     always #(CLK_PERIOD/2) clk = ~clk;
 
-    // Task: drive one 8N1 frame onto rx_serial
+    // task: drive one 8N1 frame onto rx_serial
     task automatic send_byte(input logic [7:0] b);
         integer i;
-        // Start bit
+        // start bit
         rx_serial = 1'b0;
         repeat (TICKS_BIT) @(posedge clk);
         // 8 data bits, LSB first
@@ -50,12 +39,12 @@ module uart_rx_tb;
             rx_serial = b[i];
             repeat (TICKS_BIT) @(posedge clk);
         end
-        // Stop bit
+        // stop bit
         rx_serial = 1'b1;
         repeat (TICKS_BIT) @(posedge clk);
     endtask
 
-    // Task: wait for rx_valid with timeout, check data
+    // task: wait for rx_valid with timeout, check data
     task automatic await_byte(input logic [7:0] expected, input string label);
         int timeout;
         timeout = 0;
@@ -87,21 +76,21 @@ module uart_rx_tb;
 
         $display("\n=== Starting uart_rx Testbench ===\n");
 
-        // Test 1: byte 0x55 (01010101)
+        // test 1: byte 0x55 (01010101)
         $display(" Test 1: byte 0x55");
         fork
             send_byte(8'h55);
             await_byte(8'h55, "T1 0x55");
         join
 
-        // Test 2: byte 0xAA (10101010)
+        // test 2: byte 0xAA (10101010)
         $display(" Test 2: byte 0xAA");
         fork
             send_byte(8'hAA);
             await_byte(8'hAA, "T2 0xAA");
         join
 
-        // Test 3: multi-byte sequence
+        // test 3: multi-byte sequence
         $display(" Test 3: multi-byte 0x01 0x04 0xDE 0xAD");
         begin
             logic [7:0] seq3 [4];
@@ -114,14 +103,14 @@ module uart_rx_tb;
             end
         end
 
-        // Test 4: glitch rejection — start pulse < half-bit, no byte expected
+        // test 4: glitch rejection — start pulse < half-bit, no byte expected
         $display(" Test 4: glitch rejection (no output expected)");
         begin
-            // Glitch: drive low for only TICKS_BIT/4 ticks, then back high
+            // glitch: drive low for only TICKS_BIT/4 ticks, then back high
             rx_serial = 1'b0;
             repeat (TICKS_BIT/4) @(posedge clk);
             rx_serial = 1'b1;
-            // Wait a full bit period and check rx_valid never fired
+            // wait a full bit period and check rx_valid never fired
             begin
                 integer glitch_cnt;
                 glitch_cnt = 0;
@@ -138,10 +127,10 @@ module uart_rx_tb;
             end
         end
 
-        // Test 5: framing error — stop bit driven low
+        // test 5: framing error — stop bit driven low
         $display(" Test 5: framing error (stop bit = 0)");
         begin
-            // Send 0xFF but with stop bit held low
+            // send 0xFF but with stop bit held low
             rx_serial = 1'b0;                           // start
             repeat (TICKS_BIT) @(posedge clk);
             repeat (8) begin
@@ -150,7 +139,7 @@ module uart_rx_tb;
             end
             rx_serial = 1'b0;                           // BAD stop bit
 
-            // Wait just past the mid-stop-bit sample point (TICKS_BIT/2 + margin)
+            // wait just past the mid-stop-bit sample point (TICKS_BIT/2 + margin)
             repeat (TICKS_BIT/2 + 10) @(posedge clk);
             if (!rx_error) begin
                 $error("[FAIL] T5: rx_error not asserted on framing error");
@@ -159,13 +148,13 @@ module uart_rx_tb;
                 $display("[PASS] T5: framing error detected");
             end
 
-            // Release the line to HIGH before Test 6
+            // release the line to HIGH before test 6
             rx_serial = 1'b1;
-            // Wait for the FSM to settle back to IDLE after line release
+            // wait for the FSM to settle back to IDLE after line release
             repeat (TICKS_BIT * 3) @(posedge clk);
         end
 
-        // Test 6: recovery after framing error — normal byte arrives OK
+        // test 6: recovery after framing error — normal byte arrives OK
         $display(" Test 6: recovery after framing error");
         fork
             send_byte(8'h42);

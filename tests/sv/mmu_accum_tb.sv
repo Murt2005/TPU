@@ -8,7 +8,7 @@ module mmu_acc_integration_tb;
     logic clk;
     logic reset;
 
-    // MMU Input Signals
+    // MMU input signals
     logic loading_phase;
     logic [NUM_COLS-1:0] capture_weight_col;
 
@@ -17,12 +17,12 @@ module mmu_acc_integration_tb;
     logic signed [NUM_COLS-1:0][7:0] in_col;
     logic              [NUM_COLS-1:0] in_col_valid;
 
-    // MMU Output / Accumulator Input Interconnect -- array mapped signals
+    // MMU output / accumulator input interconnect -- array mapped signals
     // feed the accumulator directly now that mmu's outputs are arrays too.
     logic signed [NUM_COLS-1:0][PSUM_WIDTH-1:0] acc_in_psum;
     logic                       [NUM_COLS-1:0] acc_in_psum_valid;
 
-    // Accumulator Output Signals
+    // accumulator output signals
     logic signed [NUM_COLS-1:0][PSUM_WIDTH-1:0] out_row;
     logic                         out_row_valid;
     logic                         any_fifo_full;
@@ -30,13 +30,13 @@ module mmu_acc_integration_tb;
     int errors = 0;
     int rows_received = 0;
 
-    // Expected final matrix C = [[8, 11], [20, 27]]
+    // expected final matrix C = [[8, 11], [20, 27]]
     logic signed [PSUM_WIDTH-1:0] expected_rows [2][NUM_COLS] = '{
         '{16'sd8,  16'sd11},
         '{16'sd20, 16'sd27}
     };
 
-    // Module Instantiations
+    // module instantiations
     mmu #(.ARRAY_ROWS(2), .NUM_COLS(NUM_COLS)) u_mmu (
         .clk(clk),
         .reset(reset),
@@ -69,7 +69,7 @@ module mmu_acc_integration_tb;
 
     always #5 clk = ~clk;
 
-    // Self-Checking Scoreboard
+    // self-checking scoreboard
     always @(posedge clk) begin
         if (!reset && out_row_valid) begin
             if (rows_received >= 2) begin
@@ -89,9 +89,9 @@ module mmu_acc_integration_tb;
         end
     end
 
-    // Stimulus Generation
+    // stimulus generation
     initial begin
-        // 1. Initialize Default State
+        // 1. initialize default state
         clk = 0;
         reset = 1;
         loading_phase = 0;
@@ -104,7 +104,7 @@ module mmu_acc_integration_tb;
 
         $display("\nStarting MMU + Accumulator Integration Test");
 
-        // 2. Load Weights (W = [[4,5], [2,3]])
+        // 2. load weights (W = [[4,5], [2,3]])
         $display("Phase 1: Loading Weights");
         loading_phase = 1;
         capture_weight_col = 2'b11;
@@ -124,28 +124,28 @@ module mmu_acc_integration_tb;
 
         @(negedge clk);
 
-        // 3. Stream Activations (A = [[1,2], [3,4]])
+        // 3. stream activations (A = [[1,2], [3,4]])
         $display("Phase 2: Streaming Activations");
 
-        // Step 1: A[0][0]
+        // step 1: A[0][0]
         in_row[0] = 8'sd1; in_row_valid[0] = 1;
         in_row[1] = 8'sd0; in_row_valid[1] = 0;
         @(negedge clk);
 
-        // Step 2: A[1][0] and A[0][1]
+        // step 2: A[1][0] and A[0][1]
         in_row[0] = 8'sd3; in_row_valid[0] = 1;
         in_row[1] = 8'sd2; in_row_valid[1] = 1;
         @(negedge clk);
 
-        // Step 3: A[1][1]
+        // step 3: A[1][1]
         in_row[0] = 8'sd0; in_row_valid[0] = 0;
         in_row[1] = 8'sd4; in_row_valid[1] = 1;
         @(negedge clk);
 
-        // Idle out
+        // idle out
         in_row[1] = 8'sd0; in_row_valid[1] = 0;
 
-        // 4. Wait for the accumulator to catch all staggered psums
+        // 4. wait for the accumulator to catch all staggered psums
         repeat (15) @(negedge clk);
 
         if (rows_received != 2) begin
@@ -159,7 +159,7 @@ module mmu_acc_integration_tb;
         $finish;
     end
 
-    // --- Waveform Logging ---
+    // waveform logging
     initial begin
         $dumpfile("mmu_acc_integration.vcd");
         $dumpvars(0, mmu_acc_integration_tb);

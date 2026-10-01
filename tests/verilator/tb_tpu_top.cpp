@@ -1,26 +1,6 @@
-// Verilator C++ testbench for tpu_top -- the WHOLE chip, driven through its
-// real UART pins at the hardware CLK_FREQ/BAUD_RATE ratio (12 MHz / 1 Mbaud,
-// TICKS_PER_BIT = 12). This exercises the exact stack real silicon sees
-// (uart_rx bit sampling -> sequencer -> datapath -> uart_tx bit shifting),
-// which none of the Icarus testbenches do: tpu_sequencer_tb injects
-// rx_data/rx_valid behind the UART.
-//
-// The test set mirrors tests/hw/hw_regression.py (fixed pattern cases, reset
-// roundtrip, unknown CMD, randomized stress, matmul_tiled stress, RUN_TILE
-// equivalence, STREAM_RUN frame boundaries) plus one case only simulation
-// can do: injecting a UART framing error (bad stop bit) and checking the
-// sequencer answers STATUS_ERR and recovers.
-//
-// Build/run at any shape via `make verilate-test` (root Makefile): the array
-// shape is chparam'd with -GARRAY_ROWS/-GNUM_COLS/-GM_TILE and mirrored to
-// this file with -DTB_ROWS/-DTB_COLS/-DTB_MTILE.
-//
-// With -DTB_SPI (paired with -GUSE_SPI=1), the UART BFM is replaced by an
-// SPI mode-0 master BFM (rtl/peripherals/spi_slave.sv's write-then-poll protocol:
-// command frame in one CS burst, then 0xFF filler polls reading MISO until
-// the first non-0x00 byte, which is STATUS). Write SCK runs at CLK/6 —
-// the sequencer's inter-tile STREAM_RUN processing window caps uniform
-// write pacing (see spi_slave.sv's header); reads poll at CLK/10.
+// full-chip bench: drives tpu_top through its real UART or SPI pins (or tpu_core
+// directly with -DTB_DIRECT), replaying hw_regression.py's cases plus a framing-error
+// case only simulation can do. shape comes from -DTB_ROWS/-DTB_COLS/-DTB_MTILE
 
 #include <cstdint>
 #include <cstdio>
@@ -30,11 +10,7 @@
 #include <vector>
 
 #if defined(TB_DIRECT)
-// Direct-injection mode verilates tpu_core, not tpu_top: the core exposes the
-// byte-stream interface (rx_data/rx_valid/tx_data/tx_valid) that every PHY
-// converts some transport into, so the bench can hand the sequencer bytes
-// without paying for a bit-level UART or SPI shift. No board pins, and no
-// power-on-reset generator -- reset is a plain synchronous input here.
+// direct mode: no PHY and no power-on reset, reset is a plain input
 #include "Vtpu_core.h"
 using Dut = Vtpu_core;
 #else
@@ -56,15 +32,12 @@ using Dut = Vtpu_top;
 #define TB_PSUM_WIDTH 16
 #endif
 
-// Must match the -GCLK_FREQ/-GBAUD_RATE the model was verilated with.
+// must match the -GCLK_FREQ/-GBAUD_RATE the model was verilated with
 static constexpr int TICKS_PER_BIT = 12;
 
-static constexpr int ROWS   = TB_ROWS;   // ARRAY_ROWS: K-tile depth
-static constexpr int COLS   = TB_COLS;   // NUM_COLS:   N-tile width
-static constexpr int MTILE  = TB_MTILE;  // M rows per RUN
-// PSUM_WIDTH the model was verilated with. Sets the wire bytes per bias and
-// result element, and the width the accumulator's non-saturating sum wraps
-// at -- both of which the golden model below has to match exactly.
+static constexpr int ROWS   = TB_ROWS;
+static constexpr int COLS   = TB_COLS;
+static constexpr int MTILE  = TB_MTILE;
 static constexpr int PSUM_W     = TB_PSUM_WIDTH;
 static constexpr int PSUM_BYTES = PSUM_W / 8;
 
@@ -95,16 +68,11 @@ static inline uint8_t mk_flags(bool first, bool last, bool bypass) {
 static constexpr int STATUS_OK  = 0xAA;
 static constexpr int STATUS_ERR = 0xFF;
 
-using Mat  = std::vector<std::vector<int>>;      // int8/int16 values as int
+using Mat  = std::vector<std::vector<int>>;
 using Vec  = std::vector<int>;
 using Bytes = std::vector<uint8_t>;
 
-// ---------------------------------------------------------------------------
-// Golden model -- must match tests/hw/hw_regression.py golden(): the
-// accumulator/bias sum wraps silently at int16 (non-saturating), and ReLU is
-// applied AFTER that truncation.
-// ---------------------------------------------------------------------------
-// Wrap a sum into PSUM_W bits, signed -- the accumulator does not saturate.
+// reference numerics, a C++ copy of host/tpu/golden.py
 static long long wrap_psum(long long s) {
     if (PSUM_W >= 64) return s;
     const unsigned long long span = 1ULL << PSUM_W;
@@ -112,14 +80,12 @@ static long long wrap_psum(long long s) {
     return (u & (span >> 1)) ? (long long)u - (long long)span : (long long)u;
 }
 
-// What a 16-bit accumulator would have done with the same sum -- used only to
-// make the wide-PSUM test's message concrete.
+// only to make the wide-PSUM test's message concrete
 static long long wrap_psum_16(long long s) {
     return (long long)(int16_t)(uint16_t)(s & 0xFFFF);
 }
 
-// relu=false models the flags[2] ACT_BYPASS path: the wrapped sum is returned
-// as-is, with no clamp.
+// relu=false models ACT_BYPASS
 static Mat golden(const Mat& a, const Mat& w, const Vec& bias, bool relu = true) {
     size_t m = a.size(), k = w.size(), n = w[0].size();
     Mat out(m, std::vector<int>(n));
@@ -134,14 +100,11 @@ static Mat golden(const Mat& a, const Mat& w, const Vec& bias, bool relu = true)
     return out;
 }
 
-// ---------------------------------------------------------------------------
-// UART bus-functional model around the verilated tpu_top
-// ---------------------------------------------------------------------------
 struct Tb {
     std::unique_ptr<Dut> dut{new Dut};
     uint64_t cycles = 0;
 #ifdef TB_DIRECT
-    Bytes tx_seen;          // every byte the sequencer pulsed tx_valid for
+    Bytes tx_seen;
 #endif
 
     Tb() {
@@ -151,8 +114,7 @@ struct Tb {
         dut->rx_data  = 0;
         dut->rx_valid = 0;
         dut->rx_error = 0;
-        // No PHY, so nothing is ever busy: the sequencer may push TX bytes
-        // as fast as its own FSM allows and the collector below catches them.
+        // no PHY, so tx is never busy
         dut->tx_busy  = 0;
         dut->eval();
         cycle(8);
@@ -167,8 +129,7 @@ struct Tb {
         dut->spi_mosi = 0;
 #endif
         dut->eval();
-        // tpu_top's power-on-reset generator holds internal reset for the
-        // first 256 cycles; give it slack before talking.
+        // the power-on reset holds for 256 cycles
         cycle(300);
 #endif
     }
@@ -177,9 +138,7 @@ struct Tb {
         for (int i = 0; i < n; i++) {
             dut->clk = 1; dut->eval();
 #ifdef TB_DIRECT
-            // tx_valid is a registered one-cycle pulse per byte (the TX FSM
-            // re-arms only once tx_valid is low again), so sampling right
-            // after the posedge collects each byte exactly once.
+            // tx_valid is a one-cycle pulse, so sampling after the posedge sees each byte once
             if (dut->tx_valid) tx_seen.push_back((uint8_t)dut->tx_data);
 #endif
             dut->clk = 0; dut->eval();
@@ -188,37 +147,19 @@ struct Tb {
     }
 
 #if defined(TB_DIRECT)
-    // ---------------- Direct byte-stream injection ----------------
-    // Between tiles of a STREAM_RUN the sequencer spends one full pipeline
-    // pass NOT consuming rx bytes (docs/protocol.md §3's timing assumption);
-    // the real links cover that window with their byte cadence. With no PHY
-    // there is no cadence and no backpressure signal to wait on, so the gap
-    // is inserted explicitly, once per tile rather than once per byte.
-    // PASS_CYCLES models it: UB write + activation stream (2*M_TILE), weight
-    // drain + vertical propagation (2*ARRAY_ROWS), column skew (NUM_COLS) and
-    // ~16 cycles of fixed pipeline latency. Measured by sweep at 8x8/M_TILE=4,
-    // where the suite fails at a 40-cycle gap and passes at 48 against a
-    // predicted 47 -- so the 2x here is real margin, not a guess. Too short
-    // shows up as golden-model mismatches, never as a quiet pass.
-    // The pass costs roughly 2*M_TILE (UB write + stream) + 2*ARRAY_ROWS
-    // (weight-FIFO drain + vertical propagation) + NUM_COLS (column skew)
-    // + ~15 fixed pipeline latency, so it grows with the shape. Scale
-    // generously: this is still ~25x cheaper than a bit-level PHY byte.
+    // the sequencer ignores RX for one pipeline pass between STREAM_RUN tiles; real
+    // links hide that behind their byte cadence, here the gap is explicit. a sweep at
+    // 8x8/M_TILE=4 failed at 40 cycles and passed at 48 (47 predicted), so 2x is margin
     static constexpr int PASS_CYCLES = 2 * MTILE + 2 * ROWS + COLS + 16;
     static constexpr int STREAM_TILE_GAP = 2 * PASS_CYCLES;
 
-    // After the sequencer pulses tx_valid for the last response byte its TX
-    // FSM still needs a couple of cycles to fall back to S_IDLE. A real PHY
-    // hides that behind its byte cadence; injecting directly does not, and a
-    // CMD byte arriving early is silently dropped -- which desyncs the frame
-    // so the LEN byte is then parsed as the next CMD. Cost is per command,
-    // not per byte, so it is noise against the pipeline pass.
+    // the TX FSM needs a few cycles to reach S_IDLE; a CMD byte arriving sooner is
+    // dropped and desyncs the frame
     static constexpr int CMD_SETTLE_GAP = 32;
 
     void send_byte(uint8_t v, bool good_stop = true) {
         if (!good_stop) {
-            // Model a PHY framing error: uart_rx raises rx_error and does NOT
-            // pulse rx_valid for the corrupted byte.
+            // a PHY framing error: rx_error rises and the bad byte never pulses rx_valid
             dut->rx_error = 1; cycle(); dut->rx_error = 0; cycle();
             return;
         }
@@ -226,7 +167,6 @@ struct Tb {
         dut->rx_valid = 0; cycle();
     }
 
-    // Pops the next collected TX byte, running the clock until one shows up.
     int recv_byte(uint64_t timeout_cycles = 500000) {
         while (tx_seen.empty()) {
             cycle();
@@ -238,17 +178,12 @@ struct Tb {
     }
 
     int send_cmd(uint8_t cmd, const Bytes& payload, Bytes& resp) {
-        // Settle BEFORE the CMD byte, not after the response: the framing-error
-        // and NOP tests drive send_byte/recv_byte raw, so a trailing gap would
-        // not cover them. Whatever the previous interaction was, the sequencer
-        // is back in S_IDLE by the time the next CMD byte lands.
+        // settle before the CMD byte: the raw send_byte/recv_byte tests need it too
         cycle(CMD_SETTLE_GAP);
         send_byte(cmd);
         send_byte((uint8_t)payload.size());
         for (size_t i = 0; i < payload.size(); i++) {
             send_byte(payload[i]);
-            // STREAM_RUN payload is [flags, K_TILES, tile0, tile1, ...]; a
-            // tile ends whenever (i-1) is a multiple of TILE_BYTES.
             if (cmd == CMD_STREAM_RUN && i >= 2 && ((i - 1) % TILE_BYTES) == 0)
                 cycle(STREAM_TILE_GAP);
         }
@@ -262,13 +197,11 @@ struct Tb {
             if (b < 0) return b;
             resp.push_back((uint8_t)b);
         }
-        // ...and on the way out too, so the tests that drive send_byte /
-        // recv_byte raw (NOP filler, framing error) also start from S_IDLE.
         cycle(CMD_SETTLE_GAP);
         return status;
     }
 #elif !defined(TB_SPI)
-    // ---------------- UART master BFM ----------------
+    // UART master
     void send_bit(int b) { dut->rx_pin = b; cycle(TICKS_PER_BIT); }
 
     void send_byte(uint8_t v, bool good_stop = true) {
@@ -279,7 +212,7 @@ struct Tb {
         cycle(2);                                       // brief inter-byte idle
     }
 
-    // Returns the received byte, or <0 on timeout/framing trouble at the BFM.
+    // <0 on timeout
     int recv_byte(uint64_t timeout_cycles = 500000) {
         while (dut->tx_pin == 1) {
             cycle();
@@ -297,8 +230,7 @@ struct Tb {
         return v;
     }
 
-    // Full command round trip. Returns status byte (or <0 on BFM timeout);
-    // response payload lands in resp.
+    // returns the status byte, or <0 on timeout
     int send_cmd(uint8_t cmd, const Bytes& payload, Bytes& resp) {
         send_byte(cmd);
         send_byte((uint8_t)payload.size());
@@ -316,10 +248,7 @@ struct Tb {
         return status;
     }
 #else
-    // ---------------- SPI mode-0 master BFM ----------------
-    // Write SCK = CLK/6 (uniform pacing under the sequencer's STREAM_RUN
-    // inter-tile window); read-poll SCK = CLK/10 (under spi_slave's CLK/8
-    // TX-engine cap). Halves are in core-clock cycles.
+    // SPI mode-0 master: write SCK = CLK/6, read polls at CLK/10 (spi_slave caps reads at CLK/8)
     static constexpr int WR_HALF = 3;
     static constexpr int RD_HALF = 5;
 
@@ -363,7 +292,7 @@ struct Tb {
     }
 #endif
 
-    // -- protocol commands, mirroring tpu_host.py's TPU class --------------
+    // protocol commands, mirroring the host driver
 
     bool load_weights(const Mat& w) {   // (ROWS x COLS), bottom row first on the wire
         Bytes p;
@@ -404,7 +333,6 @@ struct Tb {
         return out;
     }
 
-    // RUN with K-tiling flags; result valid only when last=true.
     bool run(Mat& result, bool first = true, bool last = true,
              bool bypass = false) {
         Bytes p;
@@ -417,7 +345,6 @@ struct Tb {
         return true;
     }
 
-    // RUN_TILE: weights in NATURAL row-major order on the wire.
     bool run_tile(const Mat& w, const Mat& a, Mat& result,
                   bool first = true, bool last = true, bool bypass = false) {
         Bytes p{mk_flags(first, last, bypass)};
@@ -433,7 +360,6 @@ struct Tb {
         return true;
     }
 
-    // STREAM_RUN: up to MAX_STREAM_TILES (w, a) tile pairs in one frame.
     bool stream_run(const std::vector<Mat>& w_tiles, const std::vector<Mat>& a_tiles,
                     Mat& result, bool first, bool last, bool bypass = false) {
         Bytes p{mk_flags(first, last, bypass), (uint8_t)w_tiles.size()};
@@ -463,8 +389,7 @@ struct Tb {
                run(result);
     }
 
-    // Port of tpu_host.py matmul_tiled(): any (M,K)x(K,N), zero-padded to
-    // tile multiples, K-runs chunked into STREAM_RUN frames.
+    // port of the host's matmul_tiled()
     bool matmul_tiled(const Mat& a, const Mat& w, const Vec& bias, Mat& out) {
         int M = (int)a.size(), K = (int)w.size(), N = (int)w[0].size();
         auto round_up = [](int x, int q) { return ((x + q - 1) / q) * q; };
@@ -512,9 +437,6 @@ struct Tb {
     }
 };
 
-// ---------------------------------------------------------------------------
-// Test harness bookkeeping
-// ---------------------------------------------------------------------------
 static int g_pass = 0, g_fail = 0;
 
 static void report(bool ok, const char* name) {
@@ -543,7 +465,7 @@ static bool check_case(Tb& tb, const char* name, const Mat& a, const Mat& w,
     return ok;
 }
 
-// Deterministic random helpers (fixed seeds -> reproducible failures)
+// fixed seeds, so failures reproduce
 static Mat rand_mat(std::mt19937& rng, int r, int c, int lo, int hi) {
     std::uniform_int_distribution<int> d(lo, hi);
     Mat m(r, std::vector<int>(c));
@@ -557,8 +479,7 @@ static Vec rand_vec(std::mt19937& rng, int n, int lo, int hi) {
     return v;
 }
 
-// The seven fixed case patterns from tests/hw/hw_regression.py, generated at
-// this build's shape (exact 2x2 vectors when the shape is 2x2/M_TILE=2).
+// hw_regression.py's seven case patterns, at this build's shape
 static std::vector<std::tuple<const char*, Mat, Mat, Vec>> build_cases() {
     if (ROWS == 2 && COLS == 2 && MTILE == 2) {
         return {
@@ -619,20 +540,8 @@ static std::vector<std::tuple<const char*, Mat, Mat, Vec>> build_cases() {
 }
 
 #ifdef TB_DIRECT
-// --------------------------------------------------------------------------
-// Bridge mode (--bridge): act as a transport rather than a test.
-//
-// Reads host->FPGA frames on stdin and writes FPGA->host frames on stdout,
-// byte for byte, so tpu_host.py can drive the simulated core exactly as it
-// drives a serial port or /dev/mem. This is what makes the Python stack --
-// matmul_tiled's padding, K-tiling and STREAM_RUN chaining -- usable against
-// a simulation, and means the same driver code later runs on real silicon
-// with only --link changing.
-//
-// Framing mirrors send_cmd(): CMD, LEN, LEN payload bytes, with the inter-tile
-// gap inserted on STREAM_RUN and the settle gap around every command. CMD_NOP
-// is passed through and draws no response, exactly as the sequencer treats it.
-// --------------------------------------------------------------------------
+// bridge: a transport for tpu_host.py --link sim instead of a test. NOP gets
+// no response and the inter-tile and settle gaps match send_cmd()
 static int bridge_main(Tb& tb) {
     setvbuf(stdout, nullptr, _IONBF, 0);
     for (;;) {
@@ -694,11 +603,11 @@ int main(int argc, char** argv) {
 #endif
     Tb tb;
 
-    // 1) Fixed pattern cases (the hw_regression.py seven)
+    // 1) fixed pattern cases
     auto cases = build_cases();
     for (auto& [name, a, w, b] : cases) check_case(tb, name, a, w, b);
 
-    // 2) Reset roundtrip: CMD_RESET, then the first case must still pass
+    // 2) reset roundtrip
     {
         bool ok = tb.reset_cmd();
         auto& [name, a, w, b] = cases[0];
@@ -707,7 +616,7 @@ int main(int argc, char** argv) {
         report(ok, "T3b post-reset compute");
     }
 
-    // 3) Unknown CMD 0xEE -> STATUS_ERR (0xFF is CMD_NOP, tested next)
+    // 3) unknown CMD (not 0xFF, which is the NOP filler)
     {
         Bytes resp;
         int status = tb.send_cmd(0xEE, {}, resp);
@@ -715,10 +624,7 @@ int main(int argc, char** argv) {
     }
 
 #ifndef TB_SPI
-    // 3b) CMD_NOP 0xFF filler bytes are silently ignored in S_IDLE (the SPI
-    //     read-poll convention), and the next real command still parses.
-    //     (UART build only as a direct test -- under TB_SPI every response
-    //     poll exercises exactly this path implicitly.)
+    // 3b) NOP filler is ignored; under TB_SPI every poll already covers this
     {
         tb.send_byte(0xFF);
         tb.send_byte(0xFF);
@@ -730,9 +636,7 @@ int main(int argc, char** argv) {
         report(ok, "T4c NOP 0xFF filler ignored + next command parses");
     }
 
-    // 4) UART framing error (bad stop bit) -> STATUS_ERR, then full recovery.
-    //    Only possible in simulation -- the BFM breaks the stop bit on what
-    //    the sequencer expects to be a CMD byte. (No framing on SPI.)
+    // 4) framing error and recovery, simulation-only (no framing on SPI)
     {
         tb.send_byte(CMD_RUN, /*good_stop=*/false);
         int status = tb.recv_byte();
@@ -745,7 +649,7 @@ int main(int argc, char** argv) {
     }
 #endif
 
-    // 5) Randomized single-tile stress vs golden (legacy command path)
+    // 5) randomized single-tile stress
     {
         std::mt19937 rng(0);
         int n = 100, fails = 0;
@@ -763,8 +667,7 @@ int main(int argc, char** argv) {
         report(fails == 0, buf);
     }
 
-    // 6) RUN_TILE equivalence: one frame must be bit-identical to the legacy
-    //    LOAD_WEIGHTS/LOAD_ACT/RUN triple (and to golden)
+    // 6) RUN_TILE equivalence with the legacy path
     {
         std::mt19937 rng(1);
         int n = 25, fails = 0;
@@ -782,8 +685,7 @@ int main(int argc, char** argv) {
         report(fails == 0, buf);
     }
 
-    // 7) matmul_tiled stress: random M/K/N incl. non-multiples of the tile
-    //    (exercises zero-padding + hardware K-accumulation via STREAM_RUN)
+    // 7) matmul_tiled stress, including non-multiples of the tile
     {
         std::mt19937 rng(2);
         int n = 25, fails = 0;
@@ -809,8 +711,7 @@ int main(int argc, char** argv) {
         report(fails == 0, buf);
     }
 
-    // 8) STREAM_RUN frame boundaries: K_TILES at 1 / 3 / max / max+1 / max+9
-    //    (multi-frame K-run chaining -- the case MNIST's K=144 layer needs)
+    // 8) STREAM_RUN frame boundaries
     {
         std::mt19937 rng(3);
         int kts[] = {1, 3, MAX_STREAM_TILES, MAX_STREAM_TILES + 1, MAX_STREAM_TILES + 9};
@@ -832,10 +733,7 @@ int main(int argc, char** argv) {
         report(fails == 0, buf);
     }
 
-    // 9) ACT_BYPASS (flags[2]): with the clamp off, a negative result must
-    //    survive to the host instead of reading back as 0. Runs the same
-    //    weights/activations both ways, so the only difference is the flag.
-    //    A strongly negative bias guarantees the pre-ReLU sum is negative.
+    // 9) ACT_BYPASS: a strongly negative bias must survive unclamped
     {
         std::mt19937 rng(11);
         int fails = 0, negatives = 0;
@@ -853,8 +751,7 @@ int main(int argc, char** argv) {
             if (!eq(raw, golden(a, w, b, false)))     fails++;
             for (auto& row : raw) for (int v : row) if (v < 0) negatives++;
         }
-        // The bypass path is only meaningful if it actually produced
-        // negatives -- otherwise the two modes are trivially equal.
+        // the check is vacuous unless bypass actually produced negatives
         char buf[128];
         snprintf(buf, sizeof buf,
                  "ACT_BYPASS: 10 pairs clamped/raw matched golden (%d negative values survived)",
@@ -862,9 +759,7 @@ int main(int argc, char** argv) {
         report(fails == 0 && negatives > 0, buf);
     }
 
-    // 10) ACT_BYPASS over the batched commands, so the flag is proven to
-    //     thread through RUN_TILE's payload[0] and STREAM_RUN's frame header
-    //     as well as bare RUN's optional flags byte.
+    // 10) ACT_BYPASS through RUN_TILE and STREAM_RUN too
     {
         std::mt19937 rng(12);
         int fails = 0;
@@ -885,11 +780,7 @@ int main(int argc, char** argv) {
         report(fails == 0, "ACT_BYPASS via RUN_TILE and STREAM_RUN: 5/5 each matched golden");
     }
 
-    // 11) The point of a widened PSUM: a sum past int16's range must come
-    //     back intact instead of wrapping. All-127 weights and activations
-    //     give ROWS*127*127, which exceeds 32767 once ROWS >= 3. At the
-    //     default PSUM_W=16 the same vector is a wraparound test instead,
-    //     which cases 5/6 above already cover, so only assert the wide claim.
+    // 11) wide PSUM: ROWS*127*127 exceeds int16 from ROWS >= 3, and must come back intact
     {
         Mat a(MTILE, std::vector<int>(ROWS, 127));
         Mat w(ROWS, std::vector<int>(COLS, 127));

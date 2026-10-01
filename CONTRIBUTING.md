@@ -59,8 +59,10 @@ The RTL follows a consistent house style — please match it:
 - Tunables are `parameter int`; derived values are `localparam`.
 - Shared wire-protocol constants (command opcodes, flag bits, status bytes) live in
   `rtl/core/tpu_pkg.sv` — reuse them rather than re-declaring literals.
-- Each module opens with a header comment stating its role, contract, and
-  latency. Please keep new modules consistent.
+- Each module opens with a one-line comment naming what it is. Beyond that,
+  comments are sparse: short, lowercase (unless the first word is all caps),
+  and about a decision or a low-level trap, not a restatement of the code.
+  Explanations, contracts and latencies belong in `docs/`.
 
 ## Commit / PR notes
 

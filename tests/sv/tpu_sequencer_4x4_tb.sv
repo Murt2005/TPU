@@ -1,25 +1,6 @@
 `timescale 1ns / 1ps
 
-// tpu_sequencer_4x4_tb — the M4 target shape: 16 PEs on 8 SB_MAC16s.
-//
-// Runs the full sequencer + datapath at ARRAY_ROWS=4, NUM_COLS=4, M_TILE=4 —
-// the shape boards/pico2-ice/fpga/Makefile builds with USE_MAC16_PAIR=1 (each pair of
-// row-adjacent PEs shares one hand-instantiated SB_MAC16 in dual-8x8 mode;
-// fits at 93% LC with ABC_FLAGS=-abc9 -dff + the BRAM-backed unified
-// buffer). The mmu is instantiated with USE_MAC16_PAIR=1 here, so this tb
-// simulates the *shipped* DSP netlist path (yosys's SB_MAC16 model), not
-// behavioral pe.sv.
-//
-// Matrix shapes at this parameterization:
-//   W : 4x4  (ARRAY_ROWS x NUM_COLS)   LOAD_WEIGHTS LEN = 16, rows bottom-first
-//   A : 4x4  (M_TILE x ARRAY_ROWS)     LOAD_ACT     LEN = 16, row-major
-//   B : 4    (NUM_COLS int16)          LOAD_BIAS    LEN = 8
-//   Y : 4x4  (M_TILE x NUM_COLS)       RUN response LEN = 32 (int16 LE)
-//
-// Expected results are computed in the testbench (integer matmul + bias +
-// ReLU), not hand-entered, so stimulus values can be arbitrary.
-// Avoids: dynamic arrays, open-array task args, `return` in tasks (iverilog limits).
-
+// sequencer + datapath at 4x4/M_TILE=4 through the pe_pair SB_MAC16 path
 module tpu_sequencer_4x4_tb;
 
     localparam int ARRAY_ROWS = 4;
@@ -164,7 +145,7 @@ module tpu_sequencer_4x4_tb;
 
     always #5 clk = ~clk;
 
-    // Stimulus matrices (int8-range values) + tb-side expected accumulator
+    // stimulus matrices (int8-range values) + tb-side expected accumulator
     int W [ARRAY_ROWS][NUM_COLS];
     int A [M_TILE][ARRAY_ROWS];
     int B [NUM_COLS];
@@ -179,11 +160,7 @@ module tpu_sequencer_4x4_tb;
         rx_valid = 1'b0;
     endtask
 
-    // TX byte capture. Concurrent: a response can start while the stimulus
-    // side is still pacing out a STREAM_RUN frame's bytes (tx_busy is tied
-    // low, so the whole response fires within a few cycles) — polling for
-    // tx_valid only after sending would miss those 1-cycle pulses. Capture
-    // every byte as it happens; collect_n just waits for the count.
+    // capture TX bytes concurrently: a response can start while a STREAM_RUN frame is still going out
     logic [7:0] rx_buf [2 + RESULT_BYTES];
     integer     cap_idx = 0;
 
@@ -194,9 +171,6 @@ module tpu_sequencer_4x4_tb;
         end
     end
 
-    // Wait until n response bytes have been captured, then reset the
-    // capture index (protocol is strictly request/response, so each
-    // response is fully consumed before the next command is sent).
     task automatic collect_n(integer n);
         integer timeout;
         timeout = 0;
@@ -221,7 +195,7 @@ module tpu_sequencer_4x4_tb;
         end
     endtask
 
-    // Send W over the wire: LOAD_WEIGHTS, rows bottom-first (wire contract)
+    // send W over the wire: LOAD_WEIGHTS, rows bottom-first (wire contract)
     task automatic send_weights(input string label);
         host_send_byte(8'h01);
         host_send_byte(8'(W_BYTES));
@@ -231,7 +205,7 @@ module tpu_sequencer_4x4_tb;
         expect_ack({label, " WEIGHTS"});
     endtask
 
-    // Send B: LOAD_BIAS, NUM_COLS int16 LE
+    // send B: LOAD_BIAS, NUM_COLS int16 LE
     task automatic send_bias(input string label);
         logic signed [15:0] b16;
         host_send_byte(8'h02);
@@ -244,7 +218,7 @@ module tpu_sequencer_4x4_tb;
         expect_ack({label, " BIAS"});
     endtask
 
-    // Send A: LOAD_ACT, natural row-major
+    // send A: LOAD_ACT, natural row-major
     task automatic send_act(input string label);
         host_send_byte(8'h03);
         host_send_byte(8'(A_BYTES));
@@ -254,7 +228,7 @@ module tpu_sequencer_4x4_tb;
         expect_ack({label, " ACT"});
     endtask
 
-    // Fold the current A@W into the tb-side running sum (one K-tile pass)
+    // fold the current A@W into the tb-side running sum (one K-tile pass)
     task automatic accumulate_expected(input logic first);
         int s;
         for (int m = 0; m < M_TILE; m++)
@@ -266,11 +240,7 @@ module tpu_sequencer_4x4_tb;
             end
     endtask
 
-    // Collect and check a full RUN result against ACC + bias + ReLU.
-    // Overflow semantics match the hardware exactly: the accumulator/bias
-    // adders are 16-bit with silent wraparound and ReLU fires *after* that
-    // truncation (rtl/core/accumulator.sv, rtl/core/bias.sv, rtl/core/activation.sv) --
-    // same golden model as tests/hw/hw_regression.py's golden().
+    // expected: 16-bit wrapping sum, ReLU after the wrap, as in tpu.golden
     task automatic check_result(input string label);
         logic signed [15:0] exp16;
         int errors_before;
@@ -284,7 +254,7 @@ module tpu_sequencer_4x4_tb;
             for (int m = 0; m < M_TILE; m++)
                 for (int c = 0; c < NUM_COLS; c++) begin
                     exp16 = 16'(ACC[m][c] + B[c]);   // non-saturating 16-bit wrap
-                    if (exp16 < 0) exp16 = '0;       // ReLU after truncation
+                    if (exp16 < 0) exp16 = '0;       // relu after truncation
                     got = signed'({rx_buf[2 + 2*(m*NUM_COLS + c) + 1],
                                    rx_buf[2 + 2*(m*NUM_COLS + c)]});
                     if (got !== exp16) begin
@@ -299,7 +269,7 @@ module tpu_sequencer_4x4_tb;
         repeat (20) @(posedge clk);
     endtask
 
-    // Single-shot compute: load W/B/A, RUN LEN=0, check
+    // single-shot compute: load W/B/A, RUN LEN=0, check
     task automatic do_compute(input string label);
         send_weights(label);
         send_bias(label);
@@ -310,10 +280,7 @@ module tpu_sequencer_4x4_tb;
         check_result(label);
     endtask
 
-    // RUN_TILE (0x06): current W and A in ONE frame, weights in NATURAL
-    // row-major order (no bottom-first pre-reversal — that's RUN_TILE's wire
-    // contract, unlike legacy LOAD_WEIGHTS). last=0 expects a bare ACK;
-    // last=1 checks the accumulated result.
+    // RUN_TILE: weights in natural row-major order; last=0 expects a bare ACK
     task automatic do_run_tile_pass(input logic first, input logic last, input string label);
         host_send_byte(8'h06);
         host_send_byte(8'(1 + W_BYTES + A_BYTES));
@@ -334,16 +301,13 @@ module tpu_sequencer_4x4_tb;
         end
     endtask
 
-    // STREAM_RUN payload bytes go paced: the sequencer runs a full pipeline
-    // pass (~30 cycles at this shape) between tiles without consuming rx
-    // bytes, relying on the real UART byte cadence (~120 cycles/byte at
-    // 12 MHz/1 Mbaud) to cover it. 60 cycles/byte models that floor.
+    // pace STREAM_RUN bytes at 60 cycles: the sequencer ignores RX for a pass between tiles
     task automatic sr_send_byte(input logic [7:0] b);
         host_send_byte(b);
         repeat (60) @(posedge clk);
     endtask
 
-    // Send the current W (natural row-major) + A as one STREAM_RUN tile and
+    // send the current W (natural row-major) + A as one STREAM_RUN tile and
     // fold it into the tb-side expected accumulator.
     task automatic sr_send_tile(input logic first);
         for (int r = 0; r < ARRAY_ROWS; r++)
@@ -355,7 +319,7 @@ module tpu_sequencer_4x4_tb;
         accumulate_expected(first);
     endtask
 
-    // Tiled RUN pass (LEN=1 flags). first/last as in the protocol; when
+    // tiled RUN pass (LEN=1 flags). first/last as in the protocol; when
     // last=0 expects a bare ACK, when last=1 checks the accumulated result.
     task automatic do_tiled_pass(input logic first, input logic last, input string label);
         send_weights(label);
@@ -387,27 +351,22 @@ module tpu_sequencer_4x4_tb;
 
         $display("\n=== Starting tpu_sequencer 4x4 (M_TILE=2, SB_MAC16 pairs) Testbench ===\n");
 
-        // Test 1: asymmetric values everywhere — any transposed/conflated
-        // index produces a different product. Mixed-sign to cross ReLU.
+        // test 1: asymmetric values everywhere — any transposed/conflated
+        // index produces a different product. mixed-sign to cross ReLU.
         $display("[Test 1] Full matmul, asymmetric W/A, mixed-sign bias");
         W = '{'{1, 2, 3, 4}, '{5, 6, 7, 8}, '{9, 10, 11, 12}, '{13, 14, 15, 16}};
         A = '{'{1, 2, 3, -4}, '{5, -6, 7, 8}, '{-2, 4, 1, 3}, '{6, 0, -5, 2}};
         B = '{10, -20, 5, -40};
         do_compute("T1");
 
-        // Test 2: one-hot weight columns select single A columns — catches
-        // row/col ordering bugs in the weight path specifically.
-        // W is the cyclic permutation: col c = e_{(c+1) mod 4}, so output
-        // col c picks A[:, (c+1) mod 4].
+        // test 2: one-hot weight columns catch row/col ordering bugs; col c picks A[:, (c+1) % 4]
         $display("[Test 2] One-hot weight columns (selection matrix)");
         W = '{'{0, 0, 0, 1}, '{1, 0, 0, 0}, '{0, 1, 0, 0}, '{0, 0, 1, 0}};
         A = '{'{11, 22, -33, 44}, '{55, -66, 77, 88}, '{-12, 34, 56, -78}, '{9, -8, 7, -6}};
         B = '{0, 0, 0, 0};
         do_compute("T2");
 
-        // Test 3: K-dim tiling over the wire — two passes accumulate in the
-        // datapath (Y = A0@W0 + A1@W1 + B), exercising rows_got/M_TILE and
-        // accum_pass_done at the wide shape.
+        // test 3: K-tiling over the wire, two passes
         $display("[Test 3] K-dim tiling over the wire (LEN=1 RUN flags)");
         B = '{5, -5, 15, -15};
         send_bias("T3");
@@ -418,7 +377,7 @@ module tpu_sequencer_4x4_tb;
         A = '{'{2, 2, -1, 0}, '{1, 0, 3, -2}, '{-1, 3, 0, 2}, '{4, -2, 1, 0}};
         do_tiled_pass(1'b0, 1'b1, "T3 K-tile1");
 
-        // Test 4: single-shot RUN_TILE at the 4x4 shape
+        // test 4: single-shot RUN_TILE at the 4x4 shape
         // (LEN = 1 + 16 + 16 = 33 bytes in one frame).
         $display("[Test 4] RUN_TILE single frame, 4x4 shape");
         W = '{'{3, -2, 1, 0}, '{-1, 4, -3, 2}, '{2, 1, 0, -3}, '{0, -1, 2, 4}};
@@ -427,8 +386,8 @@ module tpu_sequencer_4x4_tb;
         send_bias("T4");
         do_run_tile_pass(1'b1, 1'b1, "T4 RUN_TILE");
 
-        // Test 5: K-dim tiling via RUN_TILE frames (same accumulator math
-        // as Test 3, one frame per K-tile).
+        // test 5: K-dim tiling via RUN_TILE frames (same accumulator math
+        // as test 3, one frame per K-tile).
         $display("[Test 5] K-dim tiling via RUN_TILE frames, 4x4 shape");
         B = '{-3, 3, -6, 6};
         send_bias("T5");
@@ -439,7 +398,7 @@ module tpu_sequencer_4x4_tb;
         A = '{'{3, 1, -2, 0}, '{-1, 0, 1, 2}, '{0, -3, 2, 1}, '{1, 2, 0, -2}};
         do_run_tile_pass(1'b0, 1'b1, "T5 K-tile1");
 
-        // Test 6: STREAM_RUN with 3 tiles in one frame at the 4x4 shape
+        // test 6: STREAM_RUN with 3 tiles in one frame at the 4x4 shape
         // — LEN = 2 + 3*(16+16) = 98 bytes, one response.
         $display("[Test 6] STREAM_RUN: 3 tiles, one frame, 4x4 shape");
         B = '{11, -11, 22, -22};
@@ -459,12 +418,7 @@ module tpu_sequencer_4x4_tb;
         sr_send_tile(1'b0);
         check_result("T6 STREAM_RUN");
 
-        // Test 7: randomized full-int8-range stress via RUN_TILE -- weights
-        // and activations across [-128,127], bias across [-1000,1000],
-        // exercising PSUM_WIDTH wraparound + post-truncation ReLU at the
-        // deployed shape (the value class tests/hw/hw_regression.py's stress
-        // run uses on real hardware; T1-T6's hand-picked values never
-        // overflow, so they can't catch a wraparound-path bug).
+        // test 7: random full-range int8 via RUN_TILE, so sums wrap (T1-T6 never overflow)
         $display("[Test 7] randomized full-int8-range stress via RUN_TILE");
         urandom_seed = 32'hC0FFEE;     // fixed seed: failures reproduce
         void'($urandom(urandom_seed));
@@ -481,9 +435,7 @@ module tpu_sequencer_4x4_tb;
             do_run_tile_pass(1'b1, 1'b1, $sformatf("T7 rand %0d", t));
         end
 
-        // Test 8: randomized K-tiled chains (first/last flag pairs) with
-        // the same full-range values -- the accumulator's persistent PSUM
-        // crossing wraparound between passes.
+        // test 8: random K-tiled chains, wrapping across passes
         $display("[Test 8] randomized full-range 2-tile K-chains via RUN_TILE");
         for (int t = 0; t < 10; t++) begin
             for (int c = 0; c < NUM_COLS; c++)

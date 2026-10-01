@@ -1,24 +1,6 @@
 #!/usr/bin/env python3
-"""Hardware regression suite for a real pico2-ice board running tpu_top.
-
-Extends the host CLI's single --selftest vector into the full set of cases
-tests/sv/tpu_sequencer_tb.sv exercises in simulation (T1-T6), plus int8/int16
-boundary cases and a randomized stress run. A pass here means the design
-matches simulation across a much wider input space than the happy-path
-vector alone, on real silicon rather than just in iverilog.
-
---rows/--cols/--m-tile must match the ARRAY_ROWS/NUM_COLS/M_TILE the flashed
-bitstream was built with (boards/pico2-ice/fpga/Makefile). At the default 2x2/M_TILE=2 shape
-the fixed cases are the exact vectors from tests/sv/tpu_sequencer_tb.sv; at any
-other shape the same case *patterns* (zeros, one-hot columns, int8 extremes,
-PSUM wraparound) are generated at that shape and checked against the golden
-model, mirroring tests/sv/tpu_sequencer_4x2_tb.sv / tpu_sequencer_2x4_tb.sv.
-
-Usage:
-    python3 tests/hw/hw_regression.py --port /dev/cu.usbmodemXXXX
-    python3 tests/hw/hw_regression.py --port /dev/cu.usbmodemXXXX --stress-n 500
-    python3 tests/hw/hw_regression.py --port ... --rows 2 --cols 4 --m-tile 2
-"""
+"""hardware regression suite: the simulation vectors, int8/int16 boundaries and
+randomized stress, against a real board. shape flags must match the bitstream"""
 import argparse
 import sys
 
@@ -27,34 +9,16 @@ import numpy as np
 from tpu import DEFAULT_BAUD, TPU
 from tpu import golden as tpu_golden
 
-# Default accumulator/bias width (rtl/core/tpu_sequencer.sv's PSUM_WIDTH, no
-# saturation). Overridden from the CLI when the model/bitstream is wider --
-# set once in main() so golden() stays a pure function of its arguments.
+# set from --psum-width in main()
 PSUM_WIDTH = 16
 
 
 def golden(a, w, bias, psum_width=None, relu=True):
-    """Reference model matching the hardware's fixed-width datapath exactly.
-
-    The accumulator/bias sum is a psum_width-bit signed value with silent
-    (non-saturating) overflow -- ReLU is applied *after* that truncation, not
-    on the mathematically-exact product. This only matters once |A@W + bias|
-    exceeds the accumulator's range; every value the pipeline actually
-    produces along the way is representable in wider precision, so truncating
-    once at the end (rather than after every add) yields the identical bit
-    pattern.
-
-    relu=False models the flags[2] ACT_BYPASS path, where activation.sv
-    passes the biased sum through unclamped.
-    """
     pw = PSUM_WIDTH if psum_width is None else psum_width
     return tpu_golden.matmul(a, w, bias, psum_width=pw, relu=relu)
 
 
-# Test vectors mirrored from tests/sv/tpu_sequencer_tb.sv Test 1/2/5/6 so a pass
-# here means the same cases verified in simulation also hold on real hardware.
-# Only valid at the default 2x2/M_TILE=2 shape; see build_cases() for the
-# shape-generalized equivalents.
+# tests/sv/tpu_sequencer_tb.sv's T1/T2/T5/T6, valid at 2x2/M_TILE=2 only
 CASES_2X2 = [
     ("T1 happy path",
      [[1, 2], [3, 4]], [[4, 5], [2, 3]], [100, 200]),
@@ -74,8 +38,7 @@ CASES_2X2 = [
 
 
 def build_cases(rows, cols, m_tile):
-    """The same seven case *patterns* as CASES_2X2, at an arbitrary shape.
-    A is (m_tile x rows), W is (rows x cols), bias is (cols,)."""
+    """the same case patterns as CASES_2X2, at any shape"""
     if (rows, cols, m_tile) == (2, 2, 2):
         return CASES_2X2
     rng = np.random.default_rng(1234)
@@ -127,8 +90,7 @@ def run_reset_roundtrip(tpu, cases):
 
 
 def run_unknown_cmd(tpu):
-    # 0xEE, not 0xFF: 0xFF is CMD_NOP (the SPI read-poll filler), which the
-    # sequencer silently ignores in S_IDLE rather than answering STATUS_ERR.
+    # not 0xFF: that's the NOP filler, which gets no response
     try:
         tpu._send_cmd(0xEE)
     except Exception:
@@ -139,13 +101,6 @@ def run_unknown_cmd(tpu):
 
 
 def run_tiled_stress(tpu, n, seed):
-    """Exercises matmul_tiled()'s K/M/N-dim tiling (rtl/core/accumulator.sv's
-    persistent PSUM, driven via the STREAM_RUN first/last flags) against
-    randomized shapes beyond the raw hardware tile -- proving the
-    accumulator's hardware-side K-reduction matches an un-tiled golden model
-    on real silicon, not just in sim. Shapes deliberately include
-    non-multiples of the tile size to exercise matmul_tiled()'s internal
-    zero-padding."""
     rng = np.random.default_rng(seed)
     r, c, mt = tpu.rows, tpu.cols, tpu.m_tile
     m_choices = [1, mt, 2 * mt, 2 * mt + 1]
@@ -172,11 +127,7 @@ def run_tiled_stress(tpu, n, seed):
 
 
 def run_tile_equivalence(tpu, n, seed):
-    """CMD_RUN_TILE (one frame) must produce bit-identical results to the
-    legacy LOAD_WEIGHTS/LOAD_ACT/RUN triple for the same inputs -- both
-    against each other and against the golden model. Note run_tile() sends
-    weights in natural row-major order (the sequencer reorders internally),
-    so this also catches a wire-order regression in either path."""
+    """RUN_TILE must match the legacy three-command path bit for bit"""
     rng = np.random.default_rng(seed + 1)
     fails = 0
     for i in range(n):
@@ -197,12 +148,7 @@ def run_tile_equivalence(tpu, n, seed):
 
 
 def run_stream_boundaries(tpu, seed):
-    """CMD_STREAM_RUN K-runs at the frame-chunking boundaries: 1 tile
-    (degenerate single-frame), max_stream_tiles (exactly one full frame),
-    max+1 and max+9 (multi-frame chains, where the flags byte carries
-    TILE_FIRST/TILE_LAST across frames -- the case MNIST's K=144 layer
-    depends on). Goes through matmul_tiled(), which is the code path
-    inference actually uses."""
+    """STREAM_RUN at the frame-chunking boundaries"""
     rng = np.random.default_rng(seed + 2)
     mst = tpu.max_stream_tiles
     fails = 0
@@ -224,12 +170,7 @@ def run_stream_boundaries(tpu, seed):
 
 
 def run_offload_ab(tpu, n, seed):
-    """M3 firmware-offload A/B: the FW_MATMUL path (boards/pico2-ice/firmware/tpu_tile.c
-    drives the whole tiling loop on the RP2350) must produce bit-identical
-    results to the host-tiled STREAM_RUN path, and both must match the
-    golden model -- catching any divergence between the C port of the
-    tiling loop and the Python reference. Skipped (as a pass) when the
-    connected firmware doesn't advertise the offload."""
+    """FW_MATMUL vs host-tiled vs reference, bit for bit; skipped without the SPI firmware"""
     if not tpu.offload:
         print("[SKIP] offload A/B: firmware does not advertise FW_MATMUL "
               "(--link uart, or pre-M3 firmware)")
@@ -303,8 +244,6 @@ def main():
     p.add_argument("--seed", type=int, default=0, help="RNG seed for the stress test")
     args = p.parse_args()
 
-    # golden() must wrap at the same width the device accumulates at, or every
-    # result past int16 reads as a mismatch when the device is in fact right.
     global PSUM_WIDTH
     PSUM_WIDTH = args.psum_width
 

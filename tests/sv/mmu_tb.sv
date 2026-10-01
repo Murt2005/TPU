@@ -18,15 +18,13 @@ module mmu_tb;
     int errors = 0;
     int exp_col0_q[$], exp_col1_q[$];
 
-    // Instantiate MMU
+    // instantiate MMU
     mmu #(.ARRAY_ROWS(2), .NUM_COLS(2)) uut (.*);
 
-    // Clock generator (10ns period)
+    // clock generator (10ns period)
     always #5 clk = ~clk;
 
-    // --- Self-checking scoreboard (the original testbench had none --
-    // this makes the back-to-back gap test below automatically verified
-    // instead of requiring you to eyeball the telemetry) ---
+    // self-checking scoreboard
     always @(posedge clk) begin
         if (!reset) begin
             if (out_partial_sum_valid[0]) begin
@@ -62,32 +60,30 @@ module mmu_tb;
         end
     end
 
-    // --- Dynamic Telemetry Logger ---
-    // Hierarchical paths follow mmu's generate-block naming:
-    // uut.gen_pe_rows.gen_row[r].gen_col[c].pe_inst
+    // telemetry; paths follow mmu's generate naming
     always @(negedge clk) begin
         if (!reset) begin
             $display("[Time=%0t] --- Mode: %s ---", $time, loading_phase ? "WEIGHT LOAD" : "COMPUTE");
 
-            // PE00 Telemetry
+            // PE00 telemetry
             $display("  PE00 | Act: In=%2d (V:%b), Out=%2d | Weight: In=%2d (V:%b), Reg=%2d | PSum: In=%2d (V:%b), Out=%2d (V:%b)",
                      uut.gen_pe_rows.gen_row[0].gen_col[0].pe_inst.in_activation,  uut.gen_pe_rows.gen_row[0].gen_col[0].pe_inst.in_activation_valid,  uut.gen_pe_rows.gen_row[0].gen_col[0].pe_inst.out_activation,
                      uut.gen_pe_rows.gen_row[0].gen_col[0].pe_inst.in_weight,      uut.gen_pe_rows.gen_row[0].gen_col[0].pe_inst.in_weight_valid,      uut.gen_pe_rows.gen_row[0].gen_col[0].pe_inst.weight_reg,
                      uut.gen_pe_rows.gen_row[0].gen_col[0].pe_inst.in_partial_sum, uut.gen_pe_rows.gen_row[0].gen_col[0].pe_inst.in_partial_sum_valid, uut.gen_pe_rows.gen_row[0].gen_col[0].pe_inst.out_partial_sum, uut.gen_pe_rows.gen_row[0].gen_col[0].pe_inst.out_partial_sum_valid);
 
-            // PE01 Telemetry
+            // PE01 telemetry
             $display("  PE01 | Act: In=%2d (V:%b), Out=%2d | Weight: In=%2d (V:%b), Reg=%2d | PSum: In=%2d (V:%b), Out=%2d (V:%b)",
                      uut.gen_pe_rows.gen_row[0].gen_col[1].pe_inst.in_activation,  uut.gen_pe_rows.gen_row[0].gen_col[1].pe_inst.in_activation_valid,  uut.gen_pe_rows.gen_row[0].gen_col[1].pe_inst.out_activation,
                      uut.gen_pe_rows.gen_row[0].gen_col[1].pe_inst.in_weight,      uut.gen_pe_rows.gen_row[0].gen_col[1].pe_inst.in_weight_valid,      uut.gen_pe_rows.gen_row[0].gen_col[1].pe_inst.weight_reg,
                      uut.gen_pe_rows.gen_row[0].gen_col[1].pe_inst.in_partial_sum, uut.gen_pe_rows.gen_row[0].gen_col[1].pe_inst.in_partial_sum_valid, uut.gen_pe_rows.gen_row[0].gen_col[1].pe_inst.out_partial_sum, uut.gen_pe_rows.gen_row[0].gen_col[1].pe_inst.out_partial_sum_valid);
 
-            // PE10 Telemetry
+            // PE10 telemetry
             $display("  PE10 | Act: In=%2d (V:%b), Out=%2d | Weight: In=%2d (V:%b), Reg=%2d | PSum: In=%2d (V:%b), Out=%2d (V:%b)",
                      uut.gen_pe_rows.gen_row[1].gen_col[0].pe_inst.in_activation,  uut.gen_pe_rows.gen_row[1].gen_col[0].pe_inst.in_activation_valid,  uut.gen_pe_rows.gen_row[1].gen_col[0].pe_inst.out_activation,
                      uut.gen_pe_rows.gen_row[1].gen_col[0].pe_inst.in_weight,      uut.gen_pe_rows.gen_row[1].gen_col[0].pe_inst.in_weight_valid,      uut.gen_pe_rows.gen_row[1].gen_col[0].pe_inst.weight_reg,
                      uut.gen_pe_rows.gen_row[1].gen_col[0].pe_inst.in_partial_sum, uut.gen_pe_rows.gen_row[1].gen_col[0].pe_inst.in_partial_sum_valid, uut.gen_pe_rows.gen_row[1].gen_col[0].pe_inst.out_partial_sum, uut.gen_pe_rows.gen_row[1].gen_col[0].pe_inst.out_partial_sum_valid);
 
-            // PE11 Telemetry
+            // PE11 telemetry
             $display("  PE11 | Act: In=%2d (V:%b), Out=%2d | Weight: In=%2d (V:%b), Reg=%2d | PSum: In=%2d (V:%b), Out=%2d (V:%b)",
                      uut.gen_pe_rows.gen_row[1].gen_col[1].pe_inst.in_activation,  uut.gen_pe_rows.gen_row[1].gen_col[1].pe_inst.in_activation_valid,  uut.gen_pe_rows.gen_row[1].gen_col[1].pe_inst.out_activation,
                      uut.gen_pe_rows.gen_row[1].gen_col[1].pe_inst.in_weight,      uut.gen_pe_rows.gen_row[1].gen_col[1].pe_inst.in_weight_valid,      uut.gen_pe_rows.gen_row[1].gen_col[1].pe_inst.weight_reg,
@@ -99,9 +95,9 @@ module mmu_tb;
         end
     end
 
-    // --- Drive Test Signals ---
+    // drive test signals
     initial begin
-        // Reset state initialization
+        // reset state initialization
         clk                   = 0;
         reset                 = 1;
         loading_phase         = 0;
@@ -117,33 +113,28 @@ module mmu_tb;
 
         $display("\n=== Starting MMU Testbench ===\n");
 
-        // Matrix 1 expected outputs: C1 = A1 @ W1 = [[8,11],[20,27]]
+        // matrix 1 expected outputs: C1 = A1 @ W1 = [[8,11],[20,27]]
         exp_col0_q.push_back(8);   exp_col1_q.push_back(11);
         exp_col0_q.push_back(20);  exp_col1_q.push_back(27);
 
-        // ------------------------------------------
-        // Test 1: Staggered Stationary Weight Loading
-        // Target Weight Matrix:
-        //  [4, 5]
-        //  [2, 3]
-        // ------------------------------------------
+        // test 1: staggered weight load, W = [[4,5],[2,3]]
         $display("\n Test 1: Staggered Stationary Weight Loading");
         @(posedge clk);
         #1;
         loading_phase      = 1;
         capture_weight_col = 2'b11;
 
-        // Cycle 0: Inject bottom weights (row 1 weights) into the top ports
+        // cycle 0: inject bottom weights (row 1 weights) into the top ports
         in_col[0] = 8'sd2; in_col_valid[0] = 1'b1;
         in_col[1] = 8'sd3; in_col_valid[1] = 1'b1;
 
         @(posedge clk);
         #1;
-        // Cycle 1: Push bottom weights down to row 1 PEs, inject top weights (row 0 weights)
+        // cycle 1: push bottom weights down to row 1 PEs, inject top weights (row 0 weights)
         in_col[0] = 8'sd4; in_col_valid[0] = 1'b1;
         in_col[1] = 8'sd5; in_col_valid[1] = 1'b1;
 
-        // At the next edge, PE00/PE01 capture [4,5] and PE10/PE11 capture [2,3]
+        // at the next edge, PE00/PE01 capture [4,5] and PE10/PE11 capture [2,3]
         @(posedge clk);
         #1;
         loading_phase      = 0;
@@ -151,53 +142,40 @@ module mmu_tb;
         in_col[0] = 0; in_col_valid[0] = 1'b0;
         in_col[1] = 0; in_col_valid[1] = 1'b0;
 
-        // Give the pipeline one idle tick to settle
+        // give the pipeline one idle tick to settle
         @(posedge clk);
 
-        // ------------------------------------------
-        // Test 2: Systolic Staggered Data Input Streaming
-        // Target Activation Matrix (A):
-        //  [1, 2]
-        //  [3, 4]
-        // Expected Matrix Multiplication Output:
-        //  C = A * W => [1*4 + 2*2,  1*5 + 2*3] = [8,  11]
-        //               [3*4 + 4*2,  3*5 + 4*3] = [20, 27]
-        // ------------------------------------------
+        // test 2: stream A = [[1,2],[3,4]], expect [[8,11],[20,27]]
 
         $display("\n Test 2: Systolic Staggered Data Input Streaming");
-        // Cycle 0: Feed A[0][0]=1 to Row 0. Row 1 waits.
+        // cycle 0: feed A[0][0]=1 to row 0. row 1 waits.
         @(posedge clk);
         #1;
         in_row[0] = 8'sd1; in_row_valid[0] = 1'b1;
         in_row[1] = 8'sd0; in_row_valid[1] = 1'b0;
 
-        // Cycle 1: Stagger step. Feed A[1][0]=3 to Row 0, feed A[0][1]=2 to Row 1.
+        // cycle 1: stagger step. feed A[1][0]=3 to row 0, feed A[0][1]=2 to row 1.
         @(posedge clk);
         #1;
         in_row[0] = 8'sd3; in_row_valid[0] = 1'b1;
         in_row[1] = 8'sd2; in_row_valid[1] = 1'b1;
 
-        // Cycle 2: Feed A[1][1]=4 to Row 1. Row 0 data stream is exhausted.
+        // cycle 2: feed A[1][1]=4 to row 1. row 0 data stream is exhausted.
         @(posedge clk);
         #1;
         in_row[0] = 8'sd0; in_row_valid[0] = 1'b0;
         in_row[1] = 8'sd4; in_row_valid[1] = 1'b1;
 
-        // Cycle 3: All matrix data sent. Pull inputs to idle, wait for computations to flush.
+        // cycle 3: all matrix data sent. pull inputs to idle, wait for computations to flush.
         @(posedge clk);
         #1;
         in_row[0] = 8'sd0; in_row_valid[0] = 1'b0;
         in_row[1] = 8'sd0; in_row_valid[1] = 1'b0;
 
-        // Keep clock cycling to observe output accumulation results completely clearing out
+        // keep clock cycling to observe output accumulation results completely clearing out
         #40;
 
-        // Test 3: back-to-back weight reload no reset in between
-        // Same drain margin the original single-pass test already proved
-        // sufficient (#40) -- but instead of stopping here, we immediately
-        // load a second weight matrix and run a second activation pass in
-        // the SAME simulation epoch, with no reset between matrices.
-        // ------------------------------------------
+        // test 3: reload a second matrix with no reset in between
         $display("\n Test 3: back to back weight reload with no reset in between");
 
         // W2 = [[1,1],[1,1]], A2 = [[2,3],[4,5]] -> C2 = A2@W2 = [[5,5],[9,9]]
@@ -256,7 +234,7 @@ module mmu_tb;
         $finish;
     end
 
-    // --- Waveform Dump ---
+    // waveform dump
     initial begin
         $dumpfile("mmu_simulation.vcd");
         $dumpvars(0, mmu_tb);

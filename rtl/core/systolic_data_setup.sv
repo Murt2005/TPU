@@ -1,6 +1,6 @@
 `timescale 1ns / 1ps
 
-// Systolic Data Setup
+// systolic data setup: delays element i by i cycles
 module systolic_data_setup #(
     parameter int ARRAY_ROWS   = 2,
     parameter int DATA_WIDTH   = 8

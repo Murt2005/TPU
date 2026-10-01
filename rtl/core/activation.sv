@@ -1,11 +1,6 @@
 `timescale 1ns / 1ps
 
-// ReLU activation unit
-//
-// Rectified Linear Unit (ReLU) function element-wise:
-//
-//   out[c] = max(0, in[c])
-//
+// activation unit: element-wise ReLU
 module activation #(
     parameter int NUM_COLS   = 2,
     parameter int PSUM_WIDTH = 16

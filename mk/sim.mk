@@ -1,25 +1,6 @@
-## ============================================================================
-##  mk/sim.mk — Icarus Verilog testbenches (tests/sv/)
-## ============================================================================
-
-# ----------------------------------------------------------------------------
-# RTL dependency graph
-#
-# Reflects what each module instantiates internally:
-#   mmu.sv              -> pe.sv            (instantiates 4x pe)
-#   accumulator.sv       -> fifo.sv          (instantiates fifo)
-#   weight_fifo.sv       -> fifo.sv          (instantiates fifo)
-#   tpu_sequencer.sv     -> no RTL deps      (datapath wired externally in tb)
-#   pe.sv, fifo.sv, systolic_data_setup.sv  -> no internal deps
-#   bias.sv, activation.sv                  -> no internal deps
-#   uart_rx.sv, uart_tx.sv                  -> no internal deps
-#
-# Update these lists whenever an RTL file's internal instantiations change.
-# ----------------------------------------------------------------------------
+# what each module instantiates; update when instantiations change
 RTL_fifo                 := $(CORE_DIR)/fifo.sv
 RTL_pe                   := $(CORE_DIR)/pe.sv
-# pe_pair hand-instantiates SB_MAC16, so its dep list includes yosys's own
-# model of it (extracted in the root Makefile).
 RTL_pe_pair              := $(PICO_DIR)/pe_pair.sv $(SB_MAC16_SIM)
 RTL_mmu                  := $(CORE_DIR)/mmu.sv $(RTL_pe)
 RTL_accumulator          := $(CORE_DIR)/accumulator.sv $(RTL_fifo)
@@ -32,22 +13,15 @@ RTL_uart_rx              := $(PERIPH_DIR)/uart_rx.sv
 RTL_uart_tx              := $(PERIPH_DIR)/uart_tx.sv
 RTL_spi_slave            := $(PERIPH_DIR)/spi_slave.sv $(RTL_fifo)
 RTL_hps_bridge           := $(PERIPH_DIR)/hps_bridge.sv
-# tpu_pkg.sv (shared opcode/status/width constants) must precede any file that
-# imports it, so it leads every dep list that pulls in tpu_sequencer.
+# tpu_pkg.sv first: the sequencer imports it
 RTL_pkg                  := $(CORE_DIR)/tpu_pkg.sv
 RTL_tpu_sequencer        := $(RTL_pkg) $(CORE_DIR)/tpu_sequencer.sv
 
-# Full datapath (everything tpu_sequencer_tb needs to instantiate)
 RTL_tpu_datapath         := $(RTL_unified_buffer) $(RTL_weight_fifo) \
                             $(RTL_systolic_data_setup) $(RTL_mmu) \
                             $(RTL_accumulator) $(RTL_bias) $(RTL_activation)
 
-# ----------------------------------------------------------------------------
-# Testbench -> RTL files required to build it
-#
-# Each test name maps to tests/sv/<name>_tb.sv. Registering a new testbench is
-# this one line (+ the _tb.sv file itself).
-# ----------------------------------------------------------------------------
+# one DEPS_<name> per tests/sv/<name>_tb.sv
 DEPS_fifo                 := $(RTL_fifo)
 DEPS_pe                   := $(RTL_pe)
 DEPS_pe_pair              := $(RTL_pe_pair) $(RTL_pe)
@@ -70,32 +44,24 @@ DEPS_hps_bridge           := $(RTL_hps_bridge)
 DEPS_tpu_sequencer        := $(RTL_tpu_sequencer) $(RTL_tpu_datapath)
 DEPS_tpu_sequencer_4x2    := $(RTL_tpu_sequencer) $(RTL_tpu_datapath)
 DEPS_tpu_sequencer_2x4    := $(RTL_tpu_sequencer) $(RTL_tpu_datapath)
-# 4x4 instantiates mmu with USE_MAC16_PAIR=1 -> needs pe_pair + SB_MAC16 model
+# the 4x4 bench uses pe_pair
 DEPS_tpu_sequencer_4x4    := $(RTL_tpu_sequencer) $(RTL_tpu_datapath) $(RTL_pe_pair)
 
-# The test list is every tests/sv/<name>_tb.sv on disk -- nothing to register by
-# hand. A testbench without a DEPS_<name> line above stops the build here,
-# instead of being silently skipped.
+# the test list is the files on disk; a bench without a DEPS_ line stops the build
 TESTS := $(sort $(patsubst $(TB_DIR)/%_tb.sv,%,$(wildcard $(TB_DIR)/*_tb.sv)))
 MISSING_DEPS := $(strip $(foreach t,$(TESTS),$(if $(DEPS_$(t)),,$(t))))
 ifneq ($(MISSING_DEPS),)
 $(error Testbench(es) without a DEPS_<name> line in the Makefile: $(MISSING_DEPS))
 endif
 
-# de-duplicate dep lists (modules shared via multiple paths, e.g. tpu_core -> fifo.sv)
 dedup = $(if $1,$(firstword $1) $(call dedup,$(filter-out $(firstword $1),$1)))
 
-# ----------------------------------------------------------------------------
-# Per-test build + run rules: one pattern rule for every testbench
-# ----------------------------------------------------------------------------
 .SECONDEXPANSION:
 $(SIM_DIR)/%.vvp: $(TB_DIR)/%_tb.sv $$(call dedup,$$(DEPS_$$*)) | $(SIM_DIR)
 	$(IVERILOG) $(IFLAGS) -o $@ $(call dedup,$(DEPS_$*)) $<
 
 $(foreach t,$(TESTS),$(eval build-$(t): $(SIM_DIR)/$(t).vvp))
 
-# `make test-<name>` builds (if stale) and runs a single testbench, dumping
-# its VCD (if any) and console log into sim/
 define RUN_RULE
 test-$(1): $(SIM_DIR)/$(1).vvp | $(LOG_DIR)
 	@cd $(SIM_DIR) && $(VVP) $(1).vvp | tee logs/$(1).log
@@ -105,9 +71,6 @@ wave-$(1): test-$(1)
 endef
 $(foreach t,$(TESTS),$(eval $(call RUN_RULE,$(t))))
 
-# ----------------------------------------------------------------------------
-# Aggregate target: run everything, print a single pass/fail summary
-# ----------------------------------------------------------------------------
 test: | $(LOG_DIR)
 	@./run_tests.sh
 

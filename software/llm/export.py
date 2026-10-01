@@ -1,32 +1,6 @@
 #!/usr/bin/env python3
-"""Quantize a GPT-Neo checkpoint (TinyStories) into this repo's int8 format.
-
-    python3 software/llm/export.py --bin /path/to/pytorch_model.bin \
-                          --config /path/to/config.json -o software/llm/model/tinystories-1m.npz
-
-What this does and does NOT do
-------------------------------
-Post-training quantization only. No gradients, no fine-tuning, no calibration
-set -- and deliberately so, because of how the runtime quantizes activations.
-
-Weights: int8, with a **per-output-channel** scale. Per-channel costs nothing
-here (the host divides each output column by its own scale after the matmul)
-and is markedly more accurate than per-tensor on a model this small.
-
-Activations: NOT quantized here. software/llm/infer.py quantizes each activation
-vector dynamically at runtime from its own max, so there is no calibration
-distribution to capture and no train/serve skew. That is the standard W8A8
-dynamic recipe, and it is why this script needs no data.
-
-Bias: kept in float and added on the host AFTER dequantization, rather than
-folded into the accumulator. The accumulator-domain bias would have to be
-scaled by the activation scale, which is only known at runtime -- so folding
-it in is not merely inconvenient, it is impossible without fixing the
-activation scale ahead of time.
-
-Embeddings and LayerNorm stay float: a lookup is not a matmul, and LayerNorm
-runs on the host (rtl/ has no normalization unit).
-"""
+"""quantize a GPT-Neo checkpoint to int8, one scale per output channel; activations
+are quantized at runtime and bias stays float (see README.md)"""
 import argparse
 import json
 import os
@@ -37,11 +11,7 @@ import torch_bin
 
 
 def quantize_per_channel(w_in_out):
-    """int8-quantize an (in, out) weight matrix, one scale per output column.
-
-    Returns (int8 array, float32 scales). A column that is entirely zero gets
-    scale 1.0 rather than 0, so dequantization cannot produce NaN.
-    """
+    """(in, out) float -> int8 with one scale per output column"""
     w = np.asarray(w_in_out, dtype=np.float32)
     amax = np.abs(w).max(axis=0)                 # per output channel
     scale = np.where(amax > 0, amax / 127.0, 1.0).astype(np.float32)
@@ -77,8 +47,7 @@ def main():
         "n_ctx": np.int32(cfg["max_position_embeddings"]),
         "window": np.int32(win),
         "ln_eps": np.float32(cfg.get("layer_norm_epsilon", 1e-5)),
-        # attention_layers alternates global/local; a local layer only differs
-        # once the sequence exceeds `window`, which infer.py asserts against.
+        # local layers only differ past `window` tokens, which infer.py asserts against
         "layer_types": np.array(
             [1 if t == "local" else 0 for t in cfg["attention_layers"]], np.int32),
     }
@@ -88,7 +57,7 @@ def main():
     out["ln_f_g"] = sd["transformer.ln_f.weight"].astype(np.float32)
     out["ln_f_b"] = sd["transformer.ln_f.bias"].astype(np.float32)
 
-    # nn.Linear stores (out, in); every matmul here wants (in, out).
+    # nn.Linear stores (out, in); the matmuls want (in, out)
     def lin(name):
         return sd[name].astype(np.float32).T
 
@@ -116,8 +85,7 @@ def main():
                                     else np.zeros(q.shape[1], np.float32))
             n_q += 1
 
-    # lm_head is tied to wte in GPT-Neo: logits = x @ wte.T, so the matmul's
-    # (in, out) matrix is wte.T with one scale per vocabulary entry.
+    # lm_head is tied to wte, so its matrix is wte.T with one scale per vocab entry
     q, s = quantize_per_channel(out["wte"].T)
     out["head_w"], out["head_s"] = q, s
     n_q += 1
@@ -125,8 +93,6 @@ def main():
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     np.savez_compressed(args.out, **out)
 
-    # Report the worst per-matrix quantization error, so a bad export is
-    # visible here rather than as mysterious garbage at generation time.
     worst, worst_name = 0.0, ""
     for i in range(L):
         for tag, key in (("q", "q_proj"), ("k", "k_proj"), ("v", "v_proj"),

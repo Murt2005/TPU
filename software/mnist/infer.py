@@ -1,29 +1,6 @@
 #!/usr/bin/env python3
-"""Multi-layer MNIST inference driver: feeds the trained+quantized MLP
-(software/mnist/train_mnist.py's mnist_2x2_int8.npz) through the real TPU, layer by
-layer, using tpu.TPU.matmul_tiled() for each layer's K-tiled matmul.
-
-The host does the inter-layer requantization that unified_buffer's 8-bit
-activation store forces on any multi-layer network: rtl/core/activation.sv's
-ReLU output is int16, but the *next* layer's activation input can only be
-int8 -- there is no on-chip requantization unit, so this driver rescales
-via the model's calibrated hidden_scale between layer 1 and layer 2,
-exactly like software/mnist/train_mnist.py's quantized_accuracy() does in its
-pure-numpy simulation.
-
-Also provides an OfflineBackend that mirrors the exact same fixed-point
-arithmetic in pure numpy (train_mnist.hw_layer()) so this driver -- and
-anything built on it, like the drawing demo -- can be exercised without a
-board attached, and so hardware predictions can be sanity-checked against
-the training script's own quantized-accuracy run.
-
-Usage:
-    python3 software/mnist/infer.py --port /dev/cu.usbmodemXXXX --test-n 50   # hardware
-    python3 software/mnist/infer.py --offline --test-n 200                    # no board
-    python3 software/mnist/infer.py --port /dev/cu.usbmodemXXXX --compare --test-n 20
-        # runs the SAME sampled images on pico2-ice hardware and locally
-        # (one-at-a-time and batched/vectorized), prints all three side by side
-"""
+"""multi-layer MNIST inference on the TPU or offline in numpy; the host requantizes
+between layers. --compare runs the same images on hardware and locally"""
 import argparse
 import os
 import time
@@ -46,16 +23,13 @@ def _quantize(x, scale):
 
 
 def _pad_to_2_rows(row):
-    """The hardware requires an even activation-row count (unified_buffer
-    is fixed at ROWS=2); pad a single example with a dummy zero row and
-    only ever read back row 0."""
+    """two rows, as the original 2x2 build required; only row 0 is read back"""
     row = np.asarray(row)
     return np.stack([row, np.zeros_like(row)], axis=0)
 
 
 class OfflineBackend:
-    """Pure-numpy stand-in for the hardware: same non-saturating int16
-    accumulator semantics (train_mnist.hw_layer), no board required."""
+    """numpy stand-in with the hardware's exact arithmetic"""
 
     def run_layer(self, x_row_int8, w_int8, b_int16):
         x2 = _pad_to_2_rows(x_row_int8).astype(np.int64)
@@ -64,7 +38,6 @@ class OfflineBackend:
 
 
 class HardwareBackend:
-    """Drives the real pico2-ice board via TPU.matmul_tiled()."""
 
     def __init__(self, tpu):
         self.tpu = tpu
@@ -76,16 +49,14 @@ class HardwareBackend:
 
 
 class MNISTInference:
-    """model + backend -> predict driver, shared between the hardware and
-    offline backends so the drawing demo can use either interchangeably."""
+    """model + backend; the draw demo can use either backend"""
 
     def __init__(self, backend, model=None):
         self.backend = backend
         self.model = model if model is not None else load_model()
 
     def predict_flat(self, x64_float):
-        """x64_float: length-64 array, pixel intensities in [0,1]
-        (train_mnist.downsample()'s output convention)."""
+        """x64_float: downsampled pixels in [0, 1]"""
         m = self.model
         x_q = _quantize(x64_float, float(m["in_scale"]))
         h_raw = self.backend.run_layer(x_q, m["w1"], m["b1"])          # int16, ReLU'd
@@ -95,8 +66,7 @@ class MNISTInference:
         return digit, scores
 
     def predict_image(self, img28_uint8):
-        """img28_uint8: (28,28) array, standard MNIST convention (0 =
-        background, 255 = stroke)."""
+        """img28_uint8: (28, 28), 0 = background, 255 = stroke"""
         x = downsample(img28_uint8[np.newaxis, :, :], out_side=IN_SIDE)[0]
         return self.predict_flat(x)
 
@@ -107,9 +77,7 @@ def sample_indices(n_total, n, seed=0):
 
 
 def run_test_set(inference, x_test, y_test, idx):
-    """One-at-a-time loop, same call pattern as the hardware backend (one
-    predict_flat() round-trip per image) -- the fair comparison for
-    per-image latency, whichever backend is plugged in."""
+    """one image per call, the fair per-image latency comparison"""
     correct = 0
     t0 = time.time()
     for i in idx:
@@ -120,11 +88,7 @@ def run_test_set(inference, x_test, y_test, idx):
 
 
 def predict_batch_offline(model, x_batch_float):
-    """Vectorized equivalent of OfflineBackend, run once over the whole
-    batch instead of image-by-image -- same exact fixed-point math
-    (train_mnist.hw_layer is already row-independent), just without the
-    per-image Python call overhead. Shows the local machine's real batch
-    throughput rather than a hardware-shaped one-at-a-time loop."""
+    """the same math batched, to show the host's real throughput"""
     m = model
     x_q = _quantize(x_batch_float, float(m["in_scale"]))
     _, _, relu1 = hw_layer(x_q.astype(np.int64), m["w1"].astype(np.int64), m["b1"].astype(np.int64))

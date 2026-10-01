@@ -1,6 +1,6 @@
 `timescale 1ns / 1ps
 
-// HPS BRIDGE: Avalon-MM (lightweight HPS->FPGA bridge)
+// HPS bridge: Avalon-MM slave on the lightweight HPS->FPGA bridge
 module hps_bridge (
     input  logic        clk,
     input  logic        reset,

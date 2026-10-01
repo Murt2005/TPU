@@ -1,6 +1,6 @@
 `timescale 1ns/1ps
 
-// Processing Element (PE)
+// processing element (PE)
 module pe #(
     parameter int PSUM_WIDTH = 16
 ) (

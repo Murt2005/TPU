@@ -1,6 +1,6 @@
 `timescale 1ns / 1ps
 
-// Weight Fifo
+// weight FIFO: ping-pong banks, the shadow loads while the active drains
 module weight_fifo #(
     parameter int WEIGHT_WIDTH = 8,
     parameter int FIFO_DEPTH   = 4,  // must be a power of 2 & >= array dimension (N)

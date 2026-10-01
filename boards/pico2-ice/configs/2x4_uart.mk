@@ -1,5 +1,4 @@
-# 2x4 array (8 PEs, one per SB_MAC16), UART link at 1 Mbaud, 12 MHz core.
-# Measured: 3,538 LCs (67%), 8/8 DSP, 31.61 MHz fMax; MNIST ~240 ms/image.
+# 8 PEs, one per SB_MAC16
 ARRAY_ROWS     := 2
 NUM_COLS       := 4
 M_TILE         := 2

@@ -1,6 +1,6 @@
 `timescale 1ns / 1ps
 
-// Matrix Multiply Unit (MMU)
+// matrix multiply unit (MMU)
 module mmu #(
     parameter int ARRAY_ROWS = 2,
     parameter int NUM_COLS   = 2,

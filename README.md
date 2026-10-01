@@ -524,7 +524,7 @@ it wins once `infer.py` batches images. See [`docs/performance.md`](docs/perform
 - **K-dim tiling** — `accumulator.sv` holds a persistent per-row PSUM register that
   survives across separate `RUN`s (`tile_first`/`tile_last` control, `pass_done` status),
   so a matmul with K larger than the array can be tiled into multiple weight-reload
-  passes summed in hardware before bias/ReLU ever runs — see its header comment
+  passes summed in hardware before bias/ReLU ever runs — see `docs/architecture.md` §6
   and the `RUN` command's optional `LEN=1` flags byte (`rtl/core/tpu_sequencer.sv`).
   Verified in sim (`accumulator_tb`, `tpu_core_tb` Test 8,
   `tpu_sequencer_tb` Test 7) and on real pico2-ice hardware (`tpu.TPU.matmul_tiled()`, `tests/hw/hw_regression.py`'s randomized multi-tile stress case).
@@ -571,7 +571,7 @@ it wins once `infer.py` batches images. See [`docs/performance.md`](docs/perform
   load with the previous tile's compute, which the double-buffered weight FIFO already
   supports; a `PSUM_WIDTH=32` bitstream so the transformer can leave simulation; a
   bigger/better MNIST model (the current one is deliberately tiny to stay provably
-  inside int16 — see `software/mnist/train_mnist.py`'s header comment); and wire-format ideas,
+  inside int16 — see `docs/mnist.md` §2); and wire-format ideas,
   up to a fixed-width instruction stream that removes the 255-byte frame cap. Full
   list: [`docs/backlog.md`](docs/backlog.md).
 - **DE1-SoC (Cyclone V) target** — in progress. The board-neutral `tpu_core`,

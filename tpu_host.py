@@ -1,13 +1,6 @@
 #!/usr/bin/env python3
-"""Compatibility entry point: `python3 tpu_host.py ...` runs the host CLI,
-and `import tpu_host` still exposes the driver.
-
-The driver itself is the `tpu` package in host/ -- install it with
-`pip install -e host` (requirements.txt does this) and use `python3 -m tpu`
-or `from tpu import TPU`. This file only exists so older commands and
-scripts keep working, including on machines where the package isn't
-installed.
-"""
+"""compatibility wrapper: runs the tpu CLI and re-exports the driver, with or
+without the host/ package installed"""
 import os
 import sys
 

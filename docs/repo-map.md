@@ -41,7 +41,7 @@ vendor primitive.
 | `bias.sv` | Registered per-column `PSUM_WIDTH` add |
 | `activation.sv` | Registered ReLU, bypassable per pass (`flags[2]`) |
 | `fifo.sv` | Generic synchronous circular queue used by `accumulator`, `weight_fifo` and `spi_slave` |
-| `tpu_sequencer.sv` | Command decoder + pipeline orchestrator. Its header comment is the normative protocol spec |
+| `tpu_sequencer.sv` | Command decoder + pipeline orchestrator; implements [`protocol.md`](protocol.md) |
 | `tpu_pkg.sv` | Shared wire-protocol constants; must be read before `tpu_sequencer.sv` |
 | `tpu_core.sv` | Sequencer + datapath behind the byte-stream interface; no host PHY |
 

@@ -1,39 +1,6 @@
 #!/usr/bin/env python3
-"""Train + quantize a tiny MNIST MLP sized for this repo's 2x2 TPU.
-
-Host-side only -- no hardware/serial dependency. Produces
-software/mnist/model/mnist_2x2_int8.npz, an int8-weight/int16-bias two-layer MLP
-whose exact fixed-point forward pass (software/mnist/model.py) mirrors the RTL:
-
-  - int8 weights and activations, int16 bias (rtl/core/tpu_sequencer.sv wire
-    format).
-  - Accumulation happens in a PSUM_WIDTH=16 register (rtl/core/accumulator.sv)
-    that is NOT saturating -- it silently wraps on overflow, exactly like
-    tests/hw/hw_regression.py's golden() model. This is true regardless of
-    K-dim tiling (rtl/core/accumulator.sv's persistent psum_reg is 16 bits
-    whether one RUN or many passes feed it), so a layer's K (its input
-    width) can't be so large that realistic int8-range weights/activations
-    push the true sum past +-32767.
-  - ReLU is applied unconditionally by rtl/core/activation.sv on *every* layer,
-    including the output layer -- there is no "skip activation" mode. The
-    network is trained with ReLU on the output logits too, so the loss
-    landscape matches what the hardware will actually produce (argmax over
-    ReLU'd scores), rather than training a standard logits-then-softmax
-    network and hoping ReLU doesn't disturb its decision boundve afterward.
-  - unified_buffer's activation store is int8 (DATA_WIDTH=8), so a
-    multi-layer network run on hardware needs the *host* to re-quantize
-    each layer's int16 ReLU output down to int8 before it becomes the next
-    layer's input -- there is no on-chip requantization unit. This script
-    calibrates that per-layer rescale (hidden_scale below) empirically and
-    bakes it into the saved model.
-
-Network: 144 (12x12 downsampled digit) -> 64 (hidden) -> 10 (class scores).
-Both K values (144, 64) and both N values (64, 10) are even, so every layer
-tiles cleanly into the array's 2x2 blocks with no padding.
-
-Usage:
-    python3 software/mnist/train_mnist.py
-"""
+"""train and quantize the 144 -> 64 -> 10 int8 MLP (see docs/mnist.md for why it
+is shaped around the hardware's numerics). writes model/mnist_2x2_int8.npz"""
 import gzip
 import os
 import subprocess
@@ -64,7 +31,6 @@ PSUM_MIN = -(2 ** (PSUM_WIDTH - 1))
 PSUM_MAX = 2 ** (PSUM_WIDTH - 1) - 1
 
 
-# -- data loading -----------------------------------------------------------
 
 def _download(name, url):
     dest = os.path.join(DATA_DIR, name)
@@ -106,12 +72,7 @@ def load_mnist():
 
 
 def downsample(images, out_side=IN_SIDE):
-    """Block-average images (N,28,28) uint8 -> (N, out_side*out_side) float32 in [0,1].
-
-    Bin edges aren't evenly spaced (28 doesn't divide out_side evenly for
-    out_side=8) -- fine for a coarse pooling, not aiming for anti-aliasing
-    quality.
-    """
+    """block-average (N, 28, 28) uint8 to (N, out_side**2) float32 in [0, 1]"""
     n, rows, cols = images.shape
     edges_r = np.round(np.linspace(0, rows, out_side + 1)).astype(int)
     edges_c = np.round(np.linspace(0, cols, out_side + 1)).astype(int)
@@ -124,12 +85,9 @@ def downsample(images, out_side=IN_SIDE):
     return out.reshape(n, out_side * out_side)
 
 
-# -- float model + training --------------------------------------------------
 
 class MLP:
-    """64 -> 32 -> 10, ReLU after both layers (matches the hardware: there
-    is no non-activated output mode -- rtl/core/activation.sv always applies
-    ReLU), trained with that exact nonlinearity on the output scores."""
+    """relu on the output too, because the hardware applies it there"""
 
     def __init__(self, rng):
         self.w1 = (rng.standard_normal((NUM_IN, NUM_HIDDEN)) * np.sqrt(2.0 / NUM_IN)).astype(np.float32)
@@ -141,14 +99,14 @@ class MLP:
         z1 = x @ self.w1 + self.b1
         h = np.maximum(z1, 0)
         z2 = h @ self.w2 + self.b2
-        out = np.maximum(z2, 0)   # ReLU on the output too -- matches hardware
+        out = np.maximum(z2, 0)   # relu on the output too -- matches hardware
         return z1, h, z2, out
 
     def train_step(self, x, y, lr):
         n = x.shape[0]
         z1, h, z2, out = self.forward(x)
 
-        # Softmax cross-entropy on the ReLU'd output scores.
+        # softmax over the ReLU'd scores, matching what the hardware returns
         shifted = out - out.max(axis=1, keepdims=True)
         exp = np.exp(shifted)
         probs = exp / exp.sum(axis=1, keepdims=True)
@@ -179,9 +137,7 @@ class MLP:
 
 
 def train(x_train, y_train, x_test, y_test, epochs=40, batch_size=128, lr=0.5, seed=0):
-    # At this size/lr, test_acc plateaus around ~87% until a sharp breakthrough
-    # near epoch 25, then settles around 97% -- fewer epochs looks converged
-    # but isn't; don't shrink epochs without re-checking the accuracy curve.
+    # accuracy plateaus near 87% until ~epoch 25: fewer epochs only looks converged
     rng = np.random.default_rng(seed)
     model = MLP(rng)
     n = x_train.shape[0]
@@ -196,7 +152,6 @@ def train(x_train, y_train, x_test, y_test, epochs=40, batch_size=128, lr=0.5, s
     return model
 
 
-# -- quantization -------------------------------------------------------------
 
 def quantize_symmetric(tensor, n_bits=8):
     qmax = 2 ** (n_bits - 1) - 1
@@ -206,11 +161,7 @@ def quantize_symmetric(tensor, n_bits=8):
 
 
 def hw_layer(x_int, w_int, b_int):
-    """Mirror rtl/core/accumulator.sv + bias.sv + activation.sv exactly:
-    wide-precision MAC, truncate to signed PSUM_WIDTH (non-saturating
-    wraparound, not clamping), then ReLU. Uses the
-    shared reference model, tpu.golden. Returns (raw_wide, truncated_i16, relu_out).
-    """
+    """the hardware's layer math via tpu.golden; returns (raw, wrapped int16, relu)"""
     raw = golden.accumulate(x_int, w_int, b_int)
     truncated = golden.wrap(raw, 16)   # wraps on overflow, same as the RTL register
     relu = np.maximum(truncated, 0)
@@ -218,15 +169,8 @@ def hw_layer(x_int, w_int, b_int):
 
 
 def find_safe_input_scale(x_float, w_int, w_scale, bias_float, init_scale, margin=1.05, max_iters=20):
-    """Search for the smallest input scale (largest quantized-input range)
-    that keeps every calibration sample's raw accumulator strictly inside
-    int16 -- not just on average, but for every sample seen. Grows the scale
-    (shrinking quantized magnitude) whenever the observed worst case
-    overflows, with a 5% safety margin so rounding at the boundary can't tip
-    a borderline sample back over on unseen data. (2% wasn't enough headroom
-    once NUM_IN/NUM_HIDDEN grew past the original 64->32->10 size: it left a
-    1-in-10000 test-set overflow that never showed up during calibration.)
-    """
+    """smallest input scale that keeps every calibration sample's sum inside int16,
+    with a 5% margin (2% left a 1-in-10000 overflow on the test set)"""
     scale = init_scale
     for _ in range(max_iters):
         x_q = np.clip(np.round(x_float / scale), -128, 127).astype(np.int32)
@@ -241,15 +185,7 @@ def find_safe_input_scale(x_float, w_int, w_scale, bias_float, init_scale, margi
 
 
 def build_quantized_model(model, x_calib):
-    """Quantize weights/biases and calibrate the inter-layer rescale using
-    the *exact* integer forward pipeline (not the float model's activations),
-    so the saved scales are self-consistent with what hardware will do.
-    Both per-layer scales are searched (find_safe_input_scale) to guarantee
-    zero int16 accumulator overflow across the whole calibration set, since
-    a plain max-abs/127 scale still lets correlated inputs (e.g. a dark
-    digit whose many bright pixels line up with same-sign weights) overflow
-    on a small fraction of real samples.
-    """
+    """calibrates against the exact integer pipeline, not the float model"""
     w1_q, w1_scale = quantize_symmetric(model.w1)
     w2_q, w2_scale = quantize_symmetric(model.w2)
 
@@ -259,8 +195,7 @@ def build_quantized_model(model, x_calib):
     relu1 = np.maximum(raw1.astype(np.int16), 0)
     overflow1 = int(np.sum(raw1 != raw1.astype(np.int16)))
 
-    # Host-side rescale: hidden layer's int16 ReLU output must become int8
-    # for the next layer's activation input (unified_buffer is 8-bit).
+    # no on-chip requantization: the host rescales int16 to int8 between layers
     hidden_scale_init = max(float(relu1.max()), 1e-8) / 127.0
     hidden_scale, _, b2_q, raw2 = find_safe_input_scale(
         relu1.astype(np.float64), w2_q, w2_scale, model.b2, hidden_scale_init)

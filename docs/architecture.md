@@ -158,7 +158,7 @@ interfaces, so `mmu.sv` drops one in place of PEs (*r*, *c*) and (*r*+1, *c*)
 with no wiring changes. The fabric hop from the top half's output to the
 bottom half's adder input *is* the inter-PE pipeline register.
 Bit-exactness comes from gating the adder inputs instead of muxing the output
-(see the module header). Constraints: `R` must be even, and `PSUM_WIDTH` must
+(details in [`performance.md`](performance.md) §2). Constraints: `R` must be even, and `PSUM_WIDTH` must
 be 16, since the DSP accumulator is a hard 16 bits. The build drops `-dsp`
 when pairing so yosys doesn't remap the hand-placed primitives.
 
@@ -334,7 +334,7 @@ which is why `CLK_FREQ` in the gateware must match the firmware's
 
 Several modules were written to the full TPUv1 design and have capabilities
 `tpu_core` does not use yet. Knowing this avoids reading more into the
-module headers than actually ships:
+module ports than actually ships:
 
 | Capability | Where | State in `tpu_core` |
 |---|---|---|

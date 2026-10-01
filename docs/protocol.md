@@ -1,8 +1,9 @@
 # Host protocol
 
-How the host drives the array. `rtl/core/tpu_sequencer.sv`'s header comment is the
-normative definition — this page explains it and covers the layers around it
-(PHY choice, firmware-local commands, host driver).
+How the host drives the array. This page is the normative definition of the
+wire protocol: `rtl/core/tpu_sequencer.sv` implements it, and
+`host/tpu/protocol.py` mirrors its constants. It also covers the layers around
+it (PHY choice, firmware-local commands, host driver).
 
 ## 1. Framing
 
@@ -29,7 +30,7 @@ Byte counts below are for a generic `ARRAY_ROWS × NUM_COLS` array with
 | `0x02` | `LOAD_BIAS` | `PSUM_BYTES*NUM_COLS` (4) | `NUM_COLS` signed LE, `PSUM_BYTES` each |
 | `0x03` | `LOAD_ACT` | `M_TILE*ARRAY_ROWS` (4) | activation rows, natural row-major, int8 |
 | `0x04` | `RUN` | 0 or 1 | empty, or `[flags]` |
-| `0x05` | `RESET` | 0 | — |
+| `0x05` | `RESET` | 0 | — pulses the datapath reset for 4 cycles (pipeline and accumulator); the register file keeps its weights, activations and bias |
 | `0x06` | `RUN_TILE` | `1+ARRAY_ROWS*NUM_COLS+M_TILE*ARRAY_ROWS` (9) | `[flags, weights, acts]` |
 | `0x07` | `STREAM_RUN` | `2+K_TILES*(tile bytes)` | `[flags, K_TILES, tile₀, tile₁, …]` |
 | `0xFF` | `NOP` | *(no LEN byte)* | ignored in `S_IDLE`, no response — the SPI read-poll filler |
@@ -158,4 +159,4 @@ or the root `tpu_host.py` wrapper, is its CLI):
 `tests/hw/hw_regression.py` drives the same protocol for the full regression.
 
 Driving the board directly from a terminal or another language is entirely
-reasonable — the sequencer's header comment is all you need.
+reasonable — this page is all you need.

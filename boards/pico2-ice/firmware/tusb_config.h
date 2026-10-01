@@ -28,22 +28,17 @@
 #include "boards.h"
 #include "ice_flash.h"
 
-// RHPort number used for device can be defined by board.mk, port 0 for pico-ice
 #define BOARD_DEVICE_RHPORT_NUM     0
 
-// Device mode with rhport and speed defined by board.mk
 #define CFG_TUSB_RHPORT0_MODE       OPT_MODE_DEVICE
 
-// Either full or high speed supported by RP2040
 #define BOARD_DEVICE_RHPORT_SPEED   OPT_MODE_FULL_SPEED
 
-// Enable Device stack
 #define CFG_TUD_ENABLED             1
 
-// Default is max speed that hardware controller could support with on-chip PHY
 #define CFG_TUD_MAX_SPEED           OPT_MODE_FULL_SPEED
 
-// Device classes
+// two CDC ports ("RP2040 logs", "iCE40 UART") + DFU with flash and CRAM alt settings
 #define CFG_TUD_CDC                 2
 #define CFG_TUD_MSC                 0
 #define CFG_TUD_DFU                 1
@@ -52,16 +47,14 @@
 #define CFG_TUD_MIDI                0
 #define CFG_TUD_VENDOR              0
 
-// Configure forwarding between USB CDC and UART
+// SDK bridges uart0 to CDC port 1; main.c replaces both directions
 #define ICE_USB_UART0_CDC           1
 
-// CDC FIFO size of TX and RX and Endpoint buffer size
 #define CFG_TUD_CDC_RX_BUFSIZE      512
 #define CFG_TUD_CDC_TX_BUFSIZE      512
 #define CFG_TUD_CDC_EP_BUFSIZE      512
 
-// MSC Buffer size of Device Mass storage
 #define CFG_TUD_MSC_BUFSIZE         ICE_FLASH_SECTOR_SIZE
 
-// Must be a multiple of flash page size
+// must be a multiple of the flash page size
 #define CFG_TUD_DFU_XFER_BUFSIZE    256

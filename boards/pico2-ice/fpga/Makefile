@@ -1,34 +1,5 @@
-## ============================================================================
-##  tpu_top build for the pico2-ice board (iCE40UP5K, package sg48)
-##
-##  Toolchain: yosys (synth) -> nextpnr-ice40 (place & route) -> icepack (bitstream)
-##  Install via `brew install yosys nextpnr-ice40 icestorm dfu-util` or oss-cad-suite.
-##
-##  Usage:
-##    make            Build tpu_top.bin
-##    make json        Synthesize only, up to tpu_top.json (yosys)
-##    make asc         Place & route only, up to tpu_top.asc (nextpnr)
-##    make bin         Pack only, up to tpu_top.bin (icepack)
-##    make stat        Print yosys post-synth cell/LUT/FF counts
-##    make util        Print nextpnr post-PnR device utilisation (LC/RAM/IO/etc.)
-##    make time        Print a static timing report (post-PnR fMax)
-##    make prog        Flash tpu_top.bin over USB DFU (board must be in DFU mode)
-##    make clean       Remove build artifacts
-##    make show-config Print the knobs in effect and the matching host flags
-##
-##  Named configurations (../configs/*.mk) set every knob at once:
-##    make CONFIG=4x4_spi && make prog CONFIG=4x4_spi
-##  Knobs given on the command line still override the config.
-##
-##  CLK_FREQ:
-##    tpu_top's `clk` pin is not a fixed crystal -- it's exported by the
-##    RP2350 over GPOUT0 (see pico-ice-sdk/include/ice_fpga.h), at whatever
-##    frequency the RP2350 firmware requests via ice_fpga_init(). CLK_FREQ
-##    here must match that firmware's request, since it sets the UART
-##    baud-rate divider computed at synthesis time. Default 12 MHz leaves
-##    ~2.6x margin under this design's measured ~32 MHz fMax on an UP5K
-##    (see tpu_top.pcf for more on the clock path).
-## ============================================================================
+# pico2-ice bitstream: yosys -> nextpnr-ice40 -> icepack -> dfu-util
+# targets and knobs: docs/pico2-ice.md §2; named configs: make CONFIG=<name>
 
 YOSYS    := yosys
 NEXTPNR  := nextpnr-ice40
@@ -41,62 +12,34 @@ PERIPH_DIR := ../../../rtl/peripherals
 TOP_DIR    := ../top
 TOP     := tpu_top
 
-# Named configuration (see ../config.mk); must come before the ?= defaults
-# below so the config's values win over them.
+# before the ?= defaults so a config's values win
 PICO_CONFIG_DIR := ../configs
 include ../config.mk
 PCF     := tpu_top.pcf
 
+# no crystal: must match the clock the firmware requests in ice_fpga_init()
 CLK_FREQ ?= 12000000
 
-# UART baud rate between the RP2350 bridge and the FPGA. 1M divides 12 MHz
-# exactly (TICKS_PER_BIT = 12, zero baud error); the RP2350 side follows the
-# host's CDC line coding automatically (pico-ice-sdk tud_cdc_line_coding_cb),
-# so only tpu_host.py's DEFAULT_BAUD needs to match this. Fallback: 921600
-# (TICKS_PER_BIT = 13, +0.16% error, still within the mid-bit sample margin).
+# 1M divides 12 MHz exactly; must match the host's DEFAULT_BAUD
 BAUD_RATE ?= 1000000
 
-# Array geometry (see docs/architecture.md §5): ARRAY_ROWS = K-tile
-# depth, NUM_COLS = N-tile width, M_TILE = activation rows per RUN. The RTL
-# is fully parameterized; these must match what tpu_host.py is invoked with
-# (--rows/--cols/--m-tile). FIFO_DEPTH in tpu_top.sv must stay a power of 2
-# >= ARRAY_ROWS (its default 4 covers up to 4 rows).
+# tpu_top's FIFO_DEPTH default of 4 caps ARRAY_ROWS and M_TILE at 4
 ARRAY_ROWS ?= 2
 NUM_COLS   ?= 2
 M_TILE     ?= $(ARRAY_ROWS)
 
-# Host PHY: 0 = UART on the CDC-bridged pins (default, validated), 1 = SPI
-# slave on the RP2350<->iCE40 config bus pins (rtl/peripherals/spi_slave.sv; needs the
-# matching SPI-bridge firmware). See docs/pico2-ice.md and tpu_top.pcf's SPI
-# pin-mapping comment.
-# PSUM_WIDTH: width of the accumulate/bias/result path. 16 is what every
-# validated bitstream here uses; widening it costs LCs across the whole
-# reduction path and changes the host wire format (tpu_host.py --psum-width
-# must match), and is incompatible with USE_MAC16_PAIR below, whose SB_MAC16
-# accumulator is a hard 16 bits. See docs/architecture.md §5.
 PSUM_WIDTH ?= 16
 
 USE_SPI ?= 0
 
-# DSP mapping strategy: 0 = yosys -dsp inference over pe.sv's multiplies
-# (one SB_MAC16 per PE — caps the array at 8 PEs on the UP5K), 1 = build
-# the mmu from boards/pico2-ice/top/pe_pair.sv's hand-instantiated SB_MAC16 in dual-8x8
-# mode (two PEs per DSP — 4x4 = 16 PEs on 8 blocks). Requires even
-# ARRAY_ROWS. -dsp is dropped when set: nothing is left to infer, and it
-# must not remap the hand-placed primitives.
+# no -dsp with pe_pair: it must not remap the hand-placed SB_MAC16s
 USE_MAC16_PAIR ?= 0
 DSP_FLAG := $(if $(filter-out 0,$(USE_MAC16_PAIR)),,-dsp)
 
-# ABC options: -abc9 (LUT-aware mapper) + -dff (register-aware ABC pass:
-# sweeps/merges the sequencer's duplicated staging registers) measured
-# 5,484 -> 5,072 LCs on the 4x4/M_TILE=4 pair build -- the difference
-# between not fitting (103%) and fitting (96%). Netlist-level change only;
-# bit-exactness is validated on hardware by tests/hw/hw_regression.py (same
-# trust basis as -dsp).
+# -dff sweeps the sequencer's duplicated staging regs: what lets 4x4/M_TILE=4 fit
 ABC_FLAGS := -abc9 -dff
 
-# DFU alt-setting the FPGA bitstream (flash) lives on for this board's
-# default firmware -- matches pico-ice-sdk's own example Makefiles.
+# DFU alt setting for the flash image, as in pico-ice-sdk's examples
 DFU_ALT_FLASH := 0
 
 RTL := $(CORE_DIR)/tpu_pkg.sv \
@@ -119,9 +62,7 @@ RTL := $(CORE_DIR)/tpu_pkg.sv \
 
 .PHONY: all json asc bin stat util time prog clean show-config FORCE
 
-# Every knob that changes the netlist. The build outputs depend on a stamp
-# of these, so switching CONFIG (or any knob) rebuilds instead of leaving a
-# stale tpu_top.bin from the previous settings ready to flash.
+# stamp of every netlist knob, so changing CONFIG rebuilds instead of reusing a stale .bin
 KNOBS := CLK_FREQ=$(CLK_FREQ) BAUD_RATE=$(BAUD_RATE) ARRAY_ROWS=$(ARRAY_ROWS) \
          NUM_COLS=$(NUM_COLS) M_TILE=$(M_TILE) PSUM_WIDTH=$(PSUM_WIDTH) \
          USE_SPI=$(USE_SPI) USE_MAC16_PAIR=$(USE_MAC16_PAIR) ABC_FLAGS=$(ABC_FLAGS)
@@ -135,9 +76,6 @@ json: $(TOP).json
 asc: $(TOP).asc
 bin: $(TOP).bin
 
-# -dsp maps pe.sv's int8 multiplies onto the UP5K's 8 hard SB_MAC16 blocks
-# instead of building them from LUTs (~251 -> ~36 LUTs per PE, see
-# docs/performance.md §2); bit-exact, validated by tests/hw/hw_regression.py.
 $(TOP).json: $(RTL) .knobs
 	$(YOSYS) -q -p "\
 		read_verilog -sv $(RTL); \
@@ -157,7 +95,6 @@ $(TOP).asc: $(TOP).json $(PCF)
 $(TOP).bin: $(TOP).asc
 	$(ICEPACK) $< $@
 
-# make stat: yosys's own post-synth cell/LUT/FF-type breakdown
 stat: $(RTL)
 	@$(YOSYS) -p "\
 		read_verilog -sv $(RTL); \
@@ -172,16 +109,11 @@ stat: $(RTL)
 		synth_ice40 -top $(TOP) $(DSP_FLAG) $(ABC_FLAGS)" 2>&1 \
 		| awk '/^=== design hierarchy ===/{exit} /^=== $(TOP) ===/{p=1} p'
 
-# make util: nextpnr's post-PnR device utilisation table (LCs, BRAM,
-# IO, DSP, etc. used vs. available on the UP5K)
 util: $(TOP).json $(PCF)
 	@$(NEXTPNR) --up5k --package sg48 --pcf $(PCF) --json $(TOP).json --asc $(TOP).asc 2>&1 \
 		| awk '/^Info: Placed [0-9]+ cells based on constraints\.$$/{exit} /^Info: Device utilisation:/{p=1} p'
 
-# Some icestorm installs (e.g. Homebrew, as of icestorm 1.1) fail to resolve
-# the up5k chipdb via `-d up5k` ("Can't find chipdb file for device 5k").
-# If `make time` hits that, point ICETIME_CHIPDB at the file directly, e.g.:
-#   make time ICETIME_CHIPDB=$$(brew --prefix icestorm)/share/icestorm/chipdb/chipdb-5k.txt
+# some Homebrew icestorm installs can't resolve `-d up5k`; pass the chipdb path instead
 ICETIME_CHIPDB ?=
 ICETIME_DEVICE := $(if $(ICETIME_CHIPDB),-C $(ICETIME_CHIPDB),-d up5k)
 

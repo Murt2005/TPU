@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""GPT-2 byte-level BPE, in pure Python.
-
-TinyStories uses the GPT-Neo tokenizer, which is GPT-2's. This is the
-standard implementation (byte<->unicode mapping, then greedy merges by rank)
-with no dependency on `tokenizers` or `transformers`, so the demo runs with
-nothing but numpy installed.
-"""
+"""GPT-2 byte-level BPE in pure Python, so the demo needs nothing beyond numpy"""
 import json
 import os
 import re
@@ -14,9 +8,7 @@ from functools import lru_cache
 
 @lru_cache()
 def _byte_encoder():
-    """Reversible byte <-> printable-unicode map, so BPE never sees control
-    characters or a literal space (which would collide with the merge-file
-    format)."""
+    """reversible byte <-> printable-unicode map, so BPE never sees control chars or spaces"""
     bs = (list(range(ord("!"), ord("~") + 1))
           + list(range(ord("\xa1"), ord("\xac") + 1))
           + list(range(ord("\xae"), ord("\xff") + 1)))
@@ -56,7 +48,6 @@ class Tokenizer:
             return self._cache[token]
         word = list(token)
         while len(word) > 1:
-            # Merge the adjacent pair with the lowest rank, repeatedly.
             pairs = {(word[i], word[i + 1]) for i in range(len(word) - 1)}
             best = min(pairs, key=lambda p: self.ranks.get(p, float("inf")))
             if best not in self.ranks:

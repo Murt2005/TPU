@@ -29,7 +29,7 @@ module unified_buffer_tb;
 
     int errors = 0;
 
-    // Shared read-result holders (avoids local-variable issues in tasks)
+    // shared read-result holders (avoids local-variable issues in tasks)
     logic signed [DATA_WIDTH-1:0] rd0, rd1;
 
     unified_buffer #(
@@ -38,7 +38,7 @@ module unified_buffer_tb;
 
     always #5 clk = ~clk;
 
-    // Write one row via host port (synchronous, occupies 1 clock cycle)
+    // write one row via host port (synchronous, occupies 1 clock cycle)
     task automatic host_write_row(input int addr, input int d0, input int d1);
         host_write_addr    = ADDR_WIDTH'(addr);
         host_write_data[0] = DATA_WIDTH'(signed'(d0));
@@ -48,9 +48,7 @@ module unified_buffer_tb;
         host_write_valid = 1'b0;
     endtask
 
-    // Assert ub_read_en for one cycle at addr, then wait for the second
-    // pipeline stage.  After the task returns, ub_read_valid is high and
-    // ub_read_data holds the result (captured into rd0/rd1).
+    // one-cycle ub_read_en; returns with the 2-cycle result in rd0/rd1
     task automatic ub_read_row(input int addr);
         ub_read_addr = ADDR_WIDTH'(addr);
         ub_read_en   = 1'b1;
@@ -65,7 +63,7 @@ module unified_buffer_tb;
         end
     endtask
 
-    // Write one row via the activation port
+    // write one row via the activation port
     task automatic act_write_row(input int d0, input int d1);
         act_write_data[0] = DATA_WIDTH'(signed'(d0));
         act_write_data[1] = DATA_WIDTH'(signed'(d1));
@@ -74,8 +72,8 @@ module unified_buffer_tb;
         act_write_valid = 1'b0;
     endtask
 
-    // Read one row via host port (1-cycle latency).
-    // After the task returns, host_read_valid is high and rd0/rd1 hold data.
+    // read one row via host port (1-cycle latency)
+    // after the task returns, host_read_valid is high and rd0/rd1 hold data.
     task automatic host_read_row(input int addr);
         host_read_addr = ADDR_WIDTH'(addr);
         host_read_en   = 1'b1;
@@ -113,10 +111,7 @@ module unified_buffer_tb;
 
         $display("\n=== unified_buffer Testbench ===\n");
 
-        // -------------------------------------------------------------------
-        // Test 1: host_write then ub_read — verifies 2-cycle read latency
-        //   Write [[10,20],[30,40]] via host port, read back via ub_read port.
-        // -------------------------------------------------------------------
+        // test 1: host_write then ub_read, 2-cycle latency
         $display("[Test 1] Host write → UB read (2-cycle latency)");
         host_write_row(0, 10, 20);
         host_write_row(1, 30, 40);
@@ -126,12 +121,7 @@ module unified_buffer_tb;
         ub_read_row(1);
         check("T1 row 1", 30, 40);
 
-        // -------------------------------------------------------------------
-        // Test 2: act_write then host_read — verifies shadow-bank separation
-        //   and 1-cycle host read latency.
-        //   Active bank still has [[10,20],[30,40]] from Test 1; shadow is
-        //   untouched, so act_write rows land at addresses 0 and 1 of shadow.
-        // -------------------------------------------------------------------
+        // test 2: act_write lands in the shadow bank; 1-cycle host_read
         $display("\n[Test 2] Activation write → host read (1-cycle latency, shadow bank)");
         act_write_row(50, 60);
         act_write_row(70, 80);
@@ -141,10 +131,7 @@ module unified_buffer_tb;
         host_read_row(1);
         check("T2 row 1", 70, 80);
 
-        // -------------------------------------------------------------------
-        // Test 3: bank_swap — shadow (activation output) becomes active (SDS input)
-        //   After swap, ub_read should return [50,60] / [70,80].
-        // -------------------------------------------------------------------
+        // test 3: after bank_swap, ub_read returns [50,60] / [70,80]
         $display("\n[Test 3] Bank swap: activation output readable via ub_read after swap");
         bank_swap = 1'b1;
         @(posedge clk); #1;
@@ -155,13 +142,7 @@ module unified_buffer_tb;
         ub_read_row(1);
         check("T3 row 1 (post-swap)", 70, 80);
 
-        // -------------------------------------------------------------------
-        // Test 4: act_write_addr_reset
-        //   Write one row (ptr=0 → row 0), reset pointer, write again.
-        //   Second write must overwrite row 0, not row 1.
-        //   After Test 3: bank_sel=1, shadow=0; act_write goes to shadow (bank 0).
-        //   bank 0 currently holds [[10,20],[30,40]] from Test 1.
-        // -------------------------------------------------------------------
+        // test 4: act_write_addr_reset makes the next write overwrite row 0
         $display("\n[Test 4] act_write_addr_reset: pointer resets to 0");
         act_write_row(11, 22);         // ptr=0 → shadow row 0 = [11,22]; ptr → 1
         act_write_addr_reset = 1'b1;
@@ -171,14 +152,12 @@ module unified_buffer_tb;
 
         host_read_row(0);              // host_read reads from shadow bank
         check("T4 row 0 (after reset+rewrite)", 33, 44);
-        // Row 1 should still be the original bank-0 row-1 value [30,40]
-        // (written in Test 1 into bank 0 when it was active).
+        // row 1 should still be the original bank-0 row-1 value [30,40]
+        // (written in test 1 into bank 0 when it was active).
         host_read_row(1);
         check("T4 row 1 (untouched)", 30, 40);
 
-        // -------------------------------------------------------------------
-        // Test 5: ub_read_valid stays low with no ub_read_en
-        // -------------------------------------------------------------------
+        // test 5: ub_read_valid stays low with no ub_read_en
         $display("\n[Test 5] ub_read_valid stays low without ub_read_en");
         repeat(4) @(posedge clk); #1;
         if (ub_read_valid !== 1'b0) begin
@@ -188,9 +167,7 @@ module unified_buffer_tb;
             $display("[PASS] ub_read_valid correctly stays low");
         end
 
-        // -------------------------------------------------------------------
-        // Test 6: host_read_valid stays low with no host_read_en
-        // -------------------------------------------------------------------
+        // test 6: host_read_valid stays low with no host_read_en
         $display("\n[Test 6] host_read_valid stays low without host_read_en");
         repeat(4) @(posedge clk); #1;
         if (host_read_valid !== 1'b0) begin
@@ -200,9 +177,7 @@ module unified_buffer_tb;
             $display("[PASS] host_read_valid correctly stays low");
         end
 
-        // -------------------------------------------------------------------
-        // Test 7: reset clears ub_read_valid even with a pending read in pipe
-        // -------------------------------------------------------------------
+        // test 7: reset clears ub_read_valid with a read in flight
         $display("\n[Test 7] Reset clears ub_read_valid mid-pipeline");
         ub_read_en = 1'b1;
         @(posedge clk); #1;   // stage-1 captures en=1
@@ -224,10 +199,7 @@ module unified_buffer_tb;
             $display("[PASS] ub_read_valid stays low after reset deasserts");
         end
 
-        // -------------------------------------------------------------------
-        // Test 8: post-reset host_write + ub_read round-trip
-        //   Verify UB resumes correctly after reset (bank_sel back to 0).
-        // -------------------------------------------------------------------
+        // test 8: round-trip after reset
         $display("\n[Test 8] Post-reset write/read round-trip");
         host_write_row(0, -10, -20);
         host_write_row(1,  15,  25);
@@ -237,7 +209,6 @@ module unified_buffer_tb;
         ub_read_row(1);
         check("T8 row 1", 15, 25);
 
-        // -------------------------------------------------------------------
         $display("\n=== SIMULATION COMPLETE ===");
         if (errors == 0)
             $display(">>> ALL unified_buffer TESTS PASSED <<<");

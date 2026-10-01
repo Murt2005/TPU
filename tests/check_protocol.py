@@ -1,19 +1,6 @@
 #!/usr/bin/env python3
-"""Check that every copy of the wire-protocol constants agrees.
-
-The opcodes, flag bits and status bytes are defined once per language:
-
-    rtl/core/tpu_pkg.sv                      canonical (the RTL side)
-    host/tpu/protocol.py                     must mirror all of it
-    tests/verilator/tb_tpu_top.cpp           the subset the C++ bench uses
-    boards/pico2-ice/firmware/tpu_tile.c     the subset the firmware uses,
-                                             plus FW_* shared with the host
-
-Nothing generates one from another, so this is what stops them drifting.
-Flags are compared as byte masks: the RTL stores FLAG_* as bit positions,
-the other three as masks. Run via `make check-protocol` (also part of
-`make lint`). Exits non-zero on any mismatch.
-"""
+"""check that the four copies of the wire-protocol constants agree (RTL package,
+host, C++ bench, firmware). flags compare as masks: the RTL stores bit positions"""
 import re
 import sys
 from pathlib import Path
@@ -73,7 +60,6 @@ def main():
         errors.append("found no constants in rtl/core/tpu_pkg.sv -- parser out of date?")
     for name in sorted(set(canon) - set(py)):
         errors.append(f"{name} is in rtl/core/tpu_pkg.sv but missing from host/tpu/protocol.py")
-    # Every name defined in more than one place must have one value.
     names = sorted(set().union(*sources.values()))
     compared = 0
     for name in names:

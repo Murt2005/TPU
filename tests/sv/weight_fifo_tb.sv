@@ -1,14 +1,6 @@
 `timescale 1ns / 1ps
 
-// Testbench for weight_fifo.
-//
-// Mirrors the staggered weight-loading scenario already proven correct
-// in mmu_tb.sv / mmu_with_accum_tb.sv: W = [[4,5],[2,3]], loaded
-// bottom-row-first (2,3) then top-row (4,5), so a downstream MMU would
-// capture pe00=4, pe01=5, pe10=2, pe11=3 -- exactly as in those
-// testbenches. This TB does not instantiate the MMU; it checks the
-// weight_fifo's own output stream/timing/status flags directly, plus
-// the double-buffering swap behavior.
+// weight_fifo: output stream, timing and status flags for W = [[4,5],[2,3]] loaded bottom row first
 module weight_fifo_tb;
     localparam int WEIGHT_WIDTH = 8;
     localparam int FIFO_DEPTH   = 4;
@@ -50,9 +42,7 @@ module weight_fifo_tb;
         end
     endtask
 
-    // Expected output queues for col0 / col1 (value, valid) pairs,
-    // checked cycle-by-cycle against out_col[0]/out_col_valid[0] while
-    // loading_phase is driven.
+    // expected (value, valid) per column, checked each cycle of loading_phase
     int exp_col0_val_q[$];
     int exp_col1_val_q[$];
 
@@ -77,10 +67,7 @@ module weight_fifo_tb;
 
         $display("\nStarting weight_fifo Testbench\n");
 
-        // Test 1: Basic load into bank 0 (active by default), drain
-        // during loading_phase, check staggered out order + 1-cycle
-        // latency + capture-doubling valid behavior.
-        // W = [[4,5],[2,3]] -> enqueue bottom row (2,3) then top row (4,5)
+        // test 1: load bank 0, drain during loading_phase: stagger order and 1-cycle latency
         $display("Test 1: basic single-bank load + drain");
         check("active_bank == 0 after reset", active_bank == 1'b0);
         check("active_empty after reset", active_empty == 1'b1);
@@ -97,14 +84,14 @@ module weight_fifo_tb;
         check("shadow_loaded after 2 writes", shadow_loaded == 1'b1);
         check("active_empty still 1 (writes went to shadow bank1, not active bank0)", active_empty == 1'b1);
 
-        // Swap so bank1 (just loaded) becomes active
+        // swap so bank1 (just loaded) becomes active
         swap_banks = 1;
         @(negedge clk);
         swap_banks = 0;
         check("active_bank == 1 after swap", active_bank == 1'b1);
         check("active_empty == 0 after swap (bank1 now active and has data)", active_empty == 1'b0);
 
-        // Drive loading_phase, observe drain order: expect (2, valid), (4, valid), then (0,invalid)
+        // drive loading_phase, observe drain order: expect (2, valid), (4, valid), then (0,invalid)
         loading_phase = 1;
         @(negedge clk);
         check("cycle0 out_col[0] == 2", out_col[0] == 8'sd2 && out_col_valid[0] == 1'b1);
@@ -122,11 +109,7 @@ module weight_fifo_tb;
         loading_phase = 0;
         @(negedge clk);
 
-        // Test 2: Double buffering, load bank0 (now shadow) with a
-        // second matrix WHILE loading_phase stays low (simulating "MMU
-        // is busy / idle between ops"), confirming writes to shadow
-        // never touch the (already-drained, empty) active bank.
-        // W2 = [[1,1],[1,1]]
+        // test 2: fill the shadow bank while loading_phase is low; the active bank is untouched
         $display("\nTest 2: shadow-bank write does not disturb active/drained bank");
         write_enable_col[0] = 1; write_data_col[0] = 8'sd1;
         write_enable_col[1] = 1; write_data_col[1] = 8'sd1;
@@ -140,7 +123,7 @@ module weight_fifo_tb;
         check("active_empty still 1 (active=bank1, drained; writes went to shadow bank0)", active_empty == 1'b1);
         check("shadow_loaded == 1 (bank0 now has 2 entries each col)", shadow_loaded == 1'b1);
 
-        // Swap to bank0 and drain, confirm correct values arrive in order
+        // swap to bank0 and drain, confirm correct values arrive in order
         swap_banks = 1;
         @(negedge clk);
         swap_banks = 0;
@@ -159,14 +142,7 @@ module weight_fifo_tb;
         loading_phase = 0;
         @(negedge clk);
 
-        // Test 3: Concurrent compute + shadow-fill ("double buffering
-        // pays off" scenario). While loading_phase is LOW (pretend MMU
-        // is mid-compute on the matrix we just loaded), stream a THIRD
-        // matrix into the shadow bank (bank1, now empty since its
-        // earlier contents were fully drained in Test 1) spread across
-        // several cycles with gaps, confirming write_enable timing is
-        // fully independent of loading_phase / drain activity.
-        // W3 = [[9,8],[7,6]]
+        // test 3: gapped shadow writes are independent of loading_phase
         $display("\nTest 3: concurrent shadow fill while loading_phase low (simulated compute) --");
         check("active_bank == 0 (still), shadow == bank1 (empty, drained in test1)", active_bank == 1'b0);
         check("shadow bank1 empty before refill", shadow_loaded == 1'b0);
@@ -200,7 +176,7 @@ module weight_fifo_tb;
         check("W3 cycle2 valid == 0 (drained)", out_col_valid[0] == 1'b0 && out_col_valid[1] == 1'b0);
         loading_phase = 0;
 
-        // Test 4: full-bank status flags (active_full / any_shadow_full)
+        // test 4: full-bank status flags (active_full / any_shadow_full)
         $display("\n-- Test 4: full-bank status flags --");
         @(negedge clk);
         for (int i = 0; i < FIFO_DEPTH; i++) begin
@@ -213,7 +189,7 @@ module weight_fifo_tb;
         check("any_shadow_full after DEPTH writes to shadow bank", any_shadow_full == 1'b1);
         check("active_full stays 0 (active bank untouched by shadow writes)", active_full == 1'b0);
 
-        // Drain this bank back out via swap+loading_phase so sim ends clean
+        // drain this bank back out via swap+loading_phase so sim ends clean
         swap_banks = 1;
         @(negedge clk);
         swap_banks = 0;

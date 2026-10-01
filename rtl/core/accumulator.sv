@@ -1,6 +1,6 @@
 `timescale 1ns / 1ps
 
-// Accumulates the partial sums outputted from the mmu
+// accumulator: re-aligns the mmu's skewed columns into rows, holds the K-tiling sum
 module accumulator #(
     parameter int NUM_COLS   = 2,
     parameter int PSUM_WIDTH = 16,
@@ -21,8 +21,7 @@ module accumulator #(
 
     output logic                         pass_done,
 
-    // Backpressure-free for now... consumer must accept the row when
-    // out_row_valid is high); status flags are exposed for future use
+    // no backpressure: the consumer must take the row on out_row_valid
     output logic any_fifo_full
 );
 

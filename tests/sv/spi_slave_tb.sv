@@ -1,19 +1,6 @@
 `timescale 1ns / 1ps
 
-// spi_slave_tb — unit test for rtl/peripherals/spi_slave.sv (SPI mode-0 slave PHY).
-//
-// Drives the SPI pins as a mode-0 master at two rates matching the module's
-// documented envelope: a fast write clock (~CLK/2, the bulk MOSI direction)
-// and a slower read clock (CLK/10 < the CLK/8 cap, the MISO poll direction).
-//
-//  T1: RX bytes at fast SCK arrive as one rx_valid pulse each, MSB first
-//  T2: MISO returns IDLE_BYTE (0x00) while the TX FIFO is empty
-//  T3: queued response bytes read back in order, then idle again
-//  T4: CS deassert mid-byte discards the torn byte; alignment recovers
-//  T5: tx_busy backpressure at FIFO depth (16); order preserved end-to-end
-//  T6: full-duplex frame: MOSI bytes still received correctly while MISO
-//      is simultaneously draining queued bytes
-
+// spi_slave: mode-0 master at a fast write and a slow read clock
 module spi_slave_tb;
 
     // 12 MHz-ish system clock (exact period irrelevant; ratios matter)
@@ -51,7 +38,7 @@ module spi_slave_tb;
 
     integer errors = 0;
 
-    // Capture every rx_valid pulse
+    // capture every rx_valid pulse
     logic [7:0] rx_buf [64];
     integer     rx_cnt = 0;
     always @(posedge clk)
@@ -60,9 +47,7 @@ module spi_slave_tb;
             rx_cnt = rx_cnt + 1;
         end
 
-    // -- SPI master BFM (mode 0: sample on rising, shift on falling) --------
-    // half = half-period in ns. Fast writes: half=10 (SCK=CLK/2).
-    // Read polls: half=50 (SCK=CLK/10, under the documented CLK/8 cap).
+    // SPI master, mode 0. half-period in ns: 10 for writes (CLK/2), 50 for reads (CLK/10)
     task automatic spi_xfer_byte(input logic [7:0] w, output logic [7:0] r,
                                  input integer half);
         for (int i = 7; i >= 0; i--) begin
@@ -84,7 +69,7 @@ module spi_slave_tb;
         #(4 * CLK_PERIOD);
     endtask
 
-    // Push one byte into the response FIFO (clk domain, like the sequencer)
+    // push one byte into the response FIFO (clk domain, like the sequencer)
     task automatic push_tx(input logic [7:0] b);
         @(posedge clk);
         while (tx_busy) @(posedge clk);
@@ -106,7 +91,7 @@ module spi_slave_tb;
         reset = 0;
         repeat (5) @(posedge clk);
 
-        // ---------------- T1: fast-clock RX ----------------
+        // T1: fast-clock RX
         $display("[Test 1] RX at fast SCK (CLK/2)");
         wr_bytes[0] = 8'h01; wr_bytes[1] = 8'hA5; wr_bytes[2] = 8'h5A;
         wr_bytes[3] = 8'hFF; wr_bytes[4] = 8'h00; wr_bytes[5] = 8'h80;
@@ -128,7 +113,7 @@ module spi_slave_tb;
         end
         rx_cnt = 0;
 
-        // ---------------- T2: idle MISO ----------------
+        // T2: idle MISO
         $display("[Test 2] MISO idles at 0x00 with empty TX FIFO");
         cs_begin();
         spi_xfer_byte(8'hFF, rd, 50);
@@ -139,7 +124,7 @@ module spi_slave_tb;
         end else $display("[PASS] T2: idle byte 0x00");
         rx_cnt = 0;   // discard the 0xFF poll filler byte the RX side saw
 
-        // ---------------- T3: queued response readback ----------------
+        // T3: queued response readback
         $display("[Test 3] queued bytes read back in order, then idle");
         push_tx(8'hAA);
         push_tx(8'h08);
@@ -158,7 +143,7 @@ module spi_slave_tb;
         if (errors == 0) $display("[PASS] T3: 3 bytes in order + idle after drain");
         rx_cnt = 0;
 
-        // ---------------- T4: CS abort mid-byte ----------------
+        // T4: CS abort mid-byte
         $display("[Test 4] CS deassert mid-byte discards torn byte");
         cs_begin();
         for (int i = 7; i >= 3; i--) begin   // only 5 bits of 0xDE
@@ -178,7 +163,7 @@ module spi_slave_tb;
         end else $display("[PASS] T4: torn byte discarded, next byte aligned");
         rx_cnt = 0;
 
-        // ---------------- T5: FIFO backpressure ----------------
+        // T5: FIFO backpressure
         $display("[Test 5] tx_busy at FIFO depth, order preserved");
         for (int i = 0; i < 16; i++) push_tx(8'h10 + i[7:0]);
         @(posedge clk);
@@ -204,7 +189,7 @@ module spi_slave_tb;
         if (errors == 0) $display("[PASS] T5: backpressure + 16/16 in order");
         rx_cnt = 0;
 
-        // ---------------- T6: full duplex ----------------
+        // T6: full duplex
         $display("[Test 6] simultaneous MOSI command + MISO drain");
         push_tx(8'hC3);
         push_tx(8'h96);
@@ -223,7 +208,7 @@ module spi_slave_tb;
         end
         if (errors == 0) $display("[PASS] T6: both directions correct in one frame");
 
-        // ---------------- summary ----------------
+        // summary
         $display("");
         if (errors == 0) $display(">>> ALL spi_slave TESTS PASSED <<<");
         else             $display(">>> spi_slave: %0d ERROR(S) <<<", errors);

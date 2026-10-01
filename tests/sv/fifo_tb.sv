@@ -42,7 +42,7 @@ module fifo_tb;
         check("empty after reset", empty == 1'b1);
         check("not full after reset", full == 1'b0);
 
-        // Fill to DEPTH, confirm full flag
+        // fill to DEPTH, confirm full flag
         for (int i = 0; i < DEPTH; i++) begin
             write_enable = 1'b1;
             write_data   = 10 + i;   // 10,11,12,13
@@ -51,21 +51,21 @@ module fifo_tb;
         write_enable = 1'b0;
         check("full after DEPTH writes", full == 1'b1);
 
-        // Write-while-full is a no-op
+        // write-while-full is a no-op
         write_enable = 1'b1;
         write_data   = 16'sd999;
         @(negedge clk);
         write_enable = 1'b0;
         check("still full after write-while-full (no-op)", full == 1'b1);
 
-        // Pure read: pop oldest entry (10)
+        // pure read: pop oldest entry (10)
         read_enable = 1'b1;
         check("read_data == 10 before pop", read_data == 16'sd10);
         @(negedge clk);
         read_enable = 1'b0;
         check("not full after one read", full == 1'b0);
 
-        // True simultaneous read+write at mid-fill (count=3, not at a boundary).
+        // true simultaneous read+write at mid-fill (count=3, not at a boundary)
         read_enable  = 1'b1;
         write_enable = 1'b1;
         write_data   = 16'sd100;
@@ -75,7 +75,7 @@ module fifo_tb;
         write_enable = 1'b0;
         check("not full, not empty after simultaneous r/w", full == 1'b0 && empty == 1'b0);
 
-        // Drain remaining 3 entries: 12, 13, 100
+        // drain remaining 3 entries: 12, 13, 100
         begin
             int expected[3];
             expected = '{12, 13, 100};
@@ -88,14 +88,14 @@ module fifo_tb;
         end
         check("empty after full drain", empty == 1'b1);
 
-        // Read-while-empty is a no-op
+        // read-while-empty is a no-op
         read_enable = 1'b1;
         @(negedge clk);
         read_enable = 1'b0;
         check("still empty after read-while-empty (no-op)", empty == 1'b1);
 
-        // Simultaneous R/W on an empty fifo
-        // Write succeeds, read fails, count goes 0->1
+        // simultaneous R/W on an empty fifo
+        // write succeeds, read fails, count goes 0->1
         @(negedge clk);
         check("Empty before boundary sim R/W", empty == 1'b1);
         write_enable = 1'b1;
@@ -112,7 +112,7 @@ module fifo_tb;
         read_enable = 1'b0;
         check("Empty again", empty == 1'b1);
 
-        // Continuous Burst Streaming Read
+        // continuous burst streaming read
         for (int i = 0; i < DEPTH; i++) begin
             write_enable = 1'b1;
             write_data   = 200 + i; // 200, 201, 202, 203
@@ -120,7 +120,7 @@ module fifo_tb;
         end
         write_enable = 1'b0;
 
-        // Stream out without dropping read_enable
+        // stream out without dropping read_enable
         read_enable = 1'b1;
         for (int i = 0; i < DEPTH; i++) begin
             check($sformatf("Burst read data item %0d == %0d", i, 200 + i), read_data == (200 + i));
@@ -130,7 +130,7 @@ module fifo_tb;
         check("Empty after burst drain", empty == 1'b1);
         
 
-        // Pointer wraparound: push/pop one at a time across 3 full trips around the DEPTH=4 buffer (12 iterations)
+        // pointer wraparound: push/pop one at a time across 3 full trips around the DEPTH=4 buffer (12 iterations)
         for (int i = 0; i < 3*DEPTH; i++) begin
             write_enable = 1'b1;
             write_data   = i;

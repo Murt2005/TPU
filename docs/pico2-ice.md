@@ -103,9 +103,12 @@ firmware. Easy to conflate; don't.
 | `reset_n` | 10 | active-low, `-pullup yes`; a real 10K pull-up (R21) already exists |
 | `rx_pin` | 9 | vendor's `DEFAULT_UART_RX` |
 | `tx_pin` | 11 | vendor's `DEFAULT_UART_TX` |
+| `spi_mosi` / `spi_sck` / `spi_csn` / `spi_miso` | 14 / 15 / 16 / 17 | `USE_SPI=1` builds: the shared SPI/config bus (RP2350 `spi0`, GPIO 4–7). The board's net names are from the flash's side, so they read crossed: `ICE_SO` (14) is the FPGA's input, `ICE_SI` (17) its output |
 
 Pins 9/11 are the same physical wires the firmware bridges to RP2350
-GPIO28/29.
+GPIO28/29. The SPI pins are the same bus the RP2350 loads the bitstream over,
+which is also shared with the onboard flash — the firmware parks the flash in
+deep power-down before using it as the TPU link.
 
 ## 5. Gotchas — read before debugging blind
 

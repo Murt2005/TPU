@@ -1,20 +1,8 @@
-## ============================================================================
-##  mk/verilator.mk — lint (+ the protocol check), the full-chip C++ bench, and
-##  the --link sim bridge
-## ============================================================================
-
-# Static lint over the whole synthesizable RTL tree (no simulation).
-# Waivers live in verilator.vlt -- every entry there is an audited
-# don't-care with a comment saying why. Each top is linted with its own
-# board's file set: the pico2-ice set carries pe_pair.sv plus yosys's
-# SB_MAC16 model (whole-file waiver in the .vlt: it's yosys's library, not
-# ours to lint); the DE1-SoC set has neither, exactly as Quartus sees it.
-# Every copy of the wire-protocol constants (RTL package, host driver, C++
-# bench, firmware) must agree -- see tests/check_protocol.py. Part of lint:
-# it is a static check, and a drifted opcode is as silent as a width bug.
+# each top is linted with its own board's file set, as its toolchain sees it
 check-protocol:
 	@python3 $(TEST_DIR)/check_protocol.py
 
+# a drifted opcode is as silent as a width bug, so lint includes the protocol check
 lint: $(SB_MAC16_SIM) check-protocol
 	$(VERILATOR) --lint-only -Wall --timing -sv verilator.vlt \
 		$(PICO_RTL) --top-module tpu_top
@@ -27,35 +15,14 @@ lint: $(SB_MAC16_SIM) check-protocol
 		$(HPS_RTL) --top-module tpu_top_hps
 	@echo "lint: clean (UART + SPI + 4x4 MAC16-pair + HPS configs)"
 
-# ----------------------------------------------------------------------------
-# Verilator C++ full-chip testbench (tests/verilator/tb_tpu_top.cpp): drives
-# tpu_top through its real host pins — UART at the hardware's 12 MHz/1 Mbaud
-# ratio at three array shapes (incl. one with all three axes distinct), plus
-# an SPI-PHY build (USE_SPI=1, spi_slave.sv) at the hardware 2x4 shape.
-# Each variant gets its own obj dir under sim/verilator/.
-# ----------------------------------------------------------------------------
-# ROWS_COLS_MTILE_PHY; phy "spipair" = SPI PHY + USE_MAC16_PAIR mmu (the
-# 4x4 hardware build: 16 PEs on 8 hand-instantiated SB_MAC16s); 4_4_4 is
-# the shipped shape, 4_4_2 kept as the M_TILE-axis variant. 8_8_8_uart is the
-# DE1-SoC scale-up shape (64 PEs, generic-fabric multiply) — sim-only proof
-# that the datapath parameterizes past the iCE40's 8-DSP ceiling.
-# A trailing 32 on the PHY field selects PSUM_WIDTH=32 (default 16): the wide
-# reduction path, whose bias/result elements are 4 wire bytes each. 8_8_4_uart32
-# is the shape a transformer-sized K needs -- M_TILE=4 keeps the result frame
-# at 128 bytes, inside the 1-byte LEN cap that 8x8/M_TILE=8 would blow at 256.
-# The `direct` PHY verilates tpu_core instead of tpu_top and injects bytes
-# straight at the sequencer's rx_data/rx_valid, skipping the bit-level PHY.
-# Same protocol, same golden checks, ~50x fewer simulated cycles per byte --
-# which is what makes transformer-sized workloads tractable in simulation.
+# ROWS_COLS_MTILE_PHY[32]: spipair = SPI + pe_pair, 32 = PSUM_WIDTH=32,
+# direct = bytes injected into tpu_core, skipping the PHY (~50x fewer cycles).
+# 8_8_4_uart32 uses M_TILE=4: 8x8 at 4 bytes/element would exceed the 255-byte LEN
 VERILATE_SHAPES := 2_2_2_uart 2_4_2_uart 4_2_3_uart 2_4_2_spi 4_4_2_spipair 4_4_4_spipair \
                    8_8_8_uart 2_2_2_uart32 4_4_2_spi32 8_8_4_uart32 \
                    2_2_2_direct 8_8_4_direct32
 
-# make sim-bridge: build the direct bench as a transport binary for
-# tpu_host.py --link sim. Shape knobs are independent of the test matrix
-# above so a model's K/N can pick the array it wants; the defaults are the
-# transformer shape (PSUM=32 for a reduction past int16, M_TILE=4 to keep
-# the result frame inside the 255-byte LEN cap).
+# defaults are the transformer's shape, independent of the test matrix above
 SIM_ROWS  ?= 8
 SIM_COLS  ?= 8
 SIM_MTILE ?= 4

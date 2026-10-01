@@ -20,7 +20,7 @@ module uart_rx #(
     localparam int CTR_WIDTH     = $clog2(TICKS_PER_BIT + 1);
     localparam logic [CTR_WIDTH-1:0] LAST_TICK = CTR_WIDTH'(TICKS_PER_BIT - 1);
 
-    // Double-flop synchroniser
+    // double-flop synchroniser
     logic rx_sync_0, rx_sync;
     logic rx_sync_prev;
     always_ff @(posedge clk) begin
