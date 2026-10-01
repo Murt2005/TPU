@@ -14,6 +14,10 @@ class IsaSimLink:
     """Verilator model of tpu_isa_top as a subprocess (make isa-sim). writes are
     buffered and only flushed when a read needs the reply"""
 
+    # the model's clock only advances on register accesses, so PERF_CYCLES
+    # differences between runs are exact; on hardware the link's latency is in them
+    cycle_exact = True
+
     def __init__(self, binary):
         if not os.path.exists(binary):
             raise FileNotFoundError(f"{binary} not found: build it with `make isa-sim`")
@@ -56,6 +60,84 @@ class IsaSimLink:
             self._p.wait(timeout=10)
         except Exception:
             self._p.kill()
+
+
+class IsaSerialLink(IsaSimLink):
+    """the real core on the DE1-SoC, through boards/de1soc/sw/isa_mmio run on the
+    HPS over its serial console: logs in, starts the server, then speaks the same
+    protocol as the Verilator model. the console must be at a shell prompt or login"""
+
+    cycle_exact = False
+
+    def __init__(self, port, server="/mnt/boot/isa_mmio", baud=115200, timeout=10.0):
+        import serial
+        self._s = serial.Serial(port, baud, timeout=0.2)
+        self._buf = bytearray()
+        self._s.write(b"\x03")                   # abandon any half-typed line
+        self._quiet()
+        self._shell(b"")
+        self._shell(b"root", tolerate_login=True)
+        self._shell(b"dmesg -n 1")              # kernel messages would corrupt the stream
+        self._quiet()
+        cmd = server.encode()
+        # "\r" alone: a trailing "\n" would stay queued and be the server's first command byte
+        self._s.write(cmd + b"\r")
+        seen = b""
+        deadline = time.time() + timeout
+        while not seen.endswith(cmd + b"\r\n"):  # sync on the shell's echo of exactly this line
+            seen += self._s.read(1)
+            if time.time() > deadline:
+                raise RuntimeError(f"no echo of {cmd!r} from the board console: {seen[-200:]!r}")
+        self._s.timeout = timeout
+        self.n, self.wmem_rows, self.ub_depth, self.acc_depth, self.param_depth = \
+            struct.unpack("<5I", self._read(20))
+
+    def _quiet(self, idle=1.0, limit=10.0):
+        """read until the console has been silent for `idle` seconds"""
+        end = time.time() + limit
+        last = time.time()
+        while time.time() < end and time.time() - last < idle:
+            if self._s.read(4096):
+                last = time.time()
+
+    def _shell(self, line, tolerate_login=False):
+        self._s.write(line + b"\r")
+        time.sleep(0.5)
+        out = self._s.read(4096)
+        if tolerate_login and b"assword" in out:
+            self._s.write(b"\r")
+            time.sleep(0.5)
+            self._s.read(4096)
+        return out
+
+    def _read(self, k):
+        out = self._s.read(k)
+        if len(out) < k:
+            raise RuntimeError(f"board link: wanted {k} bytes, got {len(out)} ({out!r})")
+        return out
+
+    def flush(self):
+        if self._buf:
+            self._s.write(bytes(self._buf))
+            self._buf.clear()
+
+    def close(self):
+        try:
+            self.flush()
+            self._s.write(b"Q")
+            self._s.flush()
+            time.sleep(0.3)
+            self._s.reset_input_buffer()
+        finally:
+            self._s.close()
+
+
+def open_link(spec):
+    """'serial:<port>[:<server path>]' for the board, else a Verilator tb_isa binary"""
+    if spec.startswith("serial:"):
+        port, _, server = spec[len("serial:"):].partition(":")
+        return IsaSerialLink(port, server or "/mnt/boot/isa_mmio")
+    return IsaSimLink(spec)
 
 
 class IsaError(RuntimeError):

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""instruction-stream RTL vs the reference model, word for word. usage: test_isa_rtl.py <tb_isa binary>"""
+"""instruction-stream RTL vs the reference model, word for word.
+usage: test_isa_rtl.py <tb_isa binary | serial:<port>[:<server>]> (the latter is the DE1-SoC)"""
 import os
 import random
 import sys
@@ -8,7 +9,7 @@ from pathlib import Path
 import numpy as np
 
 from tpu import golden, isa
-from tpu.isa_device import ERR_SEQ, OUT, IsaDevice, IsaError, IsaSimLink
+from tpu.isa_device import ERR_SEQ, OUT, IsaDevice, IsaError, open_link
 from tpu.isa_layout import bias_entries, out_rows, ub_entries, weight_rows
 from tpu.isa_model import (ERR_COMBO, ERR_OPCODE, ERR_RANGE, ERR_RESERVED, ERR_UNIMPL,
                            IsaModel)
@@ -47,7 +48,7 @@ def layer_program(n, x, w, b, relu=True, k_split=None, tag=7):
 
 
 def main(binary):
-    link = IsaSimLink(binary)
+    link = open_link(binary)
     dev = IsaDevice(link)
     n = link.n
     print(f"tb_isa: N={n} WMEM={link.wmem_rows} UB={link.ub_depth} ACC={link.acc_depth} "
@@ -250,10 +251,15 @@ def main(binary):
             runs.append(dev.perf())
         period = max(m, n)
         dc = runs[1]["cycles"] - runs[0]["cycles"]
-        check(f"one tile per max(m, N) = {period} cycles in steady state, m={m}: "
-              f"{tiles} more tiles take {dc} cycles, no extra WSTALL",
-              abs(dc - tiles * period) <= 8 and runs[1]["mm_wstall"] == runs[0]["mm_wstall"]
-              and runs[1]["mm_beats"] == 2 * tiles * m, f"{runs}")
+        counts_ok = (runs[1]["mm_wstall"] == runs[0]["mm_wstall"]
+                     and runs[1]["mm_beats"] == 2 * tiles * m)
+        if link.cycle_exact:
+            check(f"one tile per max(m, N) = {period} cycles in steady state, m={m}: "
+                  f"{tiles} more tiles take {dc} cycles, no extra WSTALL",
+                  abs(dc - tiles * period) <= 8 and counts_ok, f"{runs}")
+        else:   # the rate itself is checked on the board by the self-test ROM
+            check(f"m={m}: {tiles} more tiles add exactly {tiles * m} MM beats and no WSTALL "
+                  f"(cycle rate not measurable over this link)", counts_ok, f"{runs}")
 
     # -- status ---------------------------------------------------------------
     link.read32(OUT)
