@@ -1,16 +1,6 @@
 `timescale 1ns / 1ps
 
-// uart_tx — 8N1 UART transmitter.
-//
-// Accepts one byte at a time.  When tx_valid is pulsed high with tx_data
-// present, it shifts out: start bit (0), 8 data bits LSB-first, stop bit (1).
-// tx_busy is high throughout transmission; assert tx_valid only when tx_busy
-// is low to avoid dropping bytes.
-//
-// Parameters:
-//   CLK_FREQ  — system clock frequency in Hz
-//   BAUD_RATE — baud rate
-
+// UART TX: 8N1 UART transmitter
 module uart_tx #(
     parameter int CLK_FREQ  = 50_000_000,
     parameter int BAUD_RATE = 115_200
@@ -19,10 +9,10 @@ module uart_tx #(
     input  logic       reset,
 
     input  logic [7:0] tx_data,
-    input  logic       tx_valid,   // pulse high for one cycle to send tx_data
-    output logic       tx_busy,    // high while transmitting; consumer must wait
+    input  logic       tx_valid,
+    output logic       tx_busy,
 
-    output logic       tx_serial   // raw UART TX pin
+    output logic       tx_serial
 );
 
     localparam int TICKS_PER_BIT = CLK_FREQ / BAUD_RATE;
@@ -51,7 +41,6 @@ module uart_tx #(
             tx_busy   <= 1'b0;
         end else begin
             case (state)
-                // IDLE: line high, wait for tx_valid
                 S_IDLE: begin
                     tx_serial <= 1'b1;
                     tx_busy   <= 1'b0;
@@ -63,7 +52,6 @@ module uart_tx #(
                     end
                 end
 
-                // START: drive line low for one full bit period
                 S_START: begin
                     tx_serial <= 1'b0;
                     if (baud_ctr == LAST_TICK) begin
@@ -75,7 +63,6 @@ module uart_tx #(
                     end
                 end
 
-                // DATA: shift out 8 bits LSB-first
                 S_DATA: begin
                     tx_serial <= shift_reg[bit_idx];
                     if (baud_ctr == LAST_TICK) begin
@@ -90,7 +77,6 @@ module uart_tx #(
                     end
                 end
 
-                // STOP: drive line high for one full bit period
                 S_STOP: begin
                     tx_serial <= 1'b1;
                     if (baud_ctr == LAST_TICK) begin
