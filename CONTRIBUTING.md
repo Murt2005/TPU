@@ -6,8 +6,8 @@ Contributions — bug fixes, new testbenches, board ports, docs — are welcome.
 
 ## Development setup
 
-You need an open-source RTL toolchain (see the Prerequisites section of the
-[README](README.md) for tested versions):
+You need an open-source RTL toolchain (see the [README](README.md)'s
+toolchain sections, §1.3 and §2.3, for install commands and tested versions):
 
 - **Icarus Verilog** (`iverilog`/`vvp`) — unit/integration simulation
 - **Verilator** — lint + full-chip C++ simulation
@@ -17,8 +17,11 @@ You need an open-source RTL toolchain (see the Prerequisites section of the
 - **GTKWave** (optional) — waveform viewing
 - **Python 3.11+** with `pip install -r requirements.txt` — the host driver
 
-The FPGA build additionally needs board-specific tools (`nextpnr-ice40` +
-`icestorm` + `dfu-util` for the pico2-ice target; see `boards/pico2-ice/fpga/`).
+The FPGA builds additionally need board-specific tools:
+- **DE1-SoC** (the active target): Quartus Prime Lite, in an x86 VM on Apple
+  Silicon, plus `openFPGALoader`. See [`docs/de1soc.md`](docs/de1soc.md) §3.
+- **pico2-ice:** `nextpnr-ice40` + `icestorm` + `dfu-util`; see
+  `boards/pico2-ice/fpga/`.
 
 ## Running the checks
 
@@ -26,17 +29,24 @@ All quality gates are local `make` targets (this project intentionally does not
 use hosted CI). Before opening a PR, run:
 
 ```sh
-make test           # build + run all testbenches, prints a pass/fail summary
-make lint           # protocol-constant check + Verilator lint (UART + SPI + 4x4 + HPS configs)
-make verilate-test  # full-chip C++ simulation across 12 shape/PHY/width combos
+make isa-test           # the instruction-stream core: reference model, then RTL vs model at N = 8 and 4
+make isa-selftest-sim   # the DE1-SoC self-test ROM through Verilator
+make lint               # protocol-constant check + Verilator lint (5 configs, incl. the instruction-stream top)
+make test               # the legacy core's testbenches, pass/fail summary
+make verilate-test      # the legacy core's full-chip C++ simulation, 12 shape/PHY/width combos
 ```
+
+Changing the instruction-stream core? `make isa-test` + `make lint` +
+`make isa-selftest-sim` in sim. Anything affecting synthesis or timing also
+needs a board run (self-test PASS, then `tests/isa/test_isa_rtl.py
+serial:<port>`); see [`docs/verification.md`](docs/verification.md).
 
 `make test` (via `run_tests.sh`) returns a non-zero exit code if any testbench
 fails, so it is safe to gate on. Use `make list` to see individual targets, and
 `make test-<name>` / `make wave-<name>` to run or waveform-view one testbench.
 
-If you have the hardware, `make hw-test PORT=/dev/cu.usbmodemXXXX` replays the
-sim vectors against a flashed board. The host flags must match the
+If you have a pico2-ice, `make hw-test PORT=/dev/cu.usbmodemXXXX` replays the
+legacy core's sim vectors against a flashed board. The host flags must match the
 bitstream; pass the same `CONFIG=<name>` it was built with
 (`boards/pico2-ice/configs/`), or the individual knobs.
 

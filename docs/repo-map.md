@@ -1,6 +1,6 @@
 # Repository map
 
-File-by-file. The root [`README.md`](../README.md) §4 has the directory-level
+File-by-file. The root [`README.md`](../README.md) §5 has the directory-level
 version; this is the complete one.
 
 ## Root
@@ -11,7 +11,7 @@ version; this is the complete one.
 | `CONTRIBUTING.md` | Dev setup, local quality gates, how to register a testbench, RTL house style |
 | `Makefile` | Entry point for simulation, lint, the Verilator suite, the sim bridge and hardware tests; defines the shared file sets and includes `mk/` |
 | `mk/sim.mk` | Icarus testbenches: the RTL dependency graph (`DEPS_<name>`), the test list (built from `tests/sv/*_tb.sv`), and `make test` |
-| `mk/isa.mk` | The instruction-stream core: `make isa-test` (model + RTL at N = 8 and 4), `make isa-sim`, `make isa-lint` |
+| `mk/isa.mk` | The instruction-stream core: `make isa-test` (model + RTL at N = 8 and 4), `make isa-sim`, `make isa-lint`, and the DE1-SoC self-test's `make isa-selftest-rom` / `isa-selftest-sim` |
 | `mk/verilator.mk` | `make check-protocol`, `make lint` (5 configs), `make verilate-test` (12 combos), `make sim-bridge` |
 | `mk/hw.mk` | `make hw-test` and `make host-flags`, both taking `CONFIG=` |
 | `run_tests.sh` | Builds and runs every (or a named subset of) testbench, printing a pass/fail summary. Gets the test list from `make print-tests` |
@@ -21,7 +21,7 @@ version; this is the complete one.
 | `.gitmodules` | Pins `boards/pico2-ice/firmware/pico-ice-sdk` to tinyvision-ai-inc's SDK |
 | `.gitignore` | Sim output, FPGA artifacts, Quartus output, firmware build dirs, MNIST data, `.venv/`, `olddocs/` |
 
-`.venv/` is the Python virtual environment (README §1.3) and `__pycache__/`
+`.venv/` is the Python virtual environment (README §1.2) and `__pycache__/`
 holds bytecode caches. Both gitignored.
 
 ## `rtl/` — board-neutral SystemVerilog
@@ -58,9 +58,9 @@ All four present the same byte-stream interface to `tpu_core`.
 | `hps_bridge.sv` | Avalon-MM slave for the DE1-SoC's HPS; fixed read latency 1, no CDC |
 | `isa_bridge.sv` | The instruction-stream core's 12-register Avalon-MM slave (instructions, data, out, status, perf) |
 
-**`rtl/isa/` — the instruction-stream core (DE1-SoC, phases 1–3)**
+**`rtl/isa/` — the instruction-stream core (DE1-SoC, hardware-validated)**
 
-The 64-bit instruction set from the DE1-SoC instruction-stream spec, through phase 3: requantizer, layers chained through the UB, and tiles overlapped one per `max(m, N)` cycles. No DDR3 yet. Reuses `rtl/core/`'s `fifo` and `systolic_data_setup`; the array is its own (`isa_pe`, `isa_array`).
+The 64-bit instruction set, through spec phase 3: requantizer, layers chained through the UB, and tiles overlapped one per `max(m, N)` cycles. No DDR3 yet. Reuses `rtl/core/`'s `fifo` and `systolic_data_setup`; the array is its own (`isa_pe`, `isa_array`). Reference: [`isa.md`](isa.md).
 
 | File | What |
 |---|---|
@@ -75,7 +75,7 @@ The 64-bit instruction set from the DE1-SoC instruction-stream spec, through pha
 
 ## `boards/` — one directory per target
 
-### `boards/pico2-ice/` — iCE40UP5K + RP2350 (hardware-validated)
+### `boards/pico2-ice/` — iCE40UP5K + RP2350 (hardware-validated, no longer developed)
 
 | Path | What |
 |---|---|
@@ -102,16 +102,21 @@ The 64-bit instruction set from the DE1-SoC instruction-stream spec, through pha
 | `pico-ice-sdk/` | Vendored SDK (**git submodule**) |
 | `build/`, `build-spi/` | Out-of-tree build dirs producing the `.uf2` (gitignored) |
 
-### `boards/de1soc/` — Cyclone V SoC (in progress)
+### `boards/de1soc/` — Cyclone V SoC (hardware-validated, the active target)
 
 | Path | What |
 |---|---|
-| `top/tpu_top_hps.sv` | Top level: `hps_bridge` + `tpu_core` + power-on reset |
-| `top/tpu_isa_top.sv` | Top level for the instruction-stream core: `isa_bridge` + `isa_core` + power-on reset |
-| `fpga/Makefile` | Quartus command-line build + `.rbf` generation; set `PROJECT`/`REVISION` |
-| `fpga/README.md` | Quartus/Qsys integration and HPS deploy runbook |
-| `fpga/tpu_top_hps.sdc` | 50 MHz fabric clock constraint |
-| `fpga/tpu_top_hps.qsf` | Device, source list, and TPU-specific pin/settings skeleton |
+| `top/tpu_isa_top.sv` | Instruction-stream top: `isa_bridge` + `isa_core` + power-on reset |
+| `top/tpu_isa_selftest.sv` | FPGA-only top: `tpu_isa_top` driven by `isa_replay`; LEDs/HEX report, SW9 + SW4..0 show perf captures |
+| `top/isa_replay.sv` | ROM-fed Avalon master: replays a register transcript, checks reads, captures and bounds perf counters |
+| `top/hex_display.sv` | Six seven-segment digits from 5-bit codes (hex, blank, dash); used by the GHRD design's `hex_pio` |
+| `top/tpu_top_hps.sv` | Legacy byte-protocol core's top (`hps_bridge` + `tpu_core`); never built |
+| `fpga/README.md` | Index of the FPGA builds |
+| `fpga/selftest/` | The self-test: `gen_selftest.py` (ROM transcript from the reference model), Quartus `.qpf/.qsf/.sdc`, `Makefile`, `README.md` |
+| `fpga/hps/` | The GHRD integration: `tpu_isa_hw.tcl` (Platform Designer component), `add_tpu.tcl` (qsys edit: TPU + `hex_pio`), `patch_top.py` (wires the HEX decoder into `ghrd_top.v`), `Makefile` (extract the GHRD from the rev H CD → generate → compile → `.rbf`; ARM tools), `README.md` |
+| `fpga/{Makefile,tpu_top_hps.qsf,tpu_top_hps.sdc}` | Legacy core's Quartus scaffolding; never built |
+| `sw/isa_mmio.c` | ARM `/dev/mem` register server speaking `tb_isa`'s protocol (`IsaSerialLink` runs it over the console) |
+| `sw/setbaud.c` | 636-byte libc-free console baud setter (`termios2`/`BOTHER`), for rates busybox `stty` lacks |
 
 ## `host/` — the Python driver package
 
@@ -127,7 +132,7 @@ The 64-bit instruction set from the DE1-SoC instruction-stream spec, through pha
 | `tpu/isa_layout.py` | Host-side layout for the core's fixed strides (weight tiles, K-chunk-major UB) |
 | `tpu/isa_compile.py` | Compiles an int8 MLP into the core's load and infer programs |
 | `tpu/isa_waits.py` | Per-engine read/write sets; finds unordered hazards and inserts the minimal `WAIT`s |
-| `tpu/isa_device.py` | Driver for `isa_bridge`'s registers, plus `IsaSimLink` for the Verilator model |
+| `tpu/isa_device.py` | `IsaDevice` (driver for `isa_bridge`'s registers); links `IsaSimLink` (Verilator) and `IsaSerialLink` (the board, via `isa_mmio`); `BoardConsole` (log in, launch, `upload()`, baud switching on the HPS console); `open_link()` |
 | `tpu/cli.py` | Argument parsing and `--selftest`; `tpu/__main__.py` makes `python3 -m tpu` work |
 
 ## `tests/` — by verification tier
@@ -136,8 +141,9 @@ The 64-bit instruction set from the DE1-SoC instruction-stream spec, through pha
 |---|---|
 | `sv/` | 23 Icarus testbenches (`make test`) — list below |
 | `verilator/tb_tpu_top.cpp` | C++ full-chip bench: drives `tpu_top`'s real host pins (or injects bytes into `tpu_core` directly) across 12 shape/PHY/width combos; with `--bridge` it is the `--link sim` transport (`make sim-bridge`) |
-| `isa/test_isa_model.py`, `isa/test_isa_rtl.py`, `isa/isa_progs.py` | The instruction-stream model, and the RTL against it word for word (`make isa-test`) |
+| `isa/test_isa_model.py`, `isa/test_isa_rtl.py`, `isa/isa_progs.py` | The instruction-stream model, and the RTL against it word for word (`make isa-test`); `test_isa_rtl.py serial:<port>` runs the same suite on the board |
 | `verilator/tb_isa.cpp` | `tpu_isa_top` as a register-level transport for `isa_device.py` |
+| `verilator/tb_isa_selftest.cpp` | Runs the DE1-SoC self-test top and reads its LEDs/HEX and capture slots back (`make isa-selftest-sim`) |
 | `check_protocol.py` | Checks the four copies of the wire-protocol constants agree (`make check-protocol`, part of `make lint`) |
 | `hw/hw_regression.py` | 14-case regression against real silicon over the `tpu` driver (`make hw-test`) |
 
@@ -163,9 +169,12 @@ See [`verification.md`](verification.md).
 |---|---|
 | `train_mnist.py` | Train + quantize the 144→64→10 int8 MLP |
 | `infer.py` | Multi-layer driver: hardware and offline backends, `--compare`, `--no-offload` |
-| `draw_demo.py` | Tkinter draw-a-digit demo |
+| `draw_demo.py` | Tkinter draw-a-digit demo: the pico2-ice LED, or `--de1soc` (digit on the HEX displays, `--baud 1562500`) |
 | `model/mnist_2x2_int8.npz` | Committed pre-trained weights (~5 KB) |
 | `data/` | Downloaded IDX files (gitignored) |
+| `de1soc/make_data.py` | `model.bin` (compiled load/infer programs) and `testset.bin` (pixels + expected values) for the board |
+| `de1soc/mnist_tpu.c` | MNIST end to end on the DE1-SoC's ARM: `bench` over the test set, `serve` for the demo; `-DSIM` builds it against Verilator |
+| `de1soc/Makefile`, `de1soc/README.md` | `data`, `arm`, `sim-bench`; measured results |
 
 See [`mnist.md`](mnist.md).
 
@@ -181,7 +190,7 @@ See [`mnist.md`](mnist.md).
 | `infer.py` | Forward pass, backends (array / exact int8 emulation / float), `--compare`, CLI |
 | `model/` | Downloaded + generated artifacts (gitignored) |
 
-Needs `PSUM_WIDTH=32`, so it runs against `make sim-bridge` today.
+Targets the legacy byte-protocol core with `PSUM_WIDTH=32`, so it runs against `make sim-bridge` today; porting it to the instruction-stream core is in [`backlog.md`](backlog.md).
 
 ## `sim/` — generated
 

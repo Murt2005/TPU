@@ -3,7 +3,52 @@
 Where the time and the LUTs actually go. Every number here was measured on
 this repo's hardware and toolchain — nothing is estimated unless it says so.
 
-## 1. Where things stand
+## 0. The DE1-SoC (current)
+
+The instruction-stream core ([`isa.md`](isa.md)) on the DE1-SoC, 8×8 array
+at 50 MHz, driven by the board's own ARM. All numbers are measured on the
+board on 2026-10-01:
+
+| | m = 1 (one image per run) | m = 8 (batches of 8) |
+|---|---|---|
+| MNIST accuracy, 10,000 test images | 97.50% | 97.50% |
+| equal to the reference model | 10,000 / 10,000 | 10,000 / 10,000 |
+| TPU path per image (pack, push over the bridge, compute, read back, argmax) | 60.6 µs | 28.7 µs |
+| ARM preprocessing per image (28×28 → 12×12 → int8) | 48.9 µs | 48.9 µs |
+| **end to end per image, from raw pixels** | **109.5 µs** (9,132/s) | **77.6 µs** (12,880/s) |
+
+**Against the pico2-ice's best (63.8 ms/image), that's about 580× (one image)
+and 820× (batched).** Both numbers start from raw pixels, but the
+pico2-ice's host was a Mac across USB and SPI, and here the host is on the
+board. Much of the gain is removing that link, not the TPU alone.
+
+Where the 109.5 µs goes:
+- **Preprocessing:** about half, plain float math on the ARM.
+- **The lightweight bridge:** at m = 1 the TPU path takes twice what the
+  same register traffic costs in Verilator, where a register access is one
+  cycle (29.4 µs). The difference is the bridge's per-access latency.
+- **Compute:** a fraction of that. Each tile takes `max(m, N)` cycles.
+
+**Per-tile rate** (self-test on the board, and Verilator; cycle-exact):
+8 extra tiles cost 64, 64 and 152 cycles at m = 1, 8 and 19. That's exactly
+`max(m, 8)` per tile, with no steady-state weight stalls (WSTALL stays at
+the 9 cycles of the first tile's fetch).
+
+**Per tile, against the legacy core:** a legacy 8×8/M_TILE=8 pass takes 49
+cycles (traced, [`utilization.md`](utilization.md) §1), against 8 here, so
+**6.1× fewer cycles per tile**. In throughput, that's 512 MACs per 8 cycles
+at 50 MHz = **3.2 GMAC/s** steady state, against about 53 MMAC/s for the
+pico2-ice's best build (64 MACs per 29-cycle pass at 24 MHz). That ratio
+combines about 6× from overlap, 4× from the larger array and 2× from the
+clock.
+
+**Drawing demo**, with the round trip from the Mac over the HPS console:
+73.5 ms at 115,200 baud, 7.5 ms at 1,562,500. Both take 117 µs on the
+board; the rest is the 785-byte image crossing the serial link.
+
+Resources and timing are in [`de1soc.md`](de1soc.md) §1.
+
+## 1. The pico2-ice (legacy core)
 
 MNIST end-to-end, 144→64→10 int8 model, one image, SPI link with firmware
 offload:
@@ -206,8 +251,13 @@ Sources: [iCE40 UltraPlus datasheet](https://www.latticesemi.com/-/media/Lattice
 
 ## 5. What's left
 
-See [`backlog.md`](backlog.md). The short version: `M_TILE` image batching is
-the largest well-understood lever and needs no RTL change. After it, the
-levers are structural — addressable resident weights and shadow-bank
-overlap — and [`utilization.md`](utilization.md) has the traced numbers
-behind them: the array feeds new rows only 9–16% of each pass.
+See [`backlog.md`](backlog.md).
+
+- **On the DE1-SoC:** the next levers are ARM preprocessing (about half of
+  the 109.5 µs) and bridge register traffic. The array is already fed every
+  cycle at m ≥ N.
+- **On the pico2-ice (legacy, no longer developed):** the structural levers
+  this section used to list were resident weights and shadow-bank overlap.
+  [`utilization.md`](utilization.md) has the traced numbers behind them,
+  showing the array fed new rows only 9–16% of each pass. Both were built
+  into the instruction-stream core instead.

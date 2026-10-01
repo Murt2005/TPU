@@ -1,8 +1,11 @@
 # pico2-ice (iCE40UP5K) target
 
-Reference for the primary, hardware-validated target. The root
-[`README.md`](../README.md) §1 is the quick start and §1.8 the short
-troubleshooting table; this page is what you read when those aren't enough.
+Reference for the pico2-ice target. It's hardware-validated and everything
+here still builds and works, but it is **no longer developed**: the
+DE1-SoC ([`de1soc.md`](de1soc.md)) with the instruction-stream core is the
+active target. The root [`README.md`](../README.md) §2 is the pico2-ice
+quick start and §2.8 the short troubleshooting table; this page is what you
+read when those aren't enough.
 
 ## 1. Two chips, two images, one order
 

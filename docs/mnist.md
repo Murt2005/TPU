@@ -74,8 +74,9 @@ per K-tile — `RUN_TILE` and `STREAM_RUN` deliberately don't touch
 | Where | Accuracy |
 |---|---|
 | Quantized model, full 10k test set (sim) | 97.50% |
-| Real hardware, 20 sampled images | 95.00% (19/20) |
+| pico2-ice, 20 sampled images | 95.00% (19/20) |
 | Local numpy, same 20 images | 95.00% (19/20) — **identical** |
+| **DE1-SoC, full 10k test set, end to end on the board** | **97.50%** — 10,000/10,000 equal to the reference model and to the host numpy path |
 
 Hardware and host agree exactly, because they run the same fixed-point math.
 Any divergence is a bug, not rounding.
@@ -117,8 +118,12 @@ it does not disturb the TPU link.
 
 ## 7. Open work
 
-The single biggest remaining win is **batching `M_TILE` images per inference
-call**. A lone image wastes the padded activation rows: at 4×4/M_TILE=4,
+On the DE1-SoC, see [`backlog.md`](backlog.md): faster ARM preprocessing,
+fewer bridge accesses, and a bigger model, now that the new core accumulates
+in 32 bits. What follows is the pico2-ice's, which is no longer developed.
+
+The single biggest remaining win there was **batching `M_TILE` images per
+inference call**. A lone image wastes the padded activation rows: at 4×4/M_TILE=4,
 three of four streamed rows are zeros, which is why that shape measures
 *worse* single-image (80.3 ms) than M_TILE=2 (63.8 ms) despite being
 strictly more capable. Batched, layer 1 costs 30.6 ms per 2 rows vs. 44.6 —
@@ -127,3 +132,36 @@ projecting to **~17 ms/image**.
 A bigger/better model is gated on §2's accumulator width: either prove it
 still fits int16, or build a `PSUM_WIDTH=32` bitstream (never built so far).
 See [`backlog.md`](backlog.md).
+
+## 8. On the DE1-SoC
+
+The same trained model runs on the instruction-stream core
+([`isa.md`](isa.md)), but differently from the pico2-ice path:
+
+- **Compiled once, not tiled per call.** `tpu.isa_compile.compile_mlp` turns
+  the two layers into a load program (weights, biases and requantization
+  words into on-chip memory) and an 11-instruction infer program.
+- **Layer 1 never leaves the core.** Its outputs are requantized in hardware
+  (`M = 1/hidden_scale` → `M0 = 13,049,303`, `shift = 31`) and written to the
+  UB, where layer 2 reads them. The host's `np.round` and the hardware's
+  round-half-up differ only on the tie at v = 10,450, which none of the
+  10,000 test images hits.
+- **The host is the board's ARM.** `software/mnist/de1soc/mnist_tpu` reads
+  raw 28×28 pixels, downsamples and quantizes them (byte-identical to
+  numpy), runs the program over the lightweight bridge, and takes the argmax.
+
+Measured on the board over all 10,000 test images: **97.50%**, every
+prediction equal to the reference model, **109.5 µs/image** end to end (one
+image per run) or 77.6 µs (batches of 8). The pico2-ice's best was 63.8
+ms/image; see [`performance.md`](performance.md) §0 for what that comparison
+does and doesn't mean.
+
+```bash
+make -C software/mnist/de1soc data sim-bench     # Mac: build the data, check against Verilator
+# copy build/{mnist_tpu,model.bin,testset.bin} to the SD card (or BoardConsole.upload), then on the board:
+/mnt/boot/mnist_tpu bench /mnt/boot/model.bin /mnt/boot/testset.bin
+.venv/bin/python software/mnist/draw_demo.py --de1soc /dev/cu.usbserial-<id>0 --baud 1562500
+```
+
+The drawing demo shows the digit on HEX0. See
+[`../software/mnist/de1soc/README.md`](../software/mnist/de1soc/README.md).

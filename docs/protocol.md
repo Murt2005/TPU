@@ -1,5 +1,9 @@
 # Host protocol
 
+> **The legacy core's protocol** (pico2-ice). The DE1-SoC's
+> instruction-stream core doesn't use framed commands; it takes 64-bit
+> instructions through a 12-register bridge. See [`isa.md`](isa.md).
+
 How the host drives the array. This page is the normative definition of the
 wire protocol: `rtl/core/tpu_sequencer.sv` implements it, and
 `host/tpu/protocol.py` mirrors its constants. It also covers the layers around

@@ -14,7 +14,7 @@ MMIO  := build/isa_mmio
 
 .PHONY: all ghrd qsys sof rbf mmio setbaud clean
 
-all: rbf mmio
+all: rbf mmio setbaud
 
 $(GHRD)/stamp-tpu:
 	rm -rf $(GHRD) build/_cd && mkdir -p build/_cd

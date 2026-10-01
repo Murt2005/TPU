@@ -1,98 +1,107 @@
 # Backlog
 
-Open work, in rough value order. Anything here needs `make test` and
-`make hw-test` green before it's trusted — see
-[`verification.md`](verification.md).
+Open work, in rough value order. The DE1-SoC and its instruction-stream core
+([`isa.md`](isa.md)) are the active target. A change there is trusted once
+`make isa-test`, `make lint` and the board tiers in
+[`verification.md`](verification.md) are green.
 
 ## High value
 
-**Batch `M_TILE` images per inference call** (`software/mnist/infer.py`).
-The largest well-understood lever, and it needs no RTL change. A single image
-wastes the padded activation rows: at 4×4/M_TILE=4, three of four streamed
-rows are zeros. Measured M-scaling says layer 1 costs 30.6 ms per 2 rows at
-M_TILE=4 vs. 44.6 at M_TILE=2, projecting **~17 ms/image** batched, against
-63.8 today. `FW_MATMUL`'s header already carries `rows`/`cols`/`m_tile` per
-command, so the firmware needs no change.
+**One core.** The instruction-stream core lives in `rtl/isa/`, beside the
+legacy `rtl/core/`, which only the pico2-ice uses. With the pico2-ice no
+longer developed, the plan is to move the new core into `rtl/core/` in
+place:
+- **Rewritten:** `pe.sv`, `mmu.sv`, `accumulator.sv`, `bias.sv`,
+  `activation.sv`, `unified_buffer.sv`, `tpu_core.sv`, `tpu_pkg.sv`.
+- **Replaced:** the sequencer, by the dispatcher and the LD/WT/MM/ACT engine
+  files.
+- **Kept unchanged:** `fifo.sv`, `systolic_data_setup.sv`.
+- **Deleted:** `weight_fifo.sv`, `pe_pair.sv`.
 
-**DE1-SoC bring-up.** Qsys/GHRD integration → cloud Quartus build → `.rbf`
-on the board → `hw_regression.py --link hps` on the board (the script needs
-`hps` added to its `--link` choices first) → scale the array
-up to whatever closes timing at 50 MHz. Full detail in
-[`de1soc.md`](de1soc.md) §5. The 8×8 sim shape already proves the RTL is
-ready for a much larger array than the UP5K allowed.
+Then the pico2-ice board directory, its peripherals and testbenches, and the
+old protocol driver can go in a second commit. `make isa-test`, the
+self-test's cycle-exact perf captures and a board run catch any behavioural
+drift.
 
-**Addressable resident weights.** Every `RUN_TILE`/`STREAM_RUN` ships its
-weights inline, so nothing can reuse weights already on chip. A `RUN_TILE`
-variant that names a loaded bank instead is one new opcode on the existing
-framing, worth ~1.7× less wire traffic on top of batching (computed from the
-shipped tiling, not measured). [`utilization.md`](utilization.md) §3–5.
+**ARM preprocessing.** 48.9 µs of the 109.5 µs MNIST image is
+`mnist_tpu.c`'s float downsample and quantize. It's bit-exact with numpy,
+which constrains how it can change. An integer or table-driven version has
+to stay byte-identical on all 10,000 test images (the bench checks this).
 
-**`STREAM_RUN` shadow-bank overlap.** `weight_fifo`'s double-buffering exists
-but the sequencer never overlaps loading tile *N+1* with computing tile *N*.
-Projected 3–6× per-tile compute, and it would also lift the `CLK/6` SPI write
-cap, which exists only because the sequencer stops reading RX between tiles
-([`utilization.md`](utilization.md) §2). The most invasive sequencer change
-available, and only Tier 4 would catch a mistake in it. *(This used to be
-filed as low value, "~2 ms/image at most"; that estimate predates the
-utilization measurements and missed the SPI-clock coupling.)*
+**Fewer bridge accesses per inference.** At m = 1 the TPU path is 60.6 µs on
+the board, against 29.4 µs of equivalent register traffic at one access per
+cycle in Verilator. The infer program is the same 11 instructions every
+time, so a resident-program register (replay the last program, push only
+data) would remove most of them. Wider or burst transfers over the full
+HPS→FPGA bridge would cut the rest.
+
+**A larger array.** 78 of 87 DSP blocks are used at 8×8: 64 PEs, 8
+requantizer lanes and the tile-count products. 16×16 needs the PE multiplies
+packed three per DSP block (Cyclone V's 9×9 mode) or partly in soft logic.
+The RTL is fully parameterized in `N` and verified at 8 and 4.
 
 ## Medium
 
-**A `PSUM_WIDTH=32` bitstream.** The knob exists and is covered in
-simulation, but no bitstream has been built with it. It is what `software/llm/` needs
-to leave simulation. On the UP5K it cannot use `pe_pair` and costs LCs across
-the reduction path, so it means a smaller array; the DE1-SoC is the natural
-home.
+**Ethernet on the rev H board.** The 2014 SD image's Ethernet links but
+receives nothing. A boot loader generated from the rev H GHRD's handoff files
+is the likely fix, and that needs SoC EDS on top of Quartus. Today
+everything (including file uploads) goes over the console, which works, so
+this is convenience.
 
-**A bigger/better MNIST model.** Gated on `accumulator.sv`'s non-saturating
-PSUM — see [`mnist.md`](mnist.md) §2. Either prove a wider layer's true sum
-still fits in ±32,767, or use a `PSUM_WIDTH=32` build (above). With the ReLU
-bypass now available, a retrained model could also drop the ReLU on its
-output layer.
+**DDR3 (spec phase 5).** `RD_DDR_UB`, `SET_OBASE`, `MATMUL wsrc=1` and
+`ACTIVATE dst=DDR` decode and are rejected as `ERR_UNIMPL`. Needed once a
+model's weights outgrow WMEM (8192 rows).
 
-**`--link hps` in the host scripts.** The `tpu` CLI and `software/llm/infer.py`
-accept it; `tests/hw/hw_regression.py` and `software/mnist/infer.py` don't. Needed before
-DE1-SoC bring-up can run the regression on the board.
+**The transformer on the new core.** `software/llm/` targets the legacy
+byte protocol (`PSUM_WIDTH=32`, `--link sim`/`hps`). The instruction-stream
+core has a 32-bit ACC and can return int32 rows to the host, so a compiler
+from the GPT-Neo layers to `MATMUL`/`ACTIVATE` would put it on the board.
 
-**A fixed-width instruction stream.** Replaces `[CMD][LEN][payload]` framing,
-removing the 255-byte frame cap and the double-staged decode. Designed in
-[`utilization.md`](utilization.md) §5; take it when the DE1-SoC scale-up makes
-the frame cap bind, not before.
-
-**Packed instruction headers.** Today's byte-oriented framing spends more
-bits than it needs on `CMD`/`LEN`/`flags`. A packed header would shave
-per-frame overhead — but that overhead is currently dwarfed by SPI tile
-traffic and USB bulk, so the payoff is small until the transport gets faster.
+**A bigger MNIST model.** The current one is sized to stay provably inside
+the legacy core's non-saturating int16 PSUM ([`mnist.md`](mnist.md) §2). The
+new core accumulates in 32 bits and requantizes in hardware, so that
+constraint is gone.
 
 ## Low / speculative
 
-**The driver's RTL-time estimate.** `estimated_rtl_seconds()` costs every
-pass at a fixed 21 cycles (the 2×2 figure). A pass is `(R+3) + M + (R+C+6)`
-cycles ([`architecture.md`](architecture.md) §4.2), so the estimate
-under-reports at larger shapes.
+**The FPGA-side UART.** The CP2105's second ("Standard") port goes straight
+to FPGA pins, up to 921,600 baud. It's a host path that bypasses Linux, but
+it's slower than the HPS console's 1.5625 Mbaud, so it's only interesting
+for an HPS-less setup.
 
-**int4 payload packing.** Halves weight and activation wire bytes, which are
-the dominant cost. **Gated on a software-only accuracy experiment first** —
-find out whether int4 weights hold 95%+ on this model before touching any
-RTL.
+**int4 payload packing.** Halves weight and activation bytes. Gated on a
+software accuracy experiment first.
 
-**Replace the sequencer's `WAIT_TIMEOUT` polling with a fixed-delay
-counter.** Datapath latency is fixed and deterministic (no backpressure
-anywhere in `tpu_core`), so waiting a known number of cycles is functionally
-identical to watching for `final_row_valid` pulses, and removes the unused
-timeout path. Deliberately not done: the current form is more robust to
-future datapath latency changes.
+## Legacy core (pico2-ice): parked
 
-**Accumulator's lockstep column gate.** `pop_row` requires every column FIFO
-simultaneously non-empty, so row 0's first column idles waiting on the last.
-One cycle out of ~21 at 2×2; it scales with `NUM_COLS-1` skew. Removing it
-needs explicit row tagging instead of position-implied ordering.
+Valid but not being pursued, since the pico2-ice isn't developed any more:
+- `M_TILE` image batching in `software/mnist/infer.py` (projected ~17
+  ms/image at 4×4/M_TILE=4)
+- addressable resident weights and shadow-bank overlap for `tpu_sequencer`
+  (both exist in the instruction-stream core now)
+- a `PSUM_WIDTH=32` iCE40 bitstream
+- `--link hps` in `hw_regression.py` / `infer.py`
+- packed headers, the fixed-cycle `WAIT_TIMEOUT` replacement, and the
+  accumulator's lockstep column gate
 
 ## Done — kept so the trail is legible
 
-These were open items in earlier planning docs and have shipped. Details in
-[`performance.md`](performance.md) §3.
+The instruction-stream core, on the DE1-SoC:
+- Phase 1: the ISA, reference model, dispatcher and engines, matching the
+  model word for word
+- Phase 2: the requantizer and layer chaining through the UB
+- Phase 3: overlapped tiles (`w_cur`/`w_next` PEs, 2-slot WT), measured at
+  `max(m, N)` cycles per tile
+- Quartus bring-up in an OrbStack VM; the DSP-width and requantizer-timing
+  fixes
+- FPGA-only self-test, PASS on the board, including the tile rate
+- The GHRD integration on the rev H board; the full test suite passing from
+  the ARM
+- MNIST end to end on the ARM (109.5 µs/image) and the HEX-display drawing
+  demo, with a 1.5625 Mbaud console link
 
+The legacy core, on the pico2-ice (details in
+[`performance.md`](performance.md) §3):
 - Full sequencer parameterization (`ARRAY_ROWS`/`NUM_COLS`/`M_TILE`)
 - `unified_buffer`'s ROWS/COLS indexing bug
 - `CMD_RUN_TILE`, then `CMD_STREAM_RUN` with cross-frame tiling flags

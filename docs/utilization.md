@@ -4,6 +4,14 @@ How much of the array actually does work, how much of the wire actually
 carries operands, and what a command interface designed around those answers
 would look like.
 
+> **Since this was written:** the overlap (§2) and the instruction stream
+> (§5) were both built, as a new core rather than as changes to this one.
+> That core, [`isa.md`](isa.md), runs on the DE1-SoC. Measured there: each
+> tile costs exactly `max(m, N)` cycles, so at m ≥ N the array is fed **every
+> cycle**, against 9–16% here. A legacy 8×8/M_TILE=8 pass is 49 cycles; the
+> same tile is 8 cycles there (6.1×). The numbers below are the legacy
+> pico2-ice core's, and they're what motivated it.
+
 Every cycle count here was measured by tracing the RTL with a Verilator
 `--trace` harness (`viz/trace_tb.cpp` → `viz/vcd_to_trace.py`, since removed
 from the repo; recover them with `git show 9627dae:viz/trace_tb.cpp`). Byte counts are computed from the shipped tiling in
@@ -191,10 +199,19 @@ weights — and it is a fraction of the risk. Take the full instruction stream
 when the DE1-SoC scale-up makes the 255-byte cap and the decode cost bind,
 not before.
 
+**What happened instead:** the DE1-SoC got a fresh core built around a 64-bit
+instruction stream: four concurrent engines, `WAIT`/`SIGNAL`, resident
+weights in a WMEM, and layer outputs chained through the UB. A fresh core
+sidestepped the rewrite-in-place risk. The resync concern is handled by
+`CTRL.RESET` plus decode errors that halt the dispatcher with an
+`ERR_SEQ`, rather than a sync word. See [`isa.md`](isa.md).
+
 ## 6. Caveats
 
 Cycle counts are exact, from RTL traces. The wire figures are computed from
 the shipped tiling, not measured on a board. The `CLK/2` SPI figure is
 inferred from the documented cause of the `CLK/6` cap, and the 3–6× overlap
-figure is a projection from the phase breakdown in §1 — neither has been
-built or measured.
+figure is a projection from the phase breakdown in §1. The SPI figure was
+never built or measured. The overlap was built in the instruction-stream
+core, where it measures 6.1× fewer cycles per tile than the legacy 8×8
+pass: just above the projected 3–6×.

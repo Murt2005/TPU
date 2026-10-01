@@ -1,13 +1,17 @@
 # Running a transformer on the array
 
 TinyStories-1M (GPT-Neo, 8 layers, d=64, 16 heads, vocab 50257) with its
-linear layers executed on the TPU. Works against the Verilator model today;
-the same driver runs on real hardware by changing `--link`.
+linear layers executed on the TPU. It targets the **legacy byte-protocol
+core** with `PSUM_WIDTH=32` and runs against its Verilator model. No
+bitstream has been built with that width, and the DE1-SoC runs the
+instruction-stream core ([`docs/isa.md`](../../docs/isa.md)) instead, so it
+hasn't run on hardware. Porting it to the new core is in
+[`docs/backlog.md`](../../docs/backlog.md).
 
 ## Quick start
 
 ```bash
-./llm/fetch.sh                 # download + quantize (~48MB download, gitignored)
+./software/llm/fetch.sh                 # download + quantize (~48MB download, gitignored)
 make sim-bridge                # build the simulated core as a transport
 python3 software/llm/infer.py --link sim --port sim/verilator/bridge/tb_tpu_top \
     --prompt "Once upon a time" -n 20

@@ -1,5 +1,12 @@
 # Architecture
 
+> **This page describes the legacy byte-protocol core** (`rtl/core/`), which
+> runs on the pico2-ice. The DE1-SoC runs the **instruction-stream core**
+> (`rtl/isa/`), documented in [`isa.md`](isa.md). It shares this page's
+> TPUv1 datapath ideas (weight-stationary array, skewed activations, column
+> de-skew, bias, ReLU) but replaces the control plane and adds overlap,
+> on-chip layer chaining and a requantizer.
+
 The whole system, top to bottom: what runs where, how a matmul gets from a
 Python call to the systolic array and back, how every RTL module behaves and
 why, and which parts of the hardware exist but are not yet wired up.
@@ -50,7 +57,7 @@ Four ways to reach the same core, all speaking the identical byte protocol:
 |---|---|---|---|
 | pico2-ice, UART | `tpu_host.py --link uart` | USB-CDC → RP2350 → UART pins, 1 Mbaud, 12 MHz core | hardware-validated |
 | pico2-ice, SPI | `--link spi` | USB-CDC → RP2350 → SPI config bus, 24 MHz core; optional `FW_MATMUL` offload | hardware-validated |
-| DE1-SoC | `--link hps`, run *on the board* | ARM HPS → `/dev/mem` → lightweight H2F Avalon bridge | sim-tested only |
+| DE1-SoC | `--link hps`, run *on the board* | ARM HPS → `/dev/mem` → lightweight H2F Avalon bridge | sim-tested only, never built: the DE1-SoC runs the instruction-stream core ([`isa.md`](isa.md)) |
 | Simulation | `--link sim` | pipe to a Verilator build of `tpu_core` | sim |
 
 The key design decision: **every PHY presents the same byte-stream interface
@@ -415,13 +422,14 @@ pairing) and `-abc9 -dff`. Then nextpnr-ice40 (`--up5k --package sg48`,
 `SB_RAM40_4K`; PE multiplies map to `SB_MAC16`, either inferred or
 hand-instantiated.
 
-**Cyclone V** (`boards/de1soc/fpga/`): `tpu_top_hps` becomes a Platform Designer
-component on the GHRD's `h2f_lw` bridge, built with `USE_MAC16_PAIR=0` so
-Quartus infers its own DSPs from `pe.sv`. Scaffolded, not yet built — see
-[`de1soc.md`](de1soc.md).
+**Cyclone V** (`boards/de1soc/fpga/`): the scaffolding for this core
+(`tpu_top_hps` as a Platform Designer component, `USE_MAC16_PAIR=0`) was
+never built. The DE1-SoC builds the instruction-stream core instead, as an
+FPGA-only self-test and inside Terasic's GHRD. See [`de1soc.md`](de1soc.md).
 
 ## 12. Where to go next
 
+- The DE1-SoC's core → [`isa.md`](isa.md)
 - Command frames and status codes → [`protocol.md`](protocol.md)
 - What to run before trusting a change → [`verification.md`](verification.md)
 - Per-target build details → [`pico2-ice.md`](pico2-ice.md), [`de1soc.md`](de1soc.md)

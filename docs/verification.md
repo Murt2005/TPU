@@ -3,6 +3,11 @@
 Four independent tiers. Each catches a class of bug the others structurally
 cannot. A change is trusted when the tiers it can reach are green.
 
+There are two cores. Tiers 1–4 below are the legacy byte-protocol core
+(pico2-ice). The instruction-stream core (DE1-SoC, [`isa.md`](isa.md)) has
+its own reference model and its own sim and hardware tiers, described in
+[the instruction-stream section](#the-instruction-stream-core).
+
 ## Tier 1 — SystemVerilog testbenches (`make test`)
 
 23 testbenches under `tests/`, run through Icarus Verilog, printing a
@@ -62,34 +67,6 @@ the opcodes, flag bits and status bytes exist in four languages —
 `tests/verilator/tb_tpu_top.cpp` and the firmware's `tpu_tile.c` — and
 nothing generates one from another. The check fails on any disagreement,
 and if the Python copy is missing anything the RTL package defines.
-
-## The instruction-stream core (`make isa-test`)
-
-The DE1-SoC instruction-stream core has its own reference: `host/tpu/isa_model.py`
-executes a program in order with the spec's exact arithmetic. `make isa-test`
-first checks the model against independent references (`tpu.golden`, and
-MNIST layer 1 against `hw_layer` at 32 bits), then runs the RTL through its
-real bridge registers (`tests/verilator/tb_isa.cpp`) at N = 8 and N = 4 and
-requires every output word to match the model: every decode error, 40 random
-single layers including K-sums split across `MATMUL`s, MNIST layer 1, the
-requantizer over every int16 input plus edges and random int32 for three
-quant tables, the two-layer MNIST program chained through the UB, and the
-status and performance registers.
-
-The engines run concurrently, so ordering is the program's job.
-`host/tpu/isa_waits.py` models what each engine reads and writes,
-`check_waits` finds cross-engine hazards that no `WAIT` orders, and
-`insert_waits` adds the minimal `WAIT`s. The RTL test generates 40 random
-legal programs (`ISA_RANDOM_PROGS` to raise it), inserts `WAIT`s, and
-requires the RTL to match the in-order model. Without the `WAIT`s nearly all
-of them diverge, which is what shows the overlap is real. The PEs carry
-simulation-only checks that a weight is never overwritten before its flip
-and never flipped without one. A rate test requires `T` extra tiles to cost
-exactly `T * max(m, N)` cycles with no extra `PERF_MM_WSTALL`, at m = 1,
-m = N and m > N.
-
-All of this is simulation. The core has not been built for, or run on, any
-board.
 
 ## Tier 3 — Verilator full-chip simulation (`make verilate-test`)
 
@@ -174,6 +151,46 @@ Not a regression gate, but the check that the whole stack — training,
 quantization, tiling, wire protocol, silicon — produces the right answer.
 Expected: 19/20 on the sampled set, matching the local numpy model exactly.
 
+## The instruction-stream core
+
+Its reference is `host/tpu/isa_model.py`, which executes a program in order
+with the core's exact arithmetic. Every check below requires the RTL or the
+board to match it **word for word**. Each tier sees a different thing:
+
+| Tier | Command | What it proves |
+|---|---|---|
+| model | `make isa-model-test` | The model matches independent references: `tpu.golden` on random layers, `hw_layer` at 32 bits on MNIST layer 1, the requantizer against host rounding (one tie, at v=10,450), and `isa_waits` on the compiled MNIST program (hazard-free, every `WAIT` needed) |
+| RTL, sim | `make isa-test` (model + RTL at N = 8 and N = 4) | The RTL through its real bridge registers (`tests/verilator/tb_isa.cpp`): every decode error; 40 random single layers including split K; MNIST layer 1 and the two-layer program chained through the UB; the requantizer over every int16, the edges and random int32 for three quant tables; 40 random concurrent programs; and the cycle-exact tile rate |
+| netlist, no host | `make isa-selftest-sim`, then the board | `boards/de1soc/fpga/selftest`: the same tests as a ROM register transcript replayed into the bridge **on the FPGA**, plus on-chip tile-rate checks. The replay is cycle-exact, so its perf counters must equal Verilator's |
+| netlist, from the ARM | `tests/isa/test_isa_rtl.py serial:<console port>` | The whole RTL suite against the board, through `isa_mmio` over the HPS console. Over this link the cycle-rate check is limited to beats and WSTALL; the rate itself is covered by the self-test |
+| application | `mnist_tpu bench` on the board | 10,000 MNIST images end to end, compared with the reference model's prediction, the host numpy path's prediction, and the host's quantized input (preprocessing) |
+
+Notes:
+- **Concurrency.** The engines run concurrently, so ordering is the program's
+  job. `host/tpu/isa_waits.py` models what each engine reads and writes;
+  `check_waits` finds hazards no `WAIT` orders, and `insert_waits` adds the
+  minimal `WAIT`s. The random-program test inserts `WAIT`s into legal random
+  programs and requires the in-order result. Run without their `WAIT`s, 39 of
+  40 programs diverge, which shows the overlap is real and the `WAIT`s carry
+  the weight. `ISA_RANDOM_PROGS` raises the count (400 per N has been run).
+- **PE invariants.** Simulation-only `$fatal` checks in `isa_pe.sv` assert
+  that a weight is never overwritten before its flip and never flipped
+  without one.
+- **Tile rate.** `T` extra tiles must cost exactly `T · max(m, N)` cycles
+  with no extra `PERF_MM_WSTALL`, at m = 1, m = N and m > N. This is checked
+  in Verilator, where the clock only advances on register accesses, and on
+  chip by the self-test ROM.
+- **Self-test sanity.** An injected wrong expected word fails with the right
+  mark and count, and an empty ROM fails instead of hanging.
+- **MNIST without the board.** `make -C software/mnist/de1soc sim-bench` runs
+  the ARM program against Verilator (`-DSIM`). The same C is verified before
+  it goes on the card.
+
+**Board results (2026-10-01)**: self-test PASS with every perf capture equal
+to Verilator; every functional test in `test_isa_rtl.py` passes; MNIST
+10,000/10,000 equal to the reference model, with preprocessing
+byte-identical on all 10,000. See [`de1soc.md`](de1soc.md).
+
 ## Before trusting a change
 
 | Changed | Run |
@@ -182,7 +199,9 @@ Expected: 19/20 on the sampled set, matching the local numpy model exactly.
 | Anything in the datapath or sequencer | `make test` + `make lint` + `make verilate-test` |
 | Synthesis flags, primitives, or memory inference | all of the above **+ `make hw-test`** |
 | Wire protocol | all of the above + `software/mnist/infer.py` |
-| The instruction-stream core (`rtl/isa/`, `host/tpu/isa*.py`) | `make isa-test` + `make lint` |
+| The instruction-stream core (`rtl/isa/`, `host/tpu/isa*.py`) | `make isa-test` + `make lint` + `make isa-selftest-sim` |
+| Its synthesis, memory inference, or anything timing-related | all of the above + a board build: the self-test **PASS**, then `test_isa_rtl.py serial:<port>` |
+| Software on the DE1-SoC's ARM (`software/mnist/de1soc`, `boards/de1soc/sw`) | `make -C software/mnist/de1soc sim-bench`, then `mnist_tpu bench` on the board |
 | Firmware | `make hw-test` (there is no firmware sim tier) |
 
 This project deliberately uses **no hosted CI** — the gates are local `make`
