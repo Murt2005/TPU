@@ -16,6 +16,11 @@ LEDs and HEX displays.
 
 KEY0 reruns it. A full run takes about 0.9 ms at 50 MHz.
 
+Quartus runs in an x86 Ubuntu machine under OrbStack (Rosetta). Its parallel
+synthesis helpers deadlock there, so the `.qsf` sets `NUM_PARALLEL_PROCESSORS 1`.
+The USB-Blaster II needs `blaster_6810.hex` from the Quartus install
+(`quartus/linux64/`); pass it to openFPGALoader with `--probe-firmware`.
+
 ```sh
 # on the Mac
 make rom                                 # writes isa_selftest.hex (+ .marks)
@@ -23,7 +28,7 @@ make -C ../../../.. isa-selftest-sim     # the same ROM through Verilator: must 
 # in the x86 Linux VM, same path (OrbStack mounts /Users)
 make                                     # quartus_sh --flow compile + .rbf
 # on the Mac
-openFPGALoader -c usb-blasterII --index-chain 1 output_files/tpu_isa_selftest.rbf
+openFPGALoader -b de1Soc --probe-firmware <path>/blaster_6810.hex output_files/tpu_isa_selftest.rbf
 ```
 
 `--index-chain 1`: the DE1-SoC's JTAG chain has the HPS's debug port first and

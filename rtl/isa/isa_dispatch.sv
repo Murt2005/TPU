@@ -63,7 +63,10 @@ module isa_dispatch #(
     end
 
     // fields (counts stored minus one)
-    logic [63:0] f_n_rows, f_n_ub, f_n_par, f_m, f_kt, f_nb, f_am, f_anb;
+    logic [63:0] f_n_rows, f_n_ub, f_n_par, f_anb;
+    logic [8:0]  f_m, f_am;
+    logic [12:0] f_kt;
+    logic [10:0] f_nb;
     logic [63:0] f_wmem_row, f_ub_addr, f_par, f_acc_addr, f_mm_ub, f_act_acc, f_act_ub, f_act_par;
     logic [1:0]  f_func, f_dst;
     logic        f_rq, f_bias, f_wsrc;
@@ -75,9 +78,9 @@ module isa_dispatch #(
         f_ub_addr  = 64'(insn[45:32]);
         f_par      = 64'(insn[39:32]);
         f_wsrc     = insn[56];
-        f_m        = 64'(insn[55:48]) + 1;
-        f_kt       = 64'(insn[47:36]) + 1;
-        f_nb       = 64'(insn[35:26]) + 1;
+        f_m        = 9'(insn[55:48]) + 9'd1;
+        f_kt       = 13'(insn[47:36]) + 13'd1;
+        f_nb       = 11'(insn[35:26]) + 11'd1;
         f_acc_addr = 64'(insn[25:16]);
         f_mm_ub    = 64'(insn[15:2]);
         f_func     = insn[57:56];
@@ -85,11 +88,20 @@ module isa_dispatch #(
         f_dst      = insn[54:53];
         f_bias     = insn[52];
         f_anb      = 64'(insn[51:42]) + 1;
-        f_am       = 64'(insn[41:34]) + 1;
+        f_am       = 9'(insn[41:34]) + 9'd1;
         f_act_acc  = 64'(insn[33:24]);
         f_act_ub   = 64'(insn[23:10]);
         f_act_par  = 64'(insn[9:2]);
     end
+
+    // products at their real widths: 64-bit operands made Quartus build 64x64 DSP multipliers
+    logic [23:0] p_nb_kt;
+    logic [20:0] p_nb_m, p_anb_am;
+    logic [21:0] p_kt_m;
+    assign p_nb_kt  = 24'(f_nb) * 24'(f_kt);
+    assign p_nb_m   = 21'(f_nb) * 21'(f_m);
+    assign p_kt_m   = 22'(f_kt) * 22'(f_m);
+    assign p_anb_am = 21'(f_anb[10:0]) * 21'(f_am);
 
     logic [7:0] code;
     always_comb begin
@@ -112,12 +124,12 @@ module isa_dispatch #(
             OP_RD_UB:    if (f_ub_addr + f_n_ub > 64'(UB_DEPTH)) code = ERR_RANGE;
             OP_WR_BIAS,
             OP_WR_QUANT: if (f_par + f_n_par > 64'(PARAM_DEPTH)) code = ERR_RANGE;
-            OP_MATMUL:   if (f_acc_addr + f_nb * f_m > 64'(ACC_DEPTH)
-                             || f_mm_ub + f_kt * f_m > 64'(UB_DEPTH)
-                             || (64'(wbase) + f_nb * f_kt) * N > 64'(WMEM_ROWS)) code = ERR_RANGE;
-            OP_ACTIVATE: if (f_act_acc + f_anb * f_am > 64'(ACC_DEPTH)
+            OP_MATMUL:   if (f_acc_addr + 64'(p_nb_m) > 64'(ACC_DEPTH)
+                             || f_mm_ub + 64'(p_kt_m) > 64'(UB_DEPTH)
+                             || (64'(wbase) + 64'(p_nb_kt)) * N > 64'(WMEM_ROWS)) code = ERR_RANGE;
+            OP_ACTIVATE: if (f_act_acc + 64'(p_anb_am) > 64'(ACC_DEPTH)
                              || ((f_bias || f_rq) && f_act_par + f_anb > 64'(PARAM_DEPTH))
-                             || (f_dst == DST_UB && f_act_ub + f_anb * f_am > 64'(UB_DEPTH)))
+                             || (f_dst == DST_UB && f_act_ub + 64'(p_anb_am) > 64'(UB_DEPTH)))
                              code = ERR_RANGE;
             default: ;
         endcase
@@ -178,7 +190,7 @@ module isa_dispatch #(
                 if (op == OP_SET_WBASE)
                     wbase <= insn[31:0];
                 else if (op == OP_MATMUL)
-                    wbase <= wbase + 32'(f_nb * f_kt);
+                    wbase <= wbase + 32'(p_nb_kt);
                 if (op == OP_SIGNAL) begin
                     fence     <= 1'b1;
                     fence_tag <= insn[15:0];

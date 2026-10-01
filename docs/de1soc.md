@@ -39,8 +39,8 @@ of 2 ≥ `max(ARRAY_ROWS, M_TILE)` for anything past 4.
 | `boards/de1soc/fpga/` Quartus project | Scaffolded: `Makefile`, `.sdc`, `.qsf` skeleton |
 | Qsys/GHRD integration | Not done |
 | Cloud build infrastructure | Planned, not built (§4) |
-| FPGA-only self-test (`boards/de1soc/fpga/selftest/`) | `tpu_isa_top` checked by a ROM transcript of the ISA tests, results on LEDs/HEX, no HPS needed. Passes in Verilator sim; standalone Quartus project written, not yet compiled |
-| On-board bring-up | Not started |
+| FPGA-only self-test (`boards/de1soc/fpga/selftest/`) | `tpu_isa_top` (N = 8) checked by a ROM transcript of the ISA tests, results on LEDs/HEX, no HPS needed. **PASS on the board** (2026-09-30): built with Quartus Prime Lite 23.1std.1 in an OrbStack x86 VM, closes timing at 50 MHz (Fmax 57.9 MHz slow corner), 21% ALMs, 351/397 RAM blocks, 78/87 DSPs; programmed over JTAG with `openFPGALoader -b de1Soc` |
+| On-board bring-up (HPS path) | Not started: needs an SD card with Linux |
 
 ## 3. Build and deploy (from `boards/de1soc/fpga/README.md`)
 

@@ -227,7 +227,7 @@ module isa_mm #(
                         k          <= '0;
                         have_acts  <= 1'b0;
                         have_wts   <= 1'b1;
-                        wt_left    <= (32'(insn[35:26]) + 1) * (32'(insn[47:36]) + 1);
+                        wt_left    <= 32'(24'(11'(insn[35:26]) + 11'd1) * 24'(13'(insn[47:36]) + 13'd1));
                         pos        <= '0;
                         state      <= S_RUN;
                     end else begin

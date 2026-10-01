@@ -53,7 +53,7 @@ module isa_act #(
     logic [5:0] op;
     assign op = insn[63:58];
 
-    typedef enum logic [2:0] {S_IDLE, S_READ, S_LATCH, S_EMIT, S_WRITE} state_t;
+    typedef enum logic [2:0] {S_IDLE, S_READ, S_LATCH, S_MUL, S_RND, S_EMIT, S_WRITE} state_t;
     state_t state;
 
     logic        is_rd_ub;
@@ -88,26 +88,37 @@ module isa_act #(
     assign q_pop   = q_valid && state == S_IDLE && (op != OP_WAIT || wait_ok);
     assign idle    = state == S_IDLE && !q_valid;
 
-    // saturate to 27 bits, multiply by M0, add half, arithmetic shift, clamp to int8
-    function automatic logic [7:0] requant(input logic signed [31:0] v, input logic [29:0] q);
-        logic signed [63:0] v27, prod, rounded;
-        logic        [5:0]  shift;
-        shift = q[29:24];
-        v27 = (v > 32'sd67108863) ? 64'sd67108863 : (v < -32'sd67108864) ? -64'sd67108864 : 64'(v);
-        prod = v27 * $signed({40'd0, q[23:0]});
+    // requantize in three registered stages (bias+ReLU, multiply, round): in one
+    // cycle the path missed 50 MHz on the Cyclone V by 4 ns.
+    // saturate to 27 bits, multiply by M0 (27x25, one DSP each)
+    function automatic logic signed [51:0] rq_mul(input logic signed [31:0] v, input logic [23:0] m0);
+        logic signed [26:0] v27;
+        v27 = (v > 32'sd67108863) ? 27'sd67108863 : (v < -32'sd67108864) ? -27'sd67108864 : v[26:0];
+        return v27 * $signed({1'b0, m0});
+    endfunction
+
+    // add half, arithmetic shift, clamp to int8
+    function automatic logic [7:0] rq_round(input logic signed [51:0] p, input logic [5:0] shift);
+        logic signed [63:0] prod, rounded;
+        prod = 64'(p);
         rounded = (shift == 6'd0) ? prod : (prod + (64'sd1 <<< (shift - 6'd1))) >>> shift;
         return (rounded > 64'sd127) ? 8'sd127 : (rounded < -64'sd128) ? 8'h80 : rounded[7:0];
     endfunction
 
     logic [N*32-1:0] act_row;
-    logic [N*8-1:0]  q_row;
     always_comb
         for (int c = 0; c < N; c++) begin
             logic signed [31:0] v;
             v = acc_rdata[32*c +: 32] + (use_bias ? bias_rdata[32*c +: 32] : 32'd0);
             act_row[32*c +: 32] = (relu && v < 0) ? 32'd0 : v;
-            q_row[8*c +: 8] = requant(act_row[32*c +: 32], quant_rdata[32*c +: 30]);
         end
+
+    // quant_rdata holds still across S_LATCH..S_RND: its address (par) only moves per block
+    logic signed [N-1:0][51:0] prod_row;
+    logic [N*8-1:0]            q_row;
+    always_comb
+        for (int c = 0; c < N; c++)
+            q_row[8*c +: 8] = rq_round(prod_row[c], quant_rdata[32*c+24 +: 6]);
 
     always_ff @(posedge clk) begin
         if (reset) begin
@@ -124,6 +135,7 @@ module isa_act #(
             par        <= '0;
             w          <= '0;
             row        <= '0;
+            prod_row   <= '0;
             rq         <= 1'b0;
             to_ub      <= 1'b0;
             ub_out     <= '0;
@@ -159,8 +171,17 @@ module isa_act #(
                 end
                 S_READ: if (is_rd_ub ? !ub_busy : !acc_busy) state <= S_LATCH;
                 S_LATCH: begin                         // read data valid this cycle
-                    row   <= is_rd_ub ? (N*32)'(ub_rdata) : rq ? (N*32)'(q_row) : act_row;
+                    row   <= is_rd_ub ? (N*32)'(ub_rdata) : act_row;
                     w     <= '0;
+                    state <= rq ? S_MUL : to_ub ? S_WRITE : S_EMIT;
+                end
+                S_MUL: begin
+                    for (int c = 0; c < N; c++)
+                        prod_row[c] <= rq_mul(row[32*c +: 32], quant_rdata[32*c +: 24]);
+                    state <= S_RND;
+                end
+                S_RND: begin
+                    row   <= (N*32)'(q_row);
                     state <= to_ub ? S_WRITE : S_EMIT;
                 end
                 S_WRITE: begin                         // one UB entry per row

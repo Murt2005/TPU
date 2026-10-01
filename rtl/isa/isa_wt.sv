@@ -46,6 +46,9 @@ module isa_wt #(
 
     // a slot MM is releasing this cycle refills at once: its last row was read
     // into MM's weight register this cycle, so N-cycle windows never starve
+    logic [23:0] mm_tiles;
+    assign mm_tiles = 24'(11'(insn[35:26]) + 11'd1) * 24'(13'(insn[47:36]) + 13'd1);
+
     logic issuing;
     assign issuing = tiles_left != 0 && (!full[wr_idx] || (slot_take && rd_idx == wr_idx));
 
@@ -83,8 +86,8 @@ module isa_wt #(
                     end
                     OP_MATMUL: begin
                         tile       <= wbase;
-                        tiles_left <= (32'(insn[35:26]) + 1) * (32'(insn[47:36]) + 1);
-                        wbase      <= wbase + (32'(insn[35:26]) + 1) * (32'(insn[47:36]) + 1);
+                        tiles_left <= 32'(mm_tiles);
+                        wbase      <= wbase + 32'(mm_tiles);
                         row        <= '0;
                     end
                     default: done_pulse <= 1'b1;   // WAIT
