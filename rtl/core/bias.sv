@@ -1,25 +1,6 @@
 `timescale 1ns / 1ps
 
-// Bias-add unit for a NUM_COLS-wide systolic array.
-//
-// Sits directly downstream of the accumulator: the accumulator produces one
-// fully-reduced row at a time (out_row / out_row_valid), with no notion of
-// bias or activation. This module's only job is to add a per-output-column
-// bias term to that row, one cycle of registered latency, matching the
-// latency style of every other module in this pipeline (pe, accumulator,
-// systolic_data_setup's per-row delay, etc).
-//
-// This module has no awareness of where the bias values come from (a ROM,
-// a register file, a DMA'd buffer) -- it just takes in_bias[NUM_COLS] as a
-// flat array of stationary bias values and adds the matching column's bias
-// to the matching column's accumulator output. A future bias_rom or
-// weight_loader-style module is responsible for keeping in_bias valid and
-// stable; this module samples it combinationally on the same cycle in_row
-// is valid, so in_bias must already reflect the bias for the row currently
-// being presented.
-//
-// This module also has no awareness of activation functions (ReLU, etc) --
-// that is left to a downstream unit (e.g. bias_relu wraps bias + relu).
+// Bias-add unit
 module bias #(
     parameter int NUM_COLS   = 2,
     parameter int PSUM_WIDTH = 16

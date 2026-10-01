@@ -1,40 +1,6 @@
 `timescale 1ns / 1ps
 
-// mmu
-// ----
-// Weight-stationary systolic array: an ARRAY_ROWS x NUM_COLS grid of `pe`
-// instances, built with a generate block so the array size is a parameter
-// bump
-//
-// Data flow through the grid:
-//   - Activations enter on the LEFT edge (in_row[r]) and shift rightward
-//     one PE per cycle, row r independent of the others.
-//   - Weights enter on the TOP edge (in_col[c]) and shift downward one PE
-//     per cycle during loading_phase, column c independent of the others.
-//     capture_weight_col[c] is broadcast to every PE in column c -- exactly
-//     as the original design broadcast capture_weight_col_0 to both pe00
-//     and pe10 (the weight-loading contract in weight_fifo.sv depends on
-//     this: bottom-row weights must be presented first so they're already
-//     shifted into place by the time the top-row weights arrive).
-//   - Partial sums enter the TOP edge at zero/invalid and accumulate
-//     downward one PE per cycle; out_partial_sum[c]/out_partial_sum_valid[c]
-//     is the BOTTOM edge of column c, i.e. the finished dot product.
-//
-// Boundary conditions:
-//   - the top edge's incoming partial sum is '0/invalid for every column
-//   - the last column's out_activation / last row's out_weight are left
-//     unread
-//
-// Each PE's in_*/out_* pair is split into its own array (act_in/act_out,
-// weight_in/weight_out, psum_in/psum_out) rather than one shared network
-// array indexed 0..N, because Icarus Verilog rejects an array that is
-// partly driven by generate-instance port connections and partly by a
-// procedural/continuous boundary assignment elsewhere, even at disjoint
-// indices, it treats the whole array as one multiply-driven object. Keeping
-// "written by the generate block" and "written by boundary logic" as
-// physically separate arrays sidesteps that; act_in[r][c]/weight_in[r][c]/
-// psum_in[r][c] are wired from either the boundary input or the previous
-// PE's *_out via the assigns below.
+// Matrix Multiply Unit (MMU)
 module mmu #(
     parameter int ARRAY_ROWS = 2,
     parameter int NUM_COLS   = 2,
@@ -99,18 +65,10 @@ module mmu #(
             assign out_partial_sum_valid[c] = psum_out_valid[ARRAY_ROWS-1][c];
         end
 
-        // pe_pair exposes exactly two pe.sv port sets (_t = row r, _b =
-        // row r+1), so the pair path wires into the very same net arrays
-        // as two stacked pe instances — including the mid-pair hop where
-        // the top half's registered psum leaves on psum_out[r][c] and
-        // re-enters as psum_in[r+1][c] -> the DSP's D input.
         if (USE_MAC16_PAIR != 0) begin : gen_pair_rows
             if (ARRAY_ROWS % 2 != 0) begin : gen_odd_rows_check
                 $error("USE_MAC16_PAIR requires even ARRAY_ROWS (got %0d)", ARRAY_ROWS);
             end
-            // SB_MAC16's accumulator/output register is a hard 16 bits, so the
-            // DSP-pair path cannot carry a wider partial sum. A wide build must
-            // use the generic pe.sv path (USE_MAC16_PAIR=0).
             if (PSUM_WIDTH != 16) begin : gen_pair_width_check
                 $error("USE_MAC16_PAIR requires PSUM_WIDTH=16 (got %0d)", PSUM_WIDTH);
             end

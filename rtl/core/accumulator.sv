@@ -1,59 +1,10 @@
 `timescale 1ns / 1ps
 
-// Accumulator for the NUM_COLS-wide weight-stationary MMU.
-//
-// Instantiates one fifo (rtl/core/fifo.sv) per MMU output column. Each column's
-// out_partial_sum is written into its FIFO on that column's valid
-// pulse. This is required because the systolic array's output columns
-// are skewed in time relative to each other (column j finishes j cycles
-// after column 0 for the same logical row), so there is no shared
-// "row valid" signal coming out of the MMU itself.
-//
-// Latency: 2 cycles (FIFO write, then the registered pop into out_row).
-//
-// The accumulator reassembles rows by popping one entry from every column
-// FIFO together, the moment all column FIFOs are simultaneously non-empty.
-// This streams a completed row to the bias unit as soon as it exists,
-// rather than waiting for the whole output matrix -- minimizing latency
-// and keeping FIFO depth at O(rows in flight) instead of O(N^2).
-//
-// This module does not know about bias or activation, it only produces
-// a raw accumulated row and a pulse saying that row is valid.
-//
-// Tile accumulation (K-dim tiling)
-// ---------------------------------
-// A real matmul with K larger than the systolic array's row (K) depth has to
-// be split into multiple weight-stationary passes through the array, one per
-// K-slice, with the partial sums from every pass summed together before
-// bias/activation ever see them -- exactly what the TPUv1 paper's
-// accumulator RAM does. This module holds that running sum itself, in a
-// persistent psum_reg[ROWS_PER_PASS][NUM_COLS] register array that survives
-// across separate invocations (separate RUN commands from the sequencer):
-//
-//   tile_first=1: overwrite psum_reg with this pass's reassembled row
-//                 (starts a new K-reduction)
-//   tile_first=0: psum_reg += this pass's reassembled row (continue
-//                 accumulating an existing K-reduction)
-//   tile_last=1:  additionally forward the (now-final) psum_reg value to
-//                 out_row/out_row_valid, so bias/activation execute
-//   tile_last=0:  psum_reg is updated but nothing is forwarded downstream --
-//                 bias/activation never fire for a non-final tile pass
-//
-// tile_first/tile_last must be held stable by the caller for the whole pass
-// (all ROWS_PER_PASS row-completions of that invocation). A single-shot 2x2
-// matmul (this module's only use before tiling existed) is just
-// tile_first=1, tile_last=1 every time, which reduces to the original
-// always-forward behavior.
-//
-// pass_done pulses once per pass (every ROWS_PER_PASS row-completions),
-// regardless of tile_first/tile_last, so a caller has a completion signal
-// to act on even when out_row_valid never fires (mid-K-reduction passes).
+// Accumulates the partial sums outputted from the mmu
 module accumulator #(
     parameter int NUM_COLS   = 2,
     parameter int PSUM_WIDTH = 16,
     parameter int FIFO_DEPTH = 4,
-    // Output rows produced per pass = activation rows streamed per RUN = M_TILE
-    // (NOT the systolic array's row/K depth). tpu_top drives this with M_TILE.
     parameter int ROWS_PER_PASS = 2
 ) (
     input  logic clk,
@@ -70,8 +21,8 @@ module accumulator #(
 
     output logic                         pass_done,
 
-    // Backpressure-free for now (consumer must accept the row when
-    // out_row_valid is high); status flags exposed for future use.
+    // Backpressure-free for now... consumer must accept the row when
+    // out_row_valid is high); status flags are exposed for future use
     output logic any_fifo_full
 );
 

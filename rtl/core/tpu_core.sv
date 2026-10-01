@@ -1,48 +1,18 @@
 `timescale 1ns / 1ps
 
-// tpu_core — board-neutral TPU core: sequencer + full datapath.
-//
-// Everything between the host byte-stream and the compute pipeline, with NO
-// physical PHY and NO board pins. A board-specific top (boards/pico2-ice/top/tpu_top.sv for the
-// pico2-ice serial link, boards/de1soc/top/tpu_top_hps.sv for the DE1-SoC HPS bridge) pairs
-// this with a PHY that turns some transport into the byte-stream interface
-// below, plus a power-on-reset generator that drives `reset`.
-//
-// Byte-stream interface (identical to what uart_rx/uart_tx, spi_slave, and
-// hps_bridge expose):
-//   rx_data/rx_valid/rx_error : one host->FPGA byte (+ framing-error flag)
-//   tx_data/tx_valid          : one FPGA->host byte (tx_valid pulsed by the seq)
-//   tx_busy                   : PHY busy sending the current tx byte
-//
-// Wires together:
-//   tpu_sequencer    (command decoder + pipeline orchestrator)
-//   unified_buffer   (activation scratchpad)
-//   weight_fifo      (double-buffered weight FIFO)
-//   systolic_data_setup (skew / stagger activations)
-//   mmu              (ARRAY_ROWS x NUM_COLS systolic array)
-//   accumulator      (column-FIFO row reassembler + K-tiling running sum)
-//   bias             (per-column stationary bias add)
-//   activation       (ReLU, bypassable per RUN via the flags byte)
+// TPU Core: board-neutral sequencer + datapath
 module tpu_core #(
     parameter int WEIGHT_WIDTH = 8,
-    parameter int FIFO_DEPTH   = 4,   // must be a power of 2, >= ARRAY_ROWS
-    // Array geometry (see docs/architecture.md §5):
-    //   ARRAY_ROWS — systolic rows = K-tile depth
-    //   NUM_COLS   — systolic columns = N-tile width
-    //   M_TILE     — activation rows streamed per RUN (UB address depth)
+    parameter int FIFO_DEPTH   = 4,   // must be a power of 2 & >= ARRAY_ROWS
     parameter int ARRAY_ROWS   = 2,
     parameter int NUM_COLS     = 2,
     parameter int M_TILE       = ARRAY_ROWS,
-    // Width of the accumulate/bias/result path. Default 16 = every existing
-    // build. Widening it changes the host wire format (see tpu_sequencer.sv)
-    // and forces USE_MAC16_PAIR=0.
     parameter int PSUM_WIDTH   = 16,
     parameter int USE_MAC16_PAIR = 0
 ) (
     input  logic clk,
-    input  logic reset,          // synchronous active-high (from the board POR)
+    input  logic reset,          // synchronous active-high
 
-    // Host byte-stream interface (driven by the board top's PHY)
     input  logic [7:0] rx_data,
     input  logic       rx_valid,
     input  logic       rx_error,
@@ -51,12 +21,10 @@ module tpu_core #(
     input  logic       tx_busy
 );
 
-    // Sequencer control signals:
-    //  unified_buffer address width (must match tpu_sequencer's derived
-    //  UB_ADDR_W and unified_buffer's ADDR_WIDTH with ROWS = M_TILE)
+    //  unified_buffer address width
     localparam int UB_ADDR_W = (M_TILE > 1) ? $clog2(M_TILE) : 1;
 
-    // weight_fifo (array-port style, one lane per column)
+    // weight_fifo
     logic        [NUM_COLS-1:0]      seq_we_col;
     logic signed [NUM_COLS-1:0][7:0] seq_wd_col;
     logic              seq_swap_banks;
@@ -74,7 +42,7 @@ module tpu_core #(
     // bias
     logic signed [NUM_COLS-1:0][PSUM_WIDTH-1:0] seq_bias;
 
-    // K-tiling control (accumulator persistent-sum passes)
+    // K-tiling control
     logic seq_tile_first, seq_tile_last;
     logic seq_act_bypass;
     logic accum_pass_done;
@@ -83,10 +51,10 @@ module tpu_core #(
     logic signed [NUM_COLS-1:0][PSUM_WIDTH-1:0] final_row_out;
     logic               final_row_valid;
 
-    // soft-reset from sequencer (CMD_RESET)
+    // soft-reset from sequencer
     logic seq_tpu_reset;
 
-    // Combined reset for datapath modules: global reset OR soft reset
+    // combined reset for datapath modules
     logic dp_reset;
     assign dp_reset = reset | seq_tpu_reset;
 
@@ -99,37 +67,35 @@ module tpu_core #(
     ) u_seq (
         .clk              (clk),
         .reset            (reset),
-        // RX
         .rx_data          (rx_data),
         .rx_valid         (rx_valid),
         .rx_error         (rx_error),
-        // TX
+
         .tx_data          (tx_data),
         .tx_valid         (tx_valid),
         .tx_busy          (tx_busy),
-        // weight_fifo
+
         .write_enable_col   (seq_we_col),
         .write_data_col     (seq_wd_col),
         .swap_banks         (seq_swap_banks),
         .loading_phase      (seq_loading_phase),
-        // unified_buffer host-write
+
         .host_write_addr    (seq_hw_addr),
         .host_write_data    (seq_hw_data),
         .host_write_valid   (seq_hw_valid),
-        // unified_buffer UB-read
         .ub_read_addr       (seq_ub_addr),
         .ub_read_en         (seq_ub_en),
-        // bias
+
         .out_bias           (seq_bias),
-        // K-tiling control
+
         .tile_first         (seq_tile_first),
         .tile_last          (seq_tile_last),
         .act_bypass         (seq_act_bypass),
         .accum_pass_done    (accum_pass_done),
-        // pipeline result
+
         .final_row_out      (final_row_out),
         .final_row_valid    (final_row_valid),
-        // soft reset
+
         .tpu_reset          (seq_tpu_reset),
         .busy               ()
     );
@@ -158,14 +124,10 @@ module tpu_core #(
     logic signed [NUM_COLS-1:0][PSUM_WIDTH-1:0] biased_row;
     logic               biased_valid;
 
-    // Activation write port tied off (single-layer mode)
+    // Activation write port is tied off for now
     logic signed [ARRAY_ROWS-1:0][7:0] ub_act_dummy;
     assign ub_act_dummy = '0;
 
-    // Module instantiations
-    //  UB geometry: ROWS = M_TILE addresses, each holding one ARRAY_ROWS-wide
-    //  activation row (COLS must equal ARRAY_ROWS — its read port feeds
-    //  systolic_data_setup's ARRAY_ROWS-wide input).
     unified_buffer #(.ROWS(M_TILE), .COLS(ARRAY_ROWS), .DATA_WIDTH(8)) u_ub (
         .clk                (clk),
         .reset              (dp_reset),
@@ -225,8 +187,6 @@ module tpu_core #(
         .out_partial_sum_valid (accum_in_valid)
     );
 
-    // accumulator's ROWS_PER_PASS counts output rows per pass — that is M_TILE
-    // (one output row per streamed activation row), not the systolic row count.
     accumulator #(.NUM_COLS(NUM_COLS), .PSUM_WIDTH(PSUM_WIDTH), .FIFO_DEPTH(FIFO_DEPTH), .ROWS_PER_PASS(M_TILE)) u_accum (
         .clk                  (clk),
         .reset                (dp_reset),

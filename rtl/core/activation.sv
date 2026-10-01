@@ -1,37 +1,11 @@
 `timescale 1ns / 1ps
 
-// ReLU activation unit.
+// ReLU activation unit
 //
-// Final pipeline stage in the TPU datapath, sitting immediately downstream
-// of the bias unit.  The bias unit produces one fully-bias-corrected row per
-// logical output row of the matrix multiplication; this module applies the
 // Rectified Linear Unit (ReLU) function element-wise:
 //
 //   out[c] = max(0, in[c])
 //
-// This matches the TPUv1 architecture, where ReLU is the only supported
-// non-linearity and is fused into the same pipeline stage as the bias add
-// (here split into two composable modules for clarity and testability).
-//
-// `bypass` makes the clamp optional: when high the row passes through
-// unchanged, still with the same one cycle of registered latency, so the
-// pipeline timing the sequencer replays is identical either way. A network
-// whose layers are not all ReLU -- anything with a linear output projection,
-// for instance -- needs this; the host selects it per RUN via the command
-// frame's flags byte (flags[2], see rtl/core/tpu_sequencer.sv).
-//
-// Interface contract (identical to bias.sv):
-//   - One cycle of registered latency: out_row_valid fires the cycle AFTER
-//     in_row_valid is sampled.
-//   - Exactly one out_row_valid pulse per in_row_valid pulse; no buffering.
-//   - Reset forces out_row_valid low and clears out_row to zero.
-//   - No stall / backpressure: consumer must accept the row the cycle it
-//     is valid.
-//
-// Parameters:
-//   NUM_COLS   - number of output columns (must match bias / accumulator).
-//   PSUM_WIDTH - bit-width of each element; signed arithmetic throughout.
-//                The clamp floor is always 0 regardless of PSUM_WIDTH.
 module activation #(
     parameter int NUM_COLS   = 2,
     parameter int PSUM_WIDTH = 16
@@ -39,8 +13,7 @@ module activation #(
     input  logic clk,
     input  logic reset,
 
-    // 0 = clamp negatives to zero (ReLU), 1 = pass the row through unchanged.
-    // Held stable by the sequencer for the whole pipeline pass.
+    // make the clamp optional for networks that have layers that aren't ReLU
     input  logic bypass,
 
     input  logic signed [NUM_COLS-1:0][PSUM_WIDTH-1:0] in_row,
@@ -60,11 +33,6 @@ module activation #(
             out_row_valid <= in_row_valid;
             if (in_row_valid) begin
                 for (int c = 0; c < NUM_COLS; c++) begin
-                    // ReLU: negative (sign bit set) clamps to 0, else pass through.
-                    // Written as a signed comparison with an explicit $signed()
-                    // cast -- Icarus Verilog 13.0 drops the signed attribute on a
-                    // word select out of a packed 2D array, so a bare
-                    // `in_row[c] < 0` always reads as unsigned (never negative).
                     out_row[c] <= (!bypass && $signed(in_row[c]) < 0) ? '0 : in_row[c];
                 end
             end

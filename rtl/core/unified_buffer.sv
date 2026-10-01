@@ -1,18 +1,6 @@
 `timescale 1ns / 1ps
 
-// Double-banked on-chip activation store.
-//
-// Two banks of mem[ROWS][COLS] (int8). One bank is the "active" bank that
-// systolic_data_setup reads from; the other is the "shadow" bank that the
-// activation unit writes into. The FSM pulses bank_swap once per layer
-// boundary to atomically exchange the two roles.
-//
-// Read latencies
-//   ub_read   (active bank → SDS)      : 2 cycles after ub_read_en   (models M10K)
-//   host_read (shadow bank → ARM)       : 1 cycle  after host_read_en
-//
-// The act_write_ptr is a self-incrementing row counter; pulse
-// act_write_addr_reset to zero it at the start of each layer.
+// Unified Buffer: double-banked on-chip activation store
 module unified_buffer #(
     parameter int ROWS       = 2,
     parameter int COLS       = 2,
@@ -43,40 +31,21 @@ module unified_buffer #(
     input  logic                          bank_swap
 );
 
-    // Two banks as two separate 1W1R memories with a flat word per row, so
-    // yosys memory inference can map each one onto block RAM instead of a
-    // fabric register file (the original mem[2][ROWS][COLS] had two write
-    // processes into one array -- unmappable, so it burned ~667 LUT4 +
-    // ~329 DFF at the 4x4/M_TILE=4 shape). At any instant each bank has
-    // exactly one writer and one reader: the ACTIVE bank (bank_sel) is
-    // host-written / ub-read, the SHADOW bank (~bank_sel) is act-written /
-    // host-read, and bank_swap only exchanges the roles between phases.
     localparam int WORD_W = COLS * DATA_WIDTH;
 
-    // ram_style: the buffer is far smaller than one 4Kbit block, so yosys's
-    // efficiency heuristic would otherwise keep it in fabric FFs -- but the
-    // LCs are the scarce resource here (4x4/M_TILE=4 is at the packing
-    // limit) and 29 of the 30 BRAMs are idle. `ram_style` is the yosys/iCE40
-    // spelling; `ramstyle="M10K"` is the Quartus/Cyclone V spelling for the
-    // DE1-SoC build -- each toolchain honors the attribute it recognizes and
-    // ignores the other, so both force BRAM inference here.
     (* ram_style = "block", ramstyle = "M10K" *) logic [WORD_W-1:0] mem0 [ROWS];
     (* ram_style = "block", ramstyle = "M10K" *) logic [WORD_W-1:0] mem1 [ROWS];
 
-    // bank_sel = index of the active bank (SDS reads from it; host writes before inference)
-    // ~bank_sel = shadow bank (activation writes to it; host reads after inference)
     logic bank_sel;
     wire  shadow_sel = bank_sel ^ 1'b1;
 
     logic [ADDR_WIDTH-1:0] act_write_ptr;
 
-    // --- Bank select ---
     always_ff @(posedge clk) begin
         if (reset)          bank_sel <= 1'b0;
         else if (bank_swap) bank_sel <= shadow_sel;
     end
 
-    // --- Activation write pointer ---
     always_ff @(posedge clk) begin
         if (reset || act_write_addr_reset)
             act_write_ptr <= '0;
@@ -84,7 +53,6 @@ module unified_buffer #(
             act_write_ptr <= act_write_ptr + 1'b1;
     end
 
-    // --- Write ports: host -> active bank, activation -> shadow bank ---
     wire                  wen0   = (bank_sel == 1'b0) ? host_write_valid : act_write_valid;
     wire [ADDR_WIDTH-1:0] waddr0 = (bank_sel == 1'b0) ? host_write_addr  : act_write_ptr;
     wire [WORD_W-1:0]     wdata0 = (bank_sel == 1'b0) ? host_write_data  : act_write_data;
@@ -95,14 +63,9 @@ module unified_buffer #(
     always_ff @(posedge clk) if (wen0) mem0[waddr0] <= wdata0;
     always_ff @(posedge clk) if (wen1) mem1[waddr1] <= wdata1;
 
-    // --- Read ports ---
-    // Port-latency contract is unchanged: host_read data lands 1 cycle
-    // after host_read_en (the banks' sync read IS that register); ub_read
-    // data lands 2 cycles after ub_read_en (stage 1 registers the address
-    // and bank snapshot in fabric, stage 2 is the banks' sync read).
     logic [ADDR_WIDTH-1:0] ub_addr_r;
     logic                  ub_en_r;
-    logic                  ub_bank_r;   // snapshot bank_sel at request time
+    logic                  ub_bank_r;
 
     always_ff @(posedge clk) begin
         if (reset) begin
@@ -114,9 +77,6 @@ module unified_buffer #(
         end
     end
 
-    // Each bank's single read port goes to the ub pipeline when an
-    // in-flight ub read targets it (its snapshot bank), else to the host
-    // port -- the two consumers own opposite banks by construction.
     wire [ADDR_WIDTH-1:0] raddr0 = (ub_en_r && ub_bank_r == 1'b0) ? ub_addr_r : host_read_addr;
     wire [ADDR_WIDTH-1:0] raddr1 = (ub_en_r && ub_bank_r == 1'b1) ? ub_addr_r : host_read_addr;
 
@@ -124,10 +84,8 @@ module unified_buffer #(
     always_ff @(posedge clk) rdata0 <= mem0[raddr0];
     always_ff @(posedge clk) rdata1 <= mem1[raddr1];
 
-    // Result-side select registers, aligned to when the banks' read
-    // registers carry each consumer's data.
-    logic ub_bank_rr;    // bank of the ub read now sitting in rdata0/1
-    logic host_bank_r;   // bank of the host read now sitting in rdata0/1
+    logic ub_bank_rr;
+    logic host_bank_r;
 
     always_ff @(posedge clk) begin
         if (reset) begin
