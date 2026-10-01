@@ -33,6 +33,7 @@ of 2 ≥ `max(ARRAY_ROWS, M_TILE)` for anything past 4.
 | Piece | Status |
 |---|---|
 | `boards/de1soc/top/tpu_top_hps.sv`, `rtl/peripherals/hps_bridge.sv` | Implemented, lint-clean, `make test-hps_bridge` passes |
+| Instruction-stream core (`rtl/isa/`, `tpu_isa_top`) | Phase 1 implemented and simulation-verified against the reference model (`make isa-test`); overlap, requantizer and DDR3 are later phases |
 | `tpu_host.py --link hps` (`MmioLink`) | Implemented; `hw_regression.py` and `software/mnist/infer.py` don't expose `--link hps` yet |
 | 8×8 scale-up shape | Sim-proven (`make verilate-test`, 64 PEs on generic-fabric multiply) — demonstrates the datapath parameterizes well past the iCE40's 8-DSP ceiling |
 | `boards/de1soc/fpga/` Quartus project | Scaffolded: `Makefile`, `.sdc`, `.qsf` skeleton |

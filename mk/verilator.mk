@@ -13,7 +13,9 @@ lint: $(SB_MAC16_SIM) check-protocol
 		$(PICO_RTL) --top-module tpu_top
 	$(VERILATOR) --lint-only -Wall --timing -sv verilator.vlt \
 		$(HPS_RTL) --top-module tpu_top_hps
-	@echo "lint: clean (UART + SPI + 4x4 MAC16-pair + HPS configs)"
+	$(VERILATOR) --lint-only -Wall --timing -sv verilator.vlt \
+		$(ISA_RTL) --top-module tpu_isa_top
+	@echo "lint: clean (UART + SPI + 4x4 MAC16-pair + HPS + instruction-stream configs)"
 
 # ROWS_COLS_MTILE_PHY[32]: spipair = SPI + pe_pair, 32 = PSUM_WIDTH=32,
 # direct = bytes injected into tpu_core, skipping the PHY (~50x fewer cycles).

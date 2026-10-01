@@ -41,13 +41,14 @@ build with an error naming it.
 
 ## Tier 2 — Static checks (`make lint`)
 
-`-Wall` across four configurations, because a config-specific latch or
+`-Wall` across five configurations, because a config-specific latch or
 width bug hides in the config you didn't build:
 
 - default (UART PHY)
 - `USE_SPI=1`
 - `USE_SPI=1 USE_MAC16_PAIR=1 ARRAY_ROWS=4 NUM_COLS=4 M_TILE=4`
 - `tpu_top_hps` (the DE1-SoC top)
+- `tpu_isa_top` (the instruction-stream core)
 
 Each top is linted with its own board's file set, so the DE1-SoC build is
 checked without `pe_pair.sv` or the `SB_MAC16` model, exactly as Quartus
@@ -61,6 +62,17 @@ the opcodes, flag bits and status bytes exist in four languages —
 `tests/verilator/tb_tpu_top.cpp` and the firmware's `tpu_tile.c` — and
 nothing generates one from another. The check fails on any disagreement,
 and if the Python copy is missing anything the RTL package defines.
+
+## The instruction-stream core (`make isa-test`)
+
+The DE1-SoC instruction-stream core has its own reference: `host/tpu/isa_model.py`
+executes a program in order with the spec's exact arithmetic. `make isa-test`
+first checks the model against independent references (`tpu.golden`, and
+MNIST layer 1 against `hw_layer` at 32 bits), then runs the RTL through its
+real bridge registers (`tests/verilator/tb_isa.cpp`) at N = 8 and N = 4 and
+requires every output word to match the model: every decode error, 40 random
+single layers including K-sums split across `MATMUL`s, MNIST layer 1, and
+the status and performance registers.
 
 ## Tier 3 — Verilator full-chip simulation (`make verilate-test`)
 
@@ -153,6 +165,7 @@ Expected: 19/20 on the sampled set, matching the local numpy model exactly.
 | Anything in the datapath or sequencer | `make test` + `make lint` + `make verilate-test` |
 | Synthesis flags, primitives, or memory inference | all of the above **+ `make hw-test`** |
 | Wire protocol | all of the above + `software/mnist/infer.py` |
+| The instruction-stream core (`rtl/isa/`, `host/tpu/isa*.py`) | `make isa-test` + `make lint` |
 | Firmware | `make hw-test` (there is no firmware sim tier) |
 
 This project deliberately uses **no hosted CI** — the gates are local `make`

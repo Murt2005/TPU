@@ -63,9 +63,11 @@ int main(int argc, char** argv) {
             put32(dut->avs_readdata);
             fflush(stdout);
         } else {
+            dut.reset();
             return 2;
         }
     }
     dut->final();
+    dut.reset();   // before Verilator's own statics go, or exit aborts on a mutex
     return 0;
 }

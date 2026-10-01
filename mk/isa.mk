@@ -1,5 +1,43 @@
-# instruction-stream core (DE1-SoC spec): reference model tests
+# instruction-stream core (DE1-SoC spec)
+ISA_RTL := rtl/isa/isa_pkg.sv \
+           $(CORE_DIR)/fifo.sv $(CORE_DIR)/pe.sv $(CORE_DIR)/mmu.sv \
+           $(CORE_DIR)/weight_fifo.sv $(CORE_DIR)/systolic_data_setup.sv \
+           rtl/isa/isa_dispatch.sv rtl/isa/isa_ld.sv rtl/isa/isa_wt.sv \
+           rtl/isa/isa_mm.sv rtl/isa/isa_act.sv rtl/isa/isa_core.sv \
+           $(PERIPH_DIR)/isa_bridge.sv $(HPS_DIR)/tpu_isa_top.sv
+
+ISA_N           ?= 8
+ISA_WMEM_ROWS   ?= 8192
+ISA_UB_DEPTH    ?= 16384
+ISA_ACC_DEPTH   ?= 1024
+ISA_PARAM_DEPTH ?= 256
+ISA_SIM_DIR := $(SIM_DIR)/verilator/isa_n$(ISA_N)
+ISA_SIM     := $(ISA_SIM_DIR)/tb_isa
+
 isa-model-test:
 	@python3 $(TEST_DIR)/isa/test_isa_model.py
 
-.PHONY: isa-model-test
+isa-sim: | $(SIM_DIR)
+	@mkdir -p $(ISA_SIM_DIR)
+	@$(VERILATOR) --cc --exe --build -j 0 -Wall --Mdir $(ISA_SIM_DIR) verilator.vlt \
+		--top-module tpu_isa_top \
+		-GN=$(ISA_N) -GWMEM_ROWS=$(ISA_WMEM_ROWS) -GUB_DEPTH=$(ISA_UB_DEPTH) \
+		-GACC_DEPTH=$(ISA_ACC_DEPTH) -GPARAM_DEPTH=$(ISA_PARAM_DEPTH) \
+		-CFLAGS "-std=c++17 -DTB_N=$(ISA_N) -DTB_WMEM_ROWS=$(ISA_WMEM_ROWS) \
+		         -DTB_UB_DEPTH=$(ISA_UB_DEPTH) -DTB_ACC_DEPTH=$(ISA_ACC_DEPTH) \
+		         -DTB_PARAM_DEPTH=$(ISA_PARAM_DEPTH)" \
+		$(ISA_RTL) $(TEST_DIR)/verilator/tb_isa.cpp -o tb_isa > /dev/null
+	@echo "isa-sim: $(ISA_SIM) (N=$(ISA_N))"
+
+isa-rtl-test: isa-sim
+	@python3 $(TEST_DIR)/isa/test_isa_rtl.py $(ISA_SIM)
+
+isa-test: isa-model-test
+	@$(MAKE) --no-print-directory isa-rtl-test ISA_N=8
+	@$(MAKE) --no-print-directory isa-rtl-test ISA_N=4
+
+isa-lint:
+	@$(VERILATOR) --lint-only -Wall --timing -sv verilator.vlt $(ISA_RTL) --top-module tpu_isa_top
+	@echo "isa-lint: clean"
+
+.PHONY: isa-model-test isa-sim isa-rtl-test isa-test isa-lint

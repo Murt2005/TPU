@@ -11,7 +11,8 @@ version; this is the complete one.
 | `CONTRIBUTING.md` | Dev setup, local quality gates, how to register a testbench, RTL house style |
 | `Makefile` | Entry point for simulation, lint, the Verilator suite, the sim bridge and hardware tests; defines the shared file sets and includes `mk/` |
 | `mk/sim.mk` | Icarus testbenches: the RTL dependency graph (`DEPS_<name>`), the test list (built from `tests/sv/*_tb.sv`), and `make test` |
-| `mk/verilator.mk` | `make check-protocol`, `make lint` (4 configs), `make verilate-test` (12 combos), `make sim-bridge` |
+| `mk/isa.mk` | The instruction-stream core: `make isa-test` (model + RTL at N = 8 and 4), `make isa-sim`, `make isa-lint` |
+| `mk/verilator.mk` | `make check-protocol`, `make lint` (5 configs), `make verilate-test` (12 combos), `make sim-bridge` |
 | `mk/hw.mk` | `make hw-test` and `make host-flags`, both taking `CONFIG=` |
 | `run_tests.sh` | Builds and runs every (or a named subset of) testbench, printing a pass/fail summary. Gets the test list from `make print-tests` |
 | `tpu_host.py` | Compatibility wrapper: `python3 tpu_host.py` runs the `tpu` CLI and `import tpu_host` still works, with or without the package installed |
@@ -55,6 +56,21 @@ All four present the same byte-stream interface to `tpu_core`.
 | `uart_tx.sv` | 8N1 transmitter |
 | `spi_slave.sv` | Mode-0 SPI slave |
 | `hps_bridge.sv` | Avalon-MM slave for the DE1-SoC's HPS; fixed read latency 1, no CDC |
+| `isa_bridge.sv` | The instruction-stream core's 12-register Avalon-MM slave (instructions, data, out, status, perf) |
+
+**`rtl/isa/` — the instruction-stream core (DE1-SoC, phase 1)**
+
+The 64-bit instruction set from the DE1-SoC instruction-stream spec. Phase 1: no overlap, no requantizer, no DDR3; the array is driven serially through `rtl/core/`'s `mmu`, `weight_fifo` and `systolic_data_setup`.
+
+| File | What |
+|---|---|
+| `isa_pkg.sv` | Opcodes, error codes, reserved-bit masks, the `WAIT` check (mirrors `host/tpu/isa.py`) |
+| `isa_dispatch.sv` | In-order decode, error checks, routing to the four engine queues, `WAIT` snapshots, `SIGNAL` fence |
+| `isa_ld.sv` | LD engine: data FIFO words into WMEM, UB and the bias/quant tables |
+| `isa_wt.sv` | WT engine: `SET_WBASE`, and WMEM tiles into the tile slot |
+| `isa_mm.sv` | MM engine: slot into the array, UB rows streamed, column re-alignment, accumulator read-modify-write |
+| `isa_act.sv` | ACT engine: `ACTIVATE` (bias, ReLU) and `RD_UB` to the host out FIFO |
+| `isa_core.sv` | Host FIFOs, dispatcher, engine queues, memories, status, perf counters |
 
 ## `boards/` — one directory per target
 
@@ -90,6 +106,7 @@ All four present the same byte-stream interface to `tpu_core`.
 | Path | What |
 |---|---|
 | `top/tpu_top_hps.sv` | Top level: `hps_bridge` + `tpu_core` + power-on reset |
+| `top/tpu_isa_top.sv` | Top level for the instruction-stream core: `isa_bridge` + `isa_core` + power-on reset |
 | `fpga/Makefile` | Quartus command-line build + `.rbf` generation; set `PROJECT`/`REVISION` |
 | `fpga/README.md` | Quartus/Qsys integration and HPS deploy runbook |
 | `fpga/tpu_top_hps.sdc` | 50 MHz fabric clock constraint |
@@ -104,6 +121,10 @@ All four present the same byte-stream interface to `tpu_core`.
 | `tpu/links.py` | `MmioLink` (DE1-SoC `/dev/mem`), `SimLink` (Verilator subprocess), `open_link()` |
 | `tpu/driver.py` | The `TPU` class: legacy commands, `run_tile`, `stream_run`, `matmul_tiled()`, the `FW_MATMUL` offload |
 | `tpu/golden.py` | The reference numerics every Python caller shares |
+| `tpu/isa.py` | Instruction-stream encoder/decoder, from one field table |
+| `tpu/isa_model.py` | The instruction-stream reference model the RTL is compared against |
+| `tpu/isa_layout.py` | Host-side layout for the core's fixed strides (weight tiles, K-chunk-major UB) |
+| `tpu/isa_device.py` | Driver for `isa_bridge`'s registers, plus `IsaSimLink` for the Verilator model |
 | `tpu/cli.py` | Argument parsing and `--selftest`; `tpu/__main__.py` makes `python3 -m tpu` work |
 
 ## `tests/` — by verification tier
@@ -112,6 +133,8 @@ All four present the same byte-stream interface to `tpu_core`.
 |---|---|
 | `sv/` | 23 Icarus testbenches (`make test`) — list below |
 | `verilator/tb_tpu_top.cpp` | C++ full-chip bench: drives `tpu_top`'s real host pins (or injects bytes into `tpu_core` directly) across 12 shape/PHY/width combos; with `--bridge` it is the `--link sim` transport (`make sim-bridge`) |
+| `isa/test_isa_model.py`, `isa/test_isa_rtl.py` | The instruction-stream model, and the RTL against it word for word (`make isa-test`) |
+| `verilator/tb_isa.cpp` | `tpu_isa_top` as a register-level transport for `isa_device.py` |
 | `check_protocol.py` | Checks the four copies of the wire-protocol constants agree (`make check-protocol`, part of `make lint`) |
 | `hw/hw_regression.py` | 14-case regression against real silicon over the `tpu` driver (`make hw-test`) |
 
