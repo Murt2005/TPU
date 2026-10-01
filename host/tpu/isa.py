@@ -164,3 +164,22 @@ def unpack_int8(words, n):
             v = (w >> (8 * s)) & 0xFF
             out.append(v - 256 if v & 0x80 else v)
     return out[:n]
+
+
+def quant_params(m):
+    """real scale M -> (M0, shift) with M ~ M0 / 2^shift and M0 in [2^23, 2^24)"""
+    import math
+    if not m >= 2 ** -19:
+        raise ValueError(f"requant scale {m} below 2^-19: pre-saturation would no longer be exact")
+    shift = 23 - math.floor(math.log2(m))
+    m0 = round(m * 2 ** shift)
+    if m0 == 1 << 24:
+        m0 //= 2
+        shift -= 1
+    if not 0 <= shift <= 63:
+        raise ValueError(f"requant scale {m} needs shift {shift}, outside 0..63")
+    return m0, shift
+
+
+def quant_word(m0, shift):
+    return (shift & 0x3F) << 24 | (m0 & 0xFFFFFF)

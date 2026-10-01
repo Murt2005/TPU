@@ -33,7 +33,7 @@ def test_roundtrip(rng):
 
 
 def test_errors():
-    m = IsaModel(n=8, wmem_rows=64, ub_depth=64, acc_depth=32, param_depth=8)
+    m = IsaModel(n=8, wmem_rows=64, ub_depth=64, acc_depth=32, param_depth=8, phase=1)
     cases = [
         ("unknown opcode", 0x3F << 58, ERR_OPCODE),
         ("reserved bit", isa.nop() | 1, ERR_RESERVED),
@@ -123,11 +123,59 @@ def test_mnist_layer1():
         check(f"MNIST layer 1, 20 images, m={m}, vs hw_layer at 32 bits", np.array_equal(got, want))
 
 
+def mnist_layers():
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "software" / "mnist"))
+    import train_mnist as T
+    from infer import _quantize, load_model, predict_batch_offline
+    mdl = load_model()
+    _, _, xi, _ = T.load_mnist()
+    xf = T.downsample(xi[:20])
+    x = _quantize(xf, float(mdl["in_scale"])).astype(np.int64)
+    hs = float(mdl["hidden_scale"])
+    layers = [dict(w=mdl["w1"], b=mdl["b1"], relu=True, scale=1 / hs, hidden_scale=hs),
+              dict(w=mdl["w2"], b=mdl["b2"], relu=True, scale=None)]
+    return x, layers, predict_batch_offline(mdl, xf)
+
+
+def test_mnist_full():
+    from tpu.isa_compile import compile_mlp
+    x, layers, host_pred = mnist_layers()
+    for m in (1, 8):
+        cm = compile_mlp(layers, m)
+        model = IsaModel(n=8)
+        model.run(*cm.load_program())
+        preds = []
+        for i in range(0, 20, m):
+            xb = np.zeros((m, x.shape[1]), np.int64)
+            xb[:len(x[i:i + m])] = x[i:i + m]
+            model.reset()
+            out = model.run(*cm.infer_program(xb))
+            assert model.err is None, model.err
+            preds += list(cm.decode(out).argmax(1)[:len(x[i:i + m])])
+        check(f"MNIST full program on chip, 20 images, m={m}: argmax == host path",
+              list(preds) == list(host_pred), f"{preds} vs {list(host_pred)}")
+
+
+def test_requant_vs_host_round():
+    """the spec's table: the 24-bit requantizer matches np.round(v / hidden_scale)
+    on every v in 0..65535 except the one exact tie"""
+    _, layers, _ = mnist_layers()
+    m0, shift = isa.quant_params(layers[0]["scale"])
+    v = np.arange(65536)
+    hw = golden.requant(v, m0, shift)
+    host = np.clip(np.round(v / layers[0]["hidden_scale"]), -128, 127)
+    diff = np.nonzero(hw != host)[0]
+    check("requantizer vs host rounding: one difference, the tie at v=10,450",
+          list(diff) == [10450], f"differs at {list(diff[:10])}")
+
+
 if __name__ == "__main__":
     rng = random.Random(0)
     test_roundtrip(rng)
     test_errors()
     test_random_layers(rng)
     test_mnist_layer1()
+    test_requant_vs_host_round()
+    test_mnist_full()
     print(f"{'ALL ISA MODEL TESTS PASSED' if not failures else f'{len(failures)} FAILED'}")
     sys.exit(1 if failures else 0)

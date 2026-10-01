@@ -2,9 +2,9 @@
 
 import isa_pkg::*;
 
-// ACT engine: ACC rows -> bias -> ReLU/identity -> host out FIFO, plus RD_UB.
-// phase 1: no requantizer and no UB/DDR3 destination (rejected at decode).
-// shares the ACC and UB read ports with MM, which has priority
+// ACT engine: ACC rows -> bias -> ReLU/identity -> optional requantize -> UB or
+// host out FIFO, plus RD_UB. shares the ACC and UB read ports with MM, which has
+// priority there; ACT has priority on the UB write port
 module isa_act #(
     parameter int N      = 8,
     parameter int UB_AW  = 14,
@@ -27,6 +27,11 @@ module isa_act #(
 
     output logic [PAR_AW-1:0]    bias_raddr,
     input  logic [N*32-1:0]      bias_rdata,
+    input  logic [N*32-1:0]      quant_rdata,    // same address as bias
+
+    output logic                 ub_we,
+    output logic [UB_AW-1:0]     ub_waddr,
+    output logic [N*8-1:0]       ub_wdata,
 
     output logic                 ub_re,
     output logic [UB_AW-1:0]     ub_raddr,
@@ -48,11 +53,12 @@ module isa_act #(
     logic [5:0] op;
     assign op = insn[63:58];
 
-    typedef enum logic [1:0] {S_IDLE, S_READ, S_LATCH, S_EMIT} state_t;
+    typedef enum logic [2:0] {S_IDLE, S_READ, S_LATCH, S_EMIT, S_WRITE} state_t;
     state_t state;
 
     logic        is_rd_ub;
-    logic        relu, use_bias;
+    logic        relu, use_bias, rq, to_ub;
+    logic [15:0] ub_out;
     logic [8:0]  m;
     logic [10:0] nb, b;
     logic [8:0]  i;
@@ -69,7 +75,11 @@ module isa_act #(
     assign ub_re      = state == S_READ && is_rd_ub && !ub_busy;
 
     logic [7:0] words_per_row;
-    assign words_per_row = is_rd_ub ? 8'(WPR) : 8'(N);
+    assign words_per_row = (is_rd_ub || rq) ? 8'(WPR) : 8'(N);
+
+    assign ub_we    = state == S_WRITE;
+    assign ub_waddr = UB_AW'(ub_out);
+    assign ub_wdata = row[N*8-1:0];
     assign out_push = state == S_EMIT && !out_full;
     assign out_word = row[32*w +: 32];
 
@@ -78,12 +88,25 @@ module isa_act #(
     assign q_pop   = q_valid && state == S_IDLE && (op != OP_WAIT || wait_ok);
     assign idle    = state == S_IDLE && !q_valid;
 
+    // saturate to 27 bits, multiply by M0, add half, arithmetic shift, clamp to int8
+    function automatic logic [7:0] requant(input logic signed [31:0] v, input logic [29:0] q);
+        logic signed [63:0] v27, prod, rounded;
+        logic        [5:0]  shift;
+        shift = q[29:24];
+        v27 = (v > 32'sd67108863) ? 64'sd67108863 : (v < -32'sd67108864) ? -64'sd67108864 : 64'(v);
+        prod = v27 * $signed({40'd0, q[23:0]});
+        rounded = (shift == 6'd0) ? prod : (prod + (64'sd1 <<< (shift - 6'd1))) >>> shift;
+        return (rounded > 64'sd127) ? 8'sd127 : (rounded < -64'sd128) ? 8'h80 : rounded[7:0];
+    endfunction
+
     logic [N*32-1:0] act_row;
+    logic [N*8-1:0]  q_row;
     always_comb
         for (int c = 0; c < N; c++) begin
             logic signed [31:0] v;
             v = acc_rdata[32*c +: 32] + (use_bias ? bias_rdata[32*c +: 32] : 32'd0);
             act_row[32*c +: 32] = (relu && v < 0) ? 32'd0 : v;
+            q_row[8*c +: 8] = requant(act_row[32*c +: 32], quant_rdata[32*c +: 30]);
         end
 
     always_ff @(posedge clk) begin
@@ -101,6 +124,9 @@ module isa_act #(
             par        <= '0;
             w          <= '0;
             row        <= '0;
+            rq         <= 1'b0;
+            to_ub      <= 1'b0;
+            ub_out     <= '0;
             done_pulse <= 1'b0;
         end else begin
             done_pulse <= 1'b0;
@@ -108,6 +134,9 @@ module isa_act #(
                 S_IDLE: if (q_pop) begin
                     if (op == OP_ACTIVATE) begin
                         is_rd_ub <= 1'b0;
+                        rq       <= insn[55];
+                        to_ub    <= insn[54:53] == DST_UB;
+                        ub_out   <= 16'(insn[23:10]);
                         relu     <= insn[57:56] == 2'd1;
                         use_bias <= insn[52];
                         nb       <= 11'(insn[51:42]) + 11'd1;
@@ -119,6 +148,8 @@ module isa_act #(
                         state    <= S_READ;
                     end else if (op == OP_RD_UB) begin
                         is_rd_ub   <= 1'b1;
+                        rq         <= 1'b0;
+                        to_ub      <= 1'b0;
                         row_addr   <= 16'(insn[45:32]);
                         items_left <= 16'(insn[11:0]) + 16'd1;
                         state      <= S_READ;
@@ -128,9 +159,25 @@ module isa_act #(
                 end
                 S_READ: if (is_rd_ub ? !ub_busy : !acc_busy) state <= S_LATCH;
                 S_LATCH: begin                         // read data valid this cycle
-                    row   <= is_rd_ub ? (N*32)'(ub_rdata) : act_row;
+                    row   <= is_rd_ub ? (N*32)'(ub_rdata) : rq ? (N*32)'(q_row) : act_row;
                     w     <= '0;
-                    state <= S_EMIT;
+                    state <= to_ub ? S_WRITE : S_EMIT;
+                end
+                S_WRITE: begin                         // one UB entry per row
+                    ub_out   <= ub_out + 16'd1;
+                    row_addr <= row_addr + 16'd1;
+                    state    <= S_READ;
+                    if (i == m - 9'd1) begin
+                        i   <= '0;
+                        par <= par + 8'd1;
+                        if (b == nb - 11'd1) begin
+                            state      <= S_IDLE;
+                            done_pulse <= 1'b1;
+                        end
+                        b <= b + 11'd1;
+                    end else begin
+                        i <= i + 9'd1;
+                    end
                 end
                 S_EMIT: if (out_push) begin
                     if (w == words_per_row - 8'd1) begin

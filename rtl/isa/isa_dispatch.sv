@@ -102,8 +102,8 @@ module isa_dispatch #(
             code = ERR_RESERVED;
         else if (op == OP_RD_DDR_UB || op == OP_SET_OBASE
                  || (op == OP_MATMUL && f_wsrc)
-                 || (op == OP_ACTIVATE && (f_dst == DST_DDR || f_rq)))
-            code = ERR_UNIMPL;   // phase 1: no DDR3, no requantizer
+                 || (op == OP_ACTIVATE && f_dst == DST_DDR))
+            code = ERR_UNIMPL;   // DDR3 is phase 5
         else if (op == OP_ACTIVATE && f_dst == DST_UB && !f_rq)
             code = ERR_COMBO;
         else case (op)

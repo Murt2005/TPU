@@ -19,6 +19,7 @@ module isa_ld #(
     output logic                 done_pulse,
 
     input  logic                 data_valid,
+    input  logic                 ub_wbusy,       // ACT owns the UB write port this cycle
     input  logic [31:0]          data,
     output logic                 data_pop,
 
@@ -65,7 +66,8 @@ module isa_ld #(
     logic last_word;
     assign last_word = (word_idx == words_per_item - 8'd1);
 
-    assign data_pop  = busy && data_valid;
+    // hold a UB entry's last word while ACT is writing the UB
+    assign data_pop  = busy && data_valid && !(last_word && cur_op == OP_WR_UB && ub_wbusy);
     assign row_wdata = item[N*8-1:0];
     assign par_wdata = item;
 

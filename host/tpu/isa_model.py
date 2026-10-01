@@ -4,7 +4,7 @@ results on the concurrent hardware, so RTL tests compare against this word for w
 """
 import numpy as np
 
-from . import isa
+from . import golden, isa
 
 # error codes, mirrored in rtl/isa/isa_pkg.sv. checked in this order
 ERR_NONE, ERR_OPCODE, ERR_RESERVED, ERR_RANGE, ERR_COMBO, ERR_UNIMPL = 0, 1, 2, 3, 4, 5
@@ -17,7 +17,7 @@ class IsaError(Exception):
 
 class IsaModel:
     def __init__(self, n=8, wmem_rows=8192, ub_depth=16384, acc_depth=1024,
-                 param_depth=256, phase=1):
+                 param_depth=256, phase=3):
         assert n % 4 == 0, "R = C must be a multiple of 4 (rows pack into whole words)"
         self.n, self.phase = n, phase
         self.wmem_rows, self.ub_depth = wmem_rows, ub_depth
@@ -161,7 +161,15 @@ class IsaModel:
                 v = self._wrap32(v + self.bias[f["param_idx"] + b])
             if f["func"] == isa.FUNC_RELU:
                 v = np.maximum(v, 0)
-            if f["dst"] == isa.DST_HOST:
+            if f["rq"]:
+                q = self.quant[f["param_idx"] + b]
+                v = golden.requant(v, q & 0xFFFFFF, (q >> 24) & 0x3F)
+            if f["dst"] == isa.DST_UB:
+                a = f["ub_addr"] + b * m
+                self.ub[a:a + m] = v.astype(np.int8)
+            elif f["rq"]:
+                self.out += isa.pack_int8(v)
+            else:
                 for row in v:
                     self.out += isa.pack_int32(row)
 

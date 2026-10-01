@@ -134,7 +134,10 @@ module isa_core #(
     logic [PAR_AW-1:0]   par_waddr, bias_raddr;
     logic [N*32-1:0]     par_wdata;
     logic [N*8-1:0]      wmem_rdata, ub_rdata;
-    logic [N*32-1:0]     acc_rdata, bias_rdata;
+    logic [N*32-1:0]     acc_rdata, bias_rdata, quant_rdata;
+    logic                act_ub_we;
+    logic [UB_AW-1:0]    act_ub_waddr;
+    logic [N*8-1:0]      act_ub_wdata;
 
     logic                mm_ub_re, act_ub_re, mm_acc_re, act_acc_re, acc_we;
     logic [UB_AW-1:0]    mm_ub_raddr, act_ub_raddr;
@@ -143,7 +146,8 @@ module isa_core #(
 
     always_ff @(posedge clk) begin
         if (wmem_we)  wmem[wmem_waddr]     <= ld_row;
-        if (ub_we)    ub[ub_waddr]         <= ld_row;
+        if (act_ub_we)  ub[act_ub_waddr]   <= act_ub_wdata;   // ACT has the write port first
+        else if (ub_we) ub[ub_waddr]       <= ld_row;
         if (bias_we)  bias_tab[par_waddr]  <= par_wdata;
         if (quant_we) quant_tab[par_waddr] <= par_wdata;
         if (acc_we)   acc[acc_waddr]       <= acc_wdata;
@@ -151,6 +155,7 @@ module isa_core #(
         ub_rdata   <= ub[mm_ub_re ? mm_ub_raddr : act_ub_raddr];
         acc_rdata  <= acc[mm_acc_re ? mm_acc_raddr : act_acc_raddr];
         bias_rdata <= bias_tab[bias_raddr];
+        quant_rdata <= quant_tab[bias_raddr];
     end
 
     // -- engines ---------------------------------------------------------------
@@ -163,7 +168,7 @@ module isa_core #(
         .clk(clk), .reset(reset),
         .q_valid(!q_empty[ENG_LD]), .q_data(q_head[ENG_LD]), .q_pop(q_pop[ENG_LD]),
         .completed(completed), .done_pulse(done_pulse[ENG_LD]),
-        .data_valid(!data_empty), .data(data_head), .data_pop(data_pop),
+        .data_valid(!data_empty), .ub_wbusy(act_ub_we), .data(data_head), .data_pop(data_pop),
         .wmem_we(wmem_we), .wmem_waddr(wmem_waddr), .ub_we(ub_we), .ub_waddr(ub_waddr),
         .row_wdata(ld_row), .bias_we(bias_we), .quant_we(quant_we),
         .par_waddr(par_waddr), .par_wdata(par_wdata), .idle(eng_idle[ENG_LD]));
@@ -191,7 +196,8 @@ module isa_core #(
         .q_valid(!q_empty[ENG_ACT]), .q_data(q_head[ENG_ACT]), .q_pop(q_pop[ENG_ACT]),
         .completed(completed), .done_pulse(done_pulse[ENG_ACT]),
         .acc_re(act_acc_re), .acc_raddr(act_acc_raddr), .acc_busy(mm_acc_re), .acc_rdata(acc_rdata),
-        .bias_raddr(bias_raddr), .bias_rdata(bias_rdata),
+        .bias_raddr(bias_raddr), .bias_rdata(bias_rdata), .quant_rdata(quant_rdata),
+        .ub_we(act_ub_we), .ub_waddr(act_ub_waddr), .ub_wdata(act_ub_wdata),
         .ub_re(act_ub_re), .ub_raddr(act_ub_raddr), .ub_busy(mm_ub_re), .ub_rdata(ub_rdata),
         .out_push(out_push), .out_word(out_in), .out_full(out_full), .idle(eng_idle[ENG_ACT]));
 
