@@ -62,35 +62,58 @@ class IsaSimLink:
             self._p.kill()
 
 
-class IsaSerialLink(IsaSimLink):
-    """the real core on the DE1-SoC, through boards/de1soc/sw/isa_mmio run on the
-    HPS over its serial console: logs in, starts the server, then speaks the same
-    protocol as the Verilator model. the console must be at a shell prompt or login"""
+class BoardConsole:
+    """the DE1-SoC's HPS serial console as a launcher for raw-binary programs:
+    gets to a root shell, silences kernel messages, mounts the SD card's boot
+    partition (where the programs live), then starts one and syncs on its echo"""
 
-    cycle_exact = False
-
-    def __init__(self, port, server="/mnt/boot/isa_mmio", baud=115200, timeout=10.0):
+    def __init__(self, port, baud=115200):
         import serial
         self._s = serial.Serial(port, baud, timeout=0.2)
-        self._buf = bytearray()
         self._s.write(b"\x03")                   # abandon any half-typed line
         self._quiet()
         self._shell(b"")
         self._shell(b"root", tolerate_login=True)
         self._shell(b"dmesg -n 1")              # kernel messages would corrupt the stream
+        self._shell(b"mkdir -p /mnt/boot; grep -q /mnt/boot /proc/mounts || mount /dev/mmcblk0p1 /mnt/boot")
         self._quiet()
-        cmd = server.encode()
-        # "\r" alone: a trailing "\n" would stay queued and be the server's first command byte
+
+    def launch(self, cmdline, timeout=10.0):
+        """start a program; afterwards the line is raw binary to and from it"""
+        cmd = cmdline.encode() if isinstance(cmdline, str) else cmdline
+        # "\r" alone: a trailing "\n" would stay queued and be the program's first input byte
         self._s.write(cmd + b"\r")
+        # sync on the shell's echo of this line; past 80 columns the console wraps
+        # it with "\r" and spaces, so compare with those removed
+        def squash(b):
+            return b.replace(b"\r", b"").replace(b" ", b"")
+        want = squash(cmd)
         seen = b""
         deadline = time.time() + timeout
-        while not seen.endswith(cmd + b"\r\n"):  # sync on the shell's echo of exactly this line
+        while not (seen.endswith(b"\n") and squash(seen[:-1]).rstrip(b"\n").endswith(want)):
             seen += self._s.read(1)
             if time.time() > deadline:
                 raise RuntimeError(f"no echo of {cmd!r} from the board console: {seen[-200:]!r}")
         self._s.timeout = timeout
-        self.n, self.wmem_rows, self.ub_depth, self.acc_depth, self.param_depth = \
-            struct.unpack("<5I", self._read(20))
+
+    def read(self, k):
+        out = self._s.read(k)
+        if len(out) < k:
+            raise RuntimeError(f"board link: wanted {k} bytes, got {len(out)} ({out!r})")
+        return out
+
+    def write(self, data):
+        self._s.write(data)
+
+    def close(self, quit_byte=b"Q"):
+        try:
+            if quit_byte:
+                self._s.write(quit_byte)
+                self._s.flush()
+                time.sleep(0.3)
+            self._s.reset_input_buffer()
+        finally:
+            self._s.close()
 
     def _quiet(self, idle=1.0, limit=10.0):
         """read until the console has been silent for `idle` seconds"""
@@ -110,26 +133,31 @@ class IsaSerialLink(IsaSimLink):
             self._s.read(4096)
         return out
 
+
+class IsaSerialLink(IsaSimLink):
+    """the real core on the DE1-SoC, through boards/de1soc/sw/isa_mmio run on the
+    HPS over its serial console, speaking the same protocol as the Verilator model"""
+
+    cycle_exact = False
+
+    def __init__(self, port, server="/mnt/boot/isa_mmio", baud=115200, timeout=10.0):
+        self._con = BoardConsole(port, baud)
+        self._buf = bytearray()
+        self._con.launch(server, timeout)
+        self.n, self.wmem_rows, self.ub_depth, self.acc_depth, self.param_depth = \
+            struct.unpack("<5I", self._read(20))
+
     def _read(self, k):
-        out = self._s.read(k)
-        if len(out) < k:
-            raise RuntimeError(f"board link: wanted {k} bytes, got {len(out)} ({out!r})")
-        return out
+        return self._con.read(k)
 
     def flush(self):
         if self._buf:
-            self._s.write(bytes(self._buf))
+            self._con.write(bytes(self._buf))
             self._buf.clear()
 
     def close(self):
-        try:
-            self.flush()
-            self._s.write(b"Q")
-            self._s.flush()
-            time.sleep(0.3)
-            self._s.reset_input_buffer()
-        finally:
-            self._s.close()
+        self.flush()
+        self._con.close(b"Q")
 
 
 def open_link(spec):

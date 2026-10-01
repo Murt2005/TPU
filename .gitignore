@@ -61,3 +61,4 @@ boards/de1soc/fpga/selftest/c5_pin_model_dump.txt
 # DE1-SoC HPS flow: Terasic GHRD extract + Quartus output; ARM build output
 boards/de1soc/fpga/hps/build/
 boards/de1soc/sw/isa_mmio
+software/mnist/de1soc/build/
