@@ -39,6 +39,7 @@ of 2 ≥ `max(ARRAY_ROWS, M_TILE)` for anything past 4.
 | `boards/de1soc/fpga/` Quartus project | Scaffolded: `Makefile`, `.sdc`, `.qsf` skeleton |
 | Qsys/GHRD integration | Not done |
 | Cloud build infrastructure | Planned, not built (§4) |
+| FPGA-only self-test (`boards/de1soc/fpga/selftest/`) | `tpu_isa_top` checked by a ROM transcript of the ISA tests, results on LEDs/HEX, no HPS needed. Passes in Verilator sim; standalone Quartus project written, not yet compiled |
 | On-board bring-up | Not started |
 
 ## 3. Build and deploy (from `boards/de1soc/fpga/README.md`)

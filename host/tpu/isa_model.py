@@ -81,9 +81,11 @@ class IsaModel:
 
     def run(self, program, data=()):
         """execute instruction words, consuming 32-bit data words in order. stops
-        at the first decode error (recorded in self.err). returns the out words"""
+        at the first decode error (recorded in self.err). returns the out words
+        this run produced, as a host draining the out FIFO would see them"""
         data = list(data)
         pos = 0
+        first_out = len(self.out)
 
         def take(k):
             nonlocal pos
@@ -102,7 +104,7 @@ class IsaModel:
             name, f = isa.decode(word)
             getattr(self, "_" + name.lower())(f, take)
         self.data_left = len(data) - pos
-        return self.out
+        return self.out[first_out:]
 
     def _int8_rows(self, take, count, width):
         per_row = -(-width // 4)

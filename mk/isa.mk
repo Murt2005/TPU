@@ -41,3 +41,23 @@ isa-lint:
 	@echo "isa-lint: clean"
 
 .PHONY: isa-model-test isa-sim isa-rtl-test isa-test isa-lint
+
+# DE1-SoC FPGA-only self-test (boards/de1soc/fpga/selftest): the ROM transcript
+# replayed through the real bridge, exactly as the bitstream will run it
+ISA_ST_DIR := boards/de1soc/fpga/selftest
+ISA_ST_ROM := $(ISA_ST_DIR)/isa_selftest.hex
+ISA_ST_HEX ?= $(ISA_ST_ROM)
+ISA_ST_SIM := $(SIM_DIR)/verilator/isa_selftest_n$(ISA_N)/tb_isa_selftest
+
+isa-selftest-rom:
+	@python3 $(ISA_ST_DIR)/gen_selftest.py $(ISA_ST_ROM) --n $(ISA_N)
+
+isa-selftest-sim: isa-selftest-rom | $(SIM_DIR)
+	@mkdir -p $(dir $(ISA_ST_SIM))
+	@$(VERILATOR) --cc --exe --build -j 0 -Wall --Mdir $(dir $(ISA_ST_SIM)) verilator.vlt \
+		--top-module tpu_isa_selftest -GN=$(ISA_N) -GROM_FILE='"$(abspath $(ISA_ST_HEX))"' \
+		-CFLAGS -std=c++17 $(ISA_RTL) $(HPS_DIR)/isa_replay.sv $(HPS_DIR)/tpu_isa_selftest.sv \
+		$(TEST_DIR)/verilator/tb_isa_selftest.cpp -o tb_isa_selftest > /dev/null
+	@$(ISA_ST_SIM)
+
+.PHONY: isa-selftest-rom isa-selftest-sim

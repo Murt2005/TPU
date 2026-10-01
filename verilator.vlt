@@ -47,3 +47,6 @@ lint_off -rule UNUSEDPARAM -file "*rtl/isa/isa_pkg.sv"
 
 // isa array: inner rows' valids and the last column's pass-through outputs end at the edge
 lint_off -rule UNUSEDSIGNAL -file "*rtl/isa/isa_array.sv"
+
+// DE1-SoC self-test top: KEY3..1 are board pins it doesn't use
+lint_off -rule UNUSEDSIGNAL -file "*boards/de1soc/top/tpu_isa_selftest.sv" -match "*'KEY'*"

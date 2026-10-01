@@ -45,3 +45,11 @@ host/*.egg-info/
 
 # macOS Finder metadata
 .DS_Store
+
+# DE1-SoC self-test: generated ROM (make rom) and its Quartus build output
+boards/de1soc/fpga/selftest/isa_selftest.hex
+boards/de1soc/fpga/selftest/isa_selftest.marks
+boards/de1soc/fpga/selftest/db/
+boards/de1soc/fpga/selftest/incremental_db/
+boards/de1soc/fpga/selftest/output_files/
+boards/de1soc/fpga/selftest/*.qws
