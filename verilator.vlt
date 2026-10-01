@@ -50,3 +50,6 @@ lint_off -rule UNUSEDSIGNAL -file "*rtl/isa/isa_array.sv"
 
 // DE1-SoC self-test top: KEY3..1 are board pins it doesn't use
 lint_off -rule UNUSEDSIGNAL -file "*boards/de1soc/top/tpu_isa_selftest.sv" -match "*'KEY'*"
+// SW8..5 are unused pins; the display shows a capture's low 24 bits
+lint_off -rule UNUSEDSIGNAL -file "*boards/de1soc/top/tpu_isa_selftest.sv" -match "*'sw_q'*"
+lint_off -rule UNUSEDSIGNAL -file "*boards/de1soc/top/tpu_isa_selftest.sv" -match "*'cap_value'*"

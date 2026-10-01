@@ -14,7 +14,12 @@ LEDs and HEX displays.
 | LEDR3 / LEDR4 | a `WAIT_DONE` timed out / the core raised ERR |
 | LEDR9 | heartbeat, the clock is running |
 
-KEY0 reruns it. A full run takes about 0.9 ms at 50 MHz.
+KEY0 reruns it. A full run takes about 1 ms at 50 MHz.
+
+With SW9 up, HEX5..0 show capture slot SW4..0 in hex: the perf counters after
+the MNIST run and the tile-rate runs, listed in `isa_selftest.caps`. The rate
+itself is checked on chip, so a regression fails the test. The replay is
+cycle-exact, so every slot must equal `make isa-selftest-sim ISA_ST_SLOTS=21`.
 
 Quartus runs in an x86 Ubuntu machine under OrbStack (Rosetta). Its parallel
 synthesis helpers deadlock there, so the `.qsf` sets `NUM_PARALLEL_PROCESSORS 1`.

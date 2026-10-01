@@ -16,8 +16,9 @@ from tpu.isa_waits import insert_waits                 # noqa: E402
 import isa_progs                                       # noqa: E402
 from test_isa_rtl import layer_program                 # noqa: E402
 
-OP_WR, OP_RD, OP_WAIT_DONE, OP_MARK, OP_END = 0x1, 0x2, 0x3, 0x4, 0xF
+OP_WR, OP_RD, OP_WAIT_DONE, OP_MARK, OP_CAP, OP_CHECK, OP_END = 0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0xF
 INSN_LO, INSN_HI, DATA, OUT, STATUS, LEVELS, CTRL = 0, 1, 2, 3, 4, 5, 6
+CYCLES, BEATS, WSTALL = 8, 9, 10
 CTRL_RESET, CTRL_CLEAR_DONE, CTRL_CLEAR_PERF = 1, 2, 4
 INSN_DEPTH, DATA_DEPTH, OUT_DEPTH = 512, 1024, 1024
 
@@ -27,6 +28,24 @@ class Transcript:
         self.entries = []
         self.model = IsaModel(n=n)
         self.marks = {}
+        self.caps = []          # slot -> what it holds
+
+    def cap(self, reg, what):
+        """read a register into the next capture slot (shown on HEX with SW9 + SW4..0)"""
+        slot = len(self.caps)
+        assert slot < 32
+        self.caps.append(what)
+        self._e(OP_CAP, reg, slot)
+        return slot
+
+    def check(self, a, b, expected, tol=0):
+        """on chip: |cap[a] - cap[b] - expected| <= tol; b == a checks cap[a] alone"""
+        assert 0 <= expected < 1 << 18 and 0 <= tol < 16
+        self._e(OP_CHECK, 0, a << 27 | b << 22 | tol << 18 | expected)
+
+    def perf(self, what):
+        return [self.cap(r, f"{what}: {name}") for r, name in
+                ((CYCLES, "cycles"), (BEATS, "MM beats"), (WSTALL, "MM wstall"))]
 
     def _e(self, op, addr=0, data=0):
         self.entries.append(op << 36 | addr << 32 | (data & 0xFFFFFFFF))
@@ -115,6 +134,27 @@ def build(n):
         t.mark(0x31, "MNIST 8 images, layers chained through the UB")
         t.reset()
         t.run(*cm.infer_program(_quantize(T.downsample(xi[:8]), float(mdl["in_scale"])).astype(np.int64)))
+        t.perf("MNIST 8 images")
+
+    # steady-state rate: kt and 2kt tiles of one MATMUL; the extra tiles must cost
+    # exactly tiles * max(m, N) cycles (+-1: WAIT_DONE polls every 2 cycles), no WSTALL
+    tiles = 8
+    for j, m in enumerate((1, n, 2 * n + 3)):
+        t.mark(0x50 + j, f"tile rate, m={m}: {tiles} vs {2 * tiles} tiles")
+        t.reset()
+        t.run([isa.wr_wmem(0, 2 * tiles * n), isa.wr_ub(0, 2 * tiles * m),
+               isa.wait(isa.WT, isa.LD), isa.wait(isa.MM, isa.LD), isa.signal(1)],
+              [0] * (2 * tiles * n * n // 4 + 2 * tiles * m * n // 4))
+        runs = []
+        for kt in (tiles, 2 * tiles):
+            t.reset()
+            t.run([isa.set_wbase(0), isa.matmul(m, kt, 1, 0, 0), isa.signal(2)], [])
+            runs.append(t.perf(f"m={m}, {kt} tiles"))
+        (c1, b1, s1), (c2, b2, s2) = runs
+        t.check(c2, c1, tiles * max(m, n), tol=1)
+        t.check(s2, s1, 0)
+        t.check(b1, b1, tiles * m)
+        t.check(b2, b2, 2 * tiles * m)
 
     prng = np.random.default_rng(5)
     t.mark(0x40, "random-program initial state")
@@ -146,6 +186,10 @@ def main():
     with open(Path(a.out).with_suffix(".marks"), "w") as f:
         for m, name in t.marks.items():
             f.write(f"{m:02X}  {name}\n")
+    with open(Path(a.out).with_suffix(".caps"), "w") as f:
+        f.write("SW9 up, SW4..0 = slot; HEX5..0 = low 24 bits, hex\n")
+        for i, what in enumerate(t.caps):
+            f.write(f"{i:2d}  {i:05b}  {what}\n")
     print(f"{a.out}: {len(t.entries)} entries of {a.depth}, {len(t.marks)} marks")
 
 

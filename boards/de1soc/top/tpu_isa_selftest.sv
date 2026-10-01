@@ -3,7 +3,8 @@
 // DE1-SoC FPGA-only bring-up: tpu_isa_top driven by isa_replay, no HPS.
 // LEDR0 pass, LEDR1 fail, LEDR2 running, LEDR3 timeout, LEDR4 core ERR,
 // LEDR9 heartbeat. HEX3..2: the running test's mark, or the first failing one;
-// HEX1..0: the mismatch count; "PASS" when clean. KEY0 reruns, KEY3..1 unused
+// HEX1..0: the mismatch count; "PASS" when clean. KEY0 reruns, KEY3..1 unused.
+// SW9 up: HEX5..0 show capture slot SW4..0 (perf counters) in hex
 module tpu_isa_selftest #(
     parameter int    N        = 8,
     parameter int    ROM_DEPTH = 16384,
@@ -11,11 +12,14 @@ module tpu_isa_selftest #(
 ) (
     input  logic       CLOCK_50,
     input  logic [3:0] KEY,             // only KEY0 is used
+    input  logic [9:0] SW,              // SW9 + SW4..0; the rest unused
     output logic [9:0] LEDR,
     output logic [6:0] HEX0,
     output logic [6:0] HEX1,
     output logic [6:0] HEX2,
-    output logic [6:0] HEX3
+    output logic [6:0] HEX3,
+    output logic [6:0] HEX4,
+    output logic [6:0] HEX5
 );
 
     logic clk;
@@ -45,6 +49,9 @@ module tpu_isa_selftest #(
         .avs_write(avs_write), .avs_writedata(avs_writedata), .avs_waitrequest(avs_waitrequest));
 
     logic        finished, timed_out, core_err;
+    logic [31:0] cap_value;
+    logic [9:0]  sw_q;
+    always_ff @(posedge clk) sw_q <= SW;            // display only, one flop is plenty
     logic [15:0] mismatches;
     logic [7:0]  first_bad_mark, mark;
 
@@ -53,7 +60,8 @@ module tpu_isa_selftest #(
         .avs_address(avs_address), .avs_read(avs_read), .avs_readdata(avs_readdata),
         .avs_write(avs_write), .avs_writedata(avs_writedata), .avs_waitrequest(avs_waitrequest),
         .finished(finished), .timed_out(timed_out), .core_err(core_err),
-        .mismatches(mismatches), .first_bad_mark(first_bad_mark), .mark(mark));
+        .mismatches(mismatches), .first_bad_mark(first_bad_mark), .mark(mark),
+        .cap_sel(sw_q[4:0]), .cap_value(cap_value));
 
     logic pass;
     assign pass = finished && mismatches == 16'd0;
@@ -78,8 +86,14 @@ module tpu_isa_selftest #(
     localparam logic [6:0] SEG_P = 7'b0001100, SEG_A = 7'b0001000, SEG_S = 7'b0010010,
                            SEG_DASH = 7'b0111111;
 
+    localparam logic [6:0] SEG_OFF = 7'b1111111;
+
     always_comb begin
-        if (!finished) begin
+        {HEX5, HEX4} = {2{SEG_OFF}};
+        if (sw_q[9]) begin
+            {HEX5, HEX4, HEX3, HEX2, HEX1, HEX0} = {seg(cap_value[23:20]), seg(cap_value[19:16]),
+                seg(cap_value[15:12]), seg(cap_value[11:8]), seg(cap_value[7:4]), seg(cap_value[3:0])};
+        end else if (!finished) begin
             {HEX3, HEX2, HEX1, HEX0} = {seg(mark[7:4]), seg(mark[3:0]), SEG_DASH, SEG_DASH};
         end else if (pass) begin
             {HEX3, HEX2, HEX1, HEX0} = {SEG_P, SEG_A, SEG_S, SEG_S};

@@ -48,6 +48,7 @@ ISA_ST_DIR := boards/de1soc/fpga/selftest
 ISA_ST_ROM := $(ISA_ST_DIR)/isa_selftest.hex
 ISA_ST_HEX ?= $(ISA_ST_ROM)
 ISA_ST_SIM := $(SIM_DIR)/verilator/isa_selftest_n$(ISA_N)/tb_isa_selftest
+ISA_ST_SLOTS ?= 0
 
 isa-selftest-rom:
 	@python3 $(ISA_ST_DIR)/gen_selftest.py $(ISA_ST_ROM) --n $(ISA_N)
@@ -58,6 +59,6 @@ isa-selftest-sim: isa-selftest-rom | $(SIM_DIR)
 		--top-module tpu_isa_selftest -GN=$(ISA_N) -GROM_FILE='"$(abspath $(ISA_ST_HEX))"' \
 		-CFLAGS -std=c++17 $(ISA_RTL) $(HPS_DIR)/isa_replay.sv $(HPS_DIR)/tpu_isa_selftest.sv \
 		$(TEST_DIR)/verilator/tb_isa_selftest.cpp -o tb_isa_selftest > /dev/null
-	@$(ISA_ST_SIM)
+	@$(ISA_ST_SIM) $(ISA_ST_SLOTS)
 
 .PHONY: isa-selftest-rom isa-selftest-sim
