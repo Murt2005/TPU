@@ -55,3 +55,4 @@ boards/de1soc/fpga/selftest/output_files/
 boards/de1soc/fpga/selftest/*.qws
 boards/de1soc/fpga/selftest/build.log
 boards/de1soc/fpga/selftest/*.qpf.bak
+boards/de1soc/fpga/selftest/c5_pin_model_dump.txt
