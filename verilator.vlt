@@ -27,3 +27,20 @@ lint_off -rule IMPORTSTAR -file "*rtl/core/tpu_sequencer.sv"
 
 // only writedata[7:0] carries a byte
 lint_off -rule UNUSEDSIGNAL -file "*rtl/peripherals/hps_bridge.sv" -match "*avs_writedata*"
+
+// isa core: same $unit-scope import rule as the sequencer
+lint_off -rule IMPORTSTAR -file "*rtl/isa/*.sv"
+
+// isa core: unused status ports left unconnected on purpose
+lint_off -rule PINCONNECTEMPTY -file "*rtl/isa/isa_mm.sv"
+
+// each engine decodes only the instruction fields it executes
+lint_off -rule UNUSEDSIGNAL -file "*rtl/isa/isa_*.sv" -match "*'insn'*"
+lint_off -rule UNUSEDSIGNAL -file "*rtl/isa/isa_dispatch.sv" -match "*'f_func'*"
+
+// quant table is written now and read by the phase 2 requantizer; the read
+// grants are implied by MM's priority; dispatched is exported for debug
+lint_off -rule UNUSEDSIGNAL -file "*rtl/isa/isa_core.sv"
+
+// mirrors host/tpu/isa.py, not every constant is used by the RTL yet
+lint_off -rule UNUSEDPARAM -file "*rtl/isa/isa_pkg.sv"
