@@ -12,7 +12,7 @@ SOF   := $(GHRD)/output_files/soc_system.sof
 RBF   := build/soc_system.rbf
 MMIO  := build/isa_mmio
 
-.PHONY: all ghrd qsys sof rbf mmio clean
+.PHONY: all ghrd qsys sof rbf mmio setbaud clean
 
 all: rbf mmio
 
@@ -51,6 +51,13 @@ $(MMIO): ../../sw/isa_mmio.c
 	arm-linux-gnueabihf-gcc -Os -static -s -Wall -Wextra -o $@ $<
 
 mmio: $(MMIO)
+
+# console baud beyond busybox stty's 921600 (1562500 for the demo); no libc, 636 bytes
+build/setbaud: ../../sw/setbaud.c
+	arm-linux-gnueabihf-gcc -Os -static -nostdlib -ffreestanding -fno-stack-protector -marm \
+	    -Wall -Wl,--build-id=none -s -o $@ $<
+
+setbaud: build/setbaud
 
 clean:
 	rm -rf build

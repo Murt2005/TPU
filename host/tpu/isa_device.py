@@ -67,9 +67,14 @@ class BoardConsole:
     gets to a root shell, silences kernel messages, mounts the SD card's boot
     partition (where the programs live), then starts one and syncs on its echo"""
 
-    def __init__(self, port, baud=115200):
+    BAUD = 115200
+    FAST_BAUD = 1562500     # 6.25 MHz / 4: the fastest the HPS UART and the CP2105 agree on
+    SETBAUD = "/mnt/boot/setbaud"
+
+    def __init__(self, port, baud=BAUD):
         import serial
         self._s = serial.Serial(port, baud, timeout=0.2)
+        self._recover()
         self._s.write(b"\x03")                   # abandon any half-typed line
         self._quiet()
         self._shell(b"")
@@ -77,6 +82,88 @@ class BoardConsole:
         self._shell(b"dmesg -n 1")              # kernel messages would corrupt the stream
         self._shell(b"mkdir -p /mnt/boot; grep -q /mnt/boot /proc/mounts || mount /dev/mmcblk0p1 /mnt/boot")
         self._quiet()
+
+    def _alive(self):
+        self._s.reset_input_buffer()
+        self._s.write(b"\x03\recho ALIVE_$((40+2))\r")
+        time.sleep(0.6)
+        return b"ALIVE_42" in self._s.read(4096)
+
+    def _recover(self):
+        """a session that died at the fast rate leaves the console there"""
+        if self._alive():
+            return
+        self._s.baudrate = self.FAST_BAUD
+        if self._alive():
+            self._s.write(b"stty sane 115200\r")
+            self._s.flush()
+            time.sleep(0.5)
+        self._s.baudrate = self.BAUD
+        self._quiet()
+
+    def run(self, cmdline, wait=1.0):
+        """a shell command's output, as text"""
+        self._s.reset_input_buffer()
+        self._s.write(cmdline.encode() + b"\r")
+        time.sleep(wait)
+        out = b""
+        while True:
+            chunk = self._s.read(65536)
+            out += chunk
+            if not chunk:
+                break
+        return out.decode(errors="replace")
+
+    def set_baud(self, rate):
+        """both ends to `rate`; needs setbaud on the board for rates above 921600"""
+        self._s.write(f"{self.SETBAUD} {rate}\r".encode())
+        self._s.flush()
+        time.sleep(0.4)
+        self._s.baudrate = rate
+        time.sleep(0.1)
+        self._quiet(0.3)
+
+    def upload(self, local, remote, fast=True):
+        """copy a file to the board (the HPS has no Ethernet here): the shell's tty
+        goes raw and `dd` takes the bytes unescaped and unechoed, at the fast
+        rate when setbaud is there. written as .part, renamed once the md5 matches"""
+        import hashlib
+        data = open(local, "rb").read()
+        if fast:
+            self.set_baud(self.FAST_BAUD)
+        try:
+            self.run(f"rm -f {remote}.part", 0.3)
+            self._quiet(0.5)
+            # wait until the shell has the line (its echo), then for stty to make the tty raw
+            # this busybox's head has no -c; dd bs=1 counts bytes exactly on a raw tty
+            self.launch(f"stty raw -echo; dd of={remote}.part bs=1 count={len(data)} 2>/dev/null; "
+                        f"stty sane")
+            self._s.timeout = 0.2               # launch() left it long; the prompt wait polls
+            time.sleep(0.3)
+            self._s.reset_input_buffer()
+            self._s.write(data)
+            self._s.flush()
+            self._wait_prompt(timeout=30.0 + len(data) / 10000)
+            md5 = hashlib.md5(data).hexdigest()
+            out = self.run(f"md5sum {remote}.part", 1.0)
+            if md5 not in out:
+                raise RuntimeError(f"upload of {local}: md5 mismatch ({out!r})")
+            self.run(f"mv {remote}.part {remote}; chmod +x {remote}; sync", 1.0)
+        except Exception:
+            self._s.write(b"\x03\x04\rstty sane\r")
+            raise
+        finally:
+            self._s.timeout = 0.2
+            if fast:
+                self.set_baud(self.BAUD)
+
+    def _wait_prompt(self, timeout=10.0):
+        buf = b""
+        end = time.time() + timeout
+        while not buf.rstrip().endswith(b"#") and time.time() < end:
+            buf += self._s.read(4096)
+        if not buf.rstrip().endswith(b"#"):
+            raise RuntimeError(f"no shell prompt: {buf[-100:]!r}")
 
     def launch(self, cmdline, timeout=10.0):
         """start a program; afterwards the line is raw binary to and from it"""

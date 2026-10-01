@@ -4,8 +4,10 @@
  *   mnist_tpu bench <model.bin> <testset.bin> [count]
  *       every test image at m=1 and m=8: accuracy, exact agreement with the
  *       reference model, preprocessing agreement with the host, wall time
- *   mnist_tpu serve <model.bin>
- *       for the drawing GUI over the console: 'I' + 784 pixels -> 'R' + digit +
+ *   mnist_tpu serve <model.bin> [baud]
+ *       for the drawing GUI over the console, optionally switching it to `baud`
+ *       for the session (1562500 is the fastest the HPS UART and the CP2105
+ *       agree on): 'S' when ready, then 'I' + 784 pixels -> 'R' + digit +
  *       10 int32 scores + u32 microseconds, digit shown on HEX0; 'C' blanks the
  *       display -> 'K'; 'Q' quits
  *
@@ -296,6 +298,32 @@ static void put(const void *b, size_t n) {
     }
 }
 
+/* any baud through termios2/BOTHER (busybox stty stops at 921600). declared here:
+ * the kernel's struct termios clashes with glibc's */
+#ifndef SIM
+#include <sys/ioctl.h>
+struct termios2_k {
+    uint32_t c_iflag, c_oflag, c_cflag, c_lflag;
+    uint8_t c_line, c_cc[19];
+    uint32_t c_ispeed, c_ospeed;
+};
+#define K_TCGETS2  _IOR('T', 0x2A, struct termios2_k)
+#define K_TCSETSW2 _IOW('T', 0x2C, struct termios2_k)
+#define K_CBAUD    0010017u
+#define K_BOTHER   0010000u
+#define K_IBSHIFT  16
+static int set_baud(uint32_t rate) {
+    struct termios2_k t;
+    if (ioctl(0, K_TCGETS2, &t)) return -1;
+    t.c_cflag &= ~(K_CBAUD | (K_CBAUD << K_IBSHIFT));
+    t.c_cflag |= K_BOTHER | (K_BOTHER << K_IBSHIFT);
+    t.c_ispeed = t.c_ospeed = rate;
+    return ioctl(0, K_TCSETSW2, &t);
+}
+#else
+static int set_baud(uint32_t rate) { (void)rate; return 0; }
+#endif
+
 static uint32_t hex_digit(uint32_t d) {
     uint32_t code = 0;
     for (int i = 5; i >= 1; i--) code = code << 5 | HEX_BLANK;
@@ -308,10 +336,15 @@ static uint32_t hex_dashes(void) {
     return code;
 }
 
-static int serve(const model_t *md) {
+static int serve(const model_t *md, uint32_t baud) {
     struct termios saved, raw;
     int tty = isatty(0) && tcgetattr(0, &saved) == 0;
     if (tty) { raw = saved; cfmakeraw(&raw); tcsetattr(0, TCSANOW, &raw); }
+    if (tty && baud) {
+        if (set_baud(baud)) { tcsetattr(0, TCSANOW, &saved); return 1; }
+        usleep(200000);                            /* the host switches its side meanwhile */
+        tcflush(0, TCIFLUSH);
+    }
     tpu_init(md);
     hex_set(hex_dashes());
     put("S", 1);                                   /* ready */
@@ -334,13 +367,13 @@ static int serve(const model_t *md) {
         put(scores, 4 * md->n_out);
         put(&us, 4);
     }
-    if (tty) tcsetattr(0, TCSANOW, &saved);
+    if (tty) tcsetattr(0, TCSADRAIN, &saved);       /* the saved speed included */
     return 0;
 }
 
 int main(int argc, char **argv) {
     if (argc < 3) {
-        fprintf(stderr, "usage: %s bench <model.bin> <testset.bin> [count] | serve <model.bin>\n", argv[0]);
+        fprintf(stderr, "usage: %s bench <model.bin> <testset.bin> [count] | serve <model.bin> [baud]\n", argv[0]);
         return 1;
     }
     model_t md = {0};
@@ -350,7 +383,7 @@ int main(int argc, char **argv) {
     if (!strcmp(argv[1], "bench") && argc >= 4)
         rc = bench(&md, argv[3], argc > 4 ? (uint32_t)atoi(argv[4]) : 0);
     else if (!strcmp(argv[1], "serve"))
-        rc = serve(&md);
+        rc = serve(&md, argc > 3 ? (uint32_t)strtoul(argv[3], 0, 10) : 0);
     else
         rc = 1;
     reg_close();

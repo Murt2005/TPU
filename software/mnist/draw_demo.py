@@ -82,10 +82,16 @@ class De1SocBoard:
     28x28 drawing goes to the board, which downsamples, quantizes, runs both layers
     on the TPU and lights the digit on HEX0. clear() puts dashes back"""
 
-    def __init__(self, port, program="/mnt/boot/mnist_tpu", model="/mnt/boot/model.bin"):
+    def __init__(self, port, baud=115200, program="/mnt/boot/mnist_tpu", model="/mnt/boot/model.bin"):
         from tpu.isa_device import BoardConsole
         self.con = BoardConsole(port)
-        self.con.launch(f"{program} serve {model}", timeout=20.0)
+        if baud == BoardConsole.BAUD:
+            self.con.launch(f"{program} serve {model}", timeout=20.0)
+        else:
+            # the board switches its side for the session, then says 'S' at the new rate
+            self.con.launch(f"{program} serve {model} {baud}", timeout=20.0)
+            self.con._s.baudrate = baud
+        self.baud = baud
         if self.con.read(1) != b"S":
             raise RuntimeError("mnist_tpu didn't start on the board")
         self.last_us = None
@@ -106,7 +112,11 @@ class De1SocBoard:
         self.con.read(1)
 
     def close(self):
-        self.con.close(b"Q")
+        self.con.write(b"Q")
+        self.con._s.flush()
+        time.sleep(0.3)                 # the board restores 115200 as it exits
+        self.con._s.baudrate = 115200
+        self.con.close(None)
 
 
 class DrawApp:
@@ -203,6 +213,9 @@ def main():
     p.add_argument("--de1soc", metavar="PORT",
                    help="the DE1-SoC's HPS console (the CP2105 'Enhanced' port); the board runs "
                         "the inference on its TPU and shows the digit on the HEX displays")
+    p.add_argument("--baud", type=int, default=115200,
+                   help="console rate for the --de1soc session: 115200 (default) or 1562500, "
+                        "the fastest the HPS UART and the CP2105 agree on (13.6x)")
     p.add_argument("--rows", type=int, default=2,
                     help="ARRAY_ROWS the flashed bitstream was built with (default 2)")
     p.add_argument("--cols", type=int, default=2,
@@ -214,7 +227,7 @@ def main():
     args = p.parse_args()
 
     if args.de1soc:
-        board = De1SocBoard(args.de1soc)
+        board = De1SocBoard(args.de1soc, baud=args.baud)
         root = tk.Tk()
         try:
             DrawApp(root, board, title="MNIST on the DE1-SoC TPU (8x8)", board=board)
