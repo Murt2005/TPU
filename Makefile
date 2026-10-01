@@ -31,12 +31,15 @@ include mk/sim.mk
 include mk/verilator.mk
 include mk/hw.mk
 include mk/isa.mk
+include mk/unit.mk
 
 list:
-	@echo "Available tests (tests/sv/<name>_tb.sv):"
+	@echo "Unit benches (tests/unit/<name>_tb.sv):"
+	@for t in $(UNIT_TESTS); do echo "  make unit-$$t"; done
+	@echo "Legacy peripheral benches (tests/sv/<name>_tb.sv, Icarus):"
 	@for t in $(TESTS); do echo "  make test-$$t"; done
 	@echo ""
-	@echo "Other targets: make test | make build-<name> | make wave-<name> | make lint |"
+	@echo "Other targets: make test (unit + legacy) | make unit | make lint |"
 	@echo "  make isa-test | make isa-sim | make isa-selftest-rom | make isa-selftest-sim |"
 	@echo "  make hw-test PORT=... [CONFIG=<name>] | make host-flags CONFIG=<name> | make clean"
 

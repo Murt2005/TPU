@@ -1,14 +1,11 @@
 # what each module instantiates; update when instantiations change
 RTL_fifo                 := $(CORE_DIR)/fifo.sv
-RTL_systolic_data_setup  := $(CORE_DIR)/systolic_data_setup.sv
 RTL_uart_rx              := $(PERIPH_DIR)/uart_rx.sv
 RTL_uart_tx              := $(PERIPH_DIR)/uart_tx.sv
 RTL_spi_slave            := $(PERIPH_DIR)/spi_slave.sv $(RTL_fifo)
 RTL_hps_bridge           := $(PERIPH_DIR)/hps_bridge.sv
 
 # one DEPS_<name> per tests/sv/<name>_tb.sv
-DEPS_fifo                 := $(RTL_fifo)
-DEPS_systolic_data_setup  := $(RTL_systolic_data_setup)
 DEPS_uart_rx              := $(RTL_uart_rx)
 DEPS_uart_tx              := $(RTL_uart_tx)
 DEPS_spi_slave            := $(RTL_spi_slave)
@@ -38,10 +35,13 @@ wave-$(1): test-$(1)
 endef
 $(foreach t,$(TESTS),$(eval $(call RUN_RULE,$(t))))
 
-test: | $(LOG_DIR)
+# the unit benches, then the legacy peripheral benches (removed with the pico2-ice)
+test: unit legacy-test
+
+legacy-test: | $(LOG_DIR)
 	@./run_tests.sh
 
 print-tests:
 	@echo $(TESTS)
 
-.PHONY: test print-tests $(foreach t,$(TESTS),test-$(t) build-$(t) wave-$(t))
+.PHONY: test legacy-test print-tests $(foreach t,$(TESTS),test-$(t) build-$(t) wave-$(t))
