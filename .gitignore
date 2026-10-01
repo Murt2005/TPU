@@ -62,3 +62,4 @@ boards/de1soc/fpga/selftest/c5_pin_model_dump.txt
 boards/de1soc/fpga/hps/build/
 boards/de1soc/sw/isa_mmio
 software/mnist/de1soc/build/
+boards/de1soc/fpga/hps/build.log
