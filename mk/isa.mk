@@ -1,10 +1,5 @@
-# instruction-stream core (DE1-SoC spec)
-ISA_RTL := rtl/isa/isa_pkg.sv \
-           $(CORE_DIR)/fifo.sv $(CORE_DIR)/systolic_data_setup.sv \
-           rtl/isa/isa_pe.sv rtl/isa/isa_array.sv \
-           rtl/isa/isa_dispatch.sv rtl/isa/isa_ld.sv rtl/isa/isa_wt.sv \
-           rtl/isa/isa_mm.sv rtl/isa/isa_act.sv rtl/isa/isa_core.sv \
-           $(PERIPH_DIR)/isa_bridge.sv $(HPS_DIR)/tpu_isa_top.sv
+# the core against its reference model (CORE_RTL is in the Makefile)
+ISA_RTL := $(CORE_RTL)
 
 ISA_N           ?= 8
 ISA_WMEM_ROWS   ?= 8192
@@ -20,7 +15,7 @@ isa-model-test:
 isa-sim: | $(SIM_DIR)
 	@mkdir -p $(ISA_SIM_DIR)
 	@$(VERILATOR) --cc --exe --build -j 0 -Wall --Mdir $(ISA_SIM_DIR) verilator.vlt \
-		--top-module tpu_isa_top \
+		--top-module tpu_top \
 		-GN=$(ISA_N) -GWMEM_ROWS=$(ISA_WMEM_ROWS) -GUB_DEPTH=$(ISA_UB_DEPTH) \
 		-GACC_DEPTH=$(ISA_ACC_DEPTH) -GPARAM_DEPTH=$(ISA_PARAM_DEPTH) \
 		-CFLAGS "-std=c++17 -DTB_N=$(ISA_N) -DTB_WMEM_ROWS=$(ISA_WMEM_ROWS) \
@@ -36,9 +31,7 @@ isa-test: isa-model-test
 	@$(MAKE) --no-print-directory isa-rtl-test ISA_N=8
 	@$(MAKE) --no-print-directory isa-rtl-test ISA_N=4
 
-isa-lint:
-	@$(VERILATOR) --lint-only -Wall --timing -sv verilator.vlt $(ISA_RTL) --top-module tpu_isa_top
-	@echo "isa-lint: clean"
+isa-lint: lint
 
 .PHONY: isa-model-test isa-sim isa-rtl-test isa-test isa-lint
 
@@ -56,8 +49,8 @@ isa-selftest-rom:
 isa-selftest-sim: isa-selftest-rom | $(SIM_DIR)
 	@mkdir -p $(dir $(ISA_ST_SIM))
 	@$(VERILATOR) --cc --exe --build -j 0 -Wall --Mdir $(dir $(ISA_ST_SIM)) verilator.vlt \
-		--top-module tpu_isa_selftest -GN=$(ISA_N) -GROM_FILE='"$(abspath $(ISA_ST_HEX))"' \
-		-CFLAGS -std=c++17 $(ISA_RTL) $(HPS_DIR)/isa_replay.sv $(HPS_DIR)/tpu_isa_selftest.sv \
+		--top-module tpu_selftest -GN=$(ISA_N) -GROM_FILE='"$(abspath $(ISA_ST_HEX))"' \
+		-CFLAGS -std=c++17 $(ISA_RTL) $(HPS_DIR)/replay.sv $(HPS_DIR)/tpu_selftest.sv \
 		$(TEST_DIR)/verilator/tb_isa_selftest.cpp -o tb_isa_selftest > /dev/null
 	@$(ISA_ST_SIM) $(ISA_ST_SLOTS)
 

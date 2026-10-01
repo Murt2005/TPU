@@ -1,137 +1,89 @@
 `timescale 1ns / 1ps
 
-// matrix multiply unit (MMU)
+// N x N grid of pe. activations enter row r at column 0 already skewed by r;
+// the row-select weight bus is skewed here, column c by c cycles, so a tile's
+// weight row lands in each column exactly as far ahead of its flip
 module mmu #(
-    parameter int ARRAY_ROWS = 2,
-    parameter int NUM_COLS   = 2,
-    parameter int DATA_WIDTH = 8,
-    parameter int PSUM_WIDTH = 16,
-    parameter int USE_MAC16_PAIR = 0
+    parameter int N = 8
 ) (
-    input logic clk,
-    input logic reset,
-    input logic loading_phase,
+    input  logic                      clk,
+    input  logic                      reset,
 
-    input logic [NUM_COLS-1:0] capture_weight_col,
+    input  logic signed [N-1:0][7:0]  act,
+    input  logic        [N-1:0]       act_first,
+    input  logic        [N-1:0]       act_valid,
 
-    input logic signed [ARRAY_ROWS-1:0][DATA_WIDTH-1:0] in_row,
-    input logic        [ARRAY_ROWS-1:0]                 in_row_valid,
+    input  logic                      wvalid,
+    input  logic [$clog2(N)-1:0]      wrow,
+    input  logic signed [N-1:0][7:0]  wdata,
 
-    input logic signed [NUM_COLS-1:0][DATA_WIDTH-1:0] in_col,
-    input logic        [NUM_COLS-1:0]                 in_col_valid,
-
-    output logic signed [NUM_COLS-1:0][PSUM_WIDTH-1:0] out_partial_sum,
-    output logic        [NUM_COLS-1:0]                 out_partial_sum_valid
+    output logic signed [N-1:0][31:0] psum,
+    output logic        [N-1:0]       psum_valid
 );
 
-    logic signed [DATA_WIDTH-1:0] act_in  [ARRAY_ROWS][NUM_COLS];
-    logic                         act_in_valid [ARRAY_ROWS][NUM_COLS];
-    logic signed [DATA_WIDTH-1:0] act_out [ARRAY_ROWS][NUM_COLS];
-    logic                         act_out_valid [ARRAY_ROWS][NUM_COLS];
+    localparam int RW = $clog2(N);
 
-    logic signed [DATA_WIDTH-1:0] weight_in  [ARRAY_ROWS][NUM_COLS];
-    logic                         weight_in_valid [ARRAY_ROWS][NUM_COLS];
-    logic signed [DATA_WIDTH-1:0] weight_out [ARRAY_ROWS][NUM_COLS];
-    logic                         weight_out_valid [ARRAY_ROWS][NUM_COLS];
-
-    logic signed [PSUM_WIDTH-1:0] psum_in  [ARRAY_ROWS][NUM_COLS];
-    logic                         psum_in_valid [ARRAY_ROWS][NUM_COLS];
-    logic signed [PSUM_WIDTH-1:0] psum_out [ARRAY_ROWS][NUM_COLS];
-    logic                         psum_out_valid [ARRAY_ROWS][NUM_COLS];
+    // per-column weight bus after the column skew
+    logic              cw_valid [N];
+    logic [RW-1:0]     cw_row   [N];
+    logic signed [7:0] cw_data  [N];
 
     genvar r, c;
     generate
-        for (r = 0; r < ARRAY_ROWS; r++) begin : gen_act_row
-            assign act_in[r][0]       = in_row[r];
-            assign act_in_valid[r][0] = in_row_valid[r];
-            for (c = 1; c < NUM_COLS; c++) begin : gen_act_col
-                assign act_in[r][c]       = act_out[r][c-1];
-                assign act_in_valid[r][c] = act_out_valid[r][c-1];
-            end
-        end
-
-        for (c = 0; c < NUM_COLS; c++) begin : gen_col_boundary
-            assign weight_in[0][c]       = in_col[c];
-            assign weight_in_valid[0][c] = in_col_valid[c];
-            assign psum_in[0][c]         = '0;
-            assign psum_in_valid[0][c]   = 1'b0;
-            for (r = 1; r < ARRAY_ROWS; r++) begin : gen_weight_psum_row
-                assign weight_in[r][c]       = weight_out[r-1][c];
-                assign weight_in_valid[r][c] = weight_out_valid[r-1][c];
-                assign psum_in[r][c]         = psum_out[r-1][c];
-                assign psum_in_valid[r][c]   = psum_out_valid[r-1][c];
-            end
-            assign out_partial_sum[c]       = psum_out[ARRAY_ROWS-1][c];
-            assign out_partial_sum_valid[c] = psum_out_valid[ARRAY_ROWS-1][c];
-        end
-
-        if (USE_MAC16_PAIR != 0) begin : gen_pair_rows
-            if (ARRAY_ROWS % 2 != 0) begin : gen_odd_rows_check
-                $error("USE_MAC16_PAIR requires even ARRAY_ROWS (got %0d)", ARRAY_ROWS);
-            end
-            if (PSUM_WIDTH != 16) begin : gen_pair_width_check
-                $error("USE_MAC16_PAIR requires PSUM_WIDTH=16 (got %0d)", PSUM_WIDTH);
-            end
-            for (r = 0; r < ARRAY_ROWS; r += 2) begin : gen_row
-                for (c = 0; c < NUM_COLS; c++) begin : gen_col
-                    pe_pair pe_pair_inst (
-                        .clk(clk),
-                        .reset(reset),
-                        .loading_phase(loading_phase),
-                        .capture_weight(capture_weight_col[c]),
-
-                        .in_activation_t(act_in[r][c]),
-                        .in_activation_valid_t(act_in_valid[r][c]),
-                        .out_activation_t(act_out[r][c]),
-                        .out_activation_valid_t(act_out_valid[r][c]),
-                        .in_partial_sum_t(psum_in[r][c]),
-                        .in_partial_sum_valid_t(psum_in_valid[r][c]),
-                        .out_partial_sum_t(psum_out[r][c]),
-                        .out_partial_sum_valid_t(psum_out_valid[r][c]),
-                        .in_weight_t(weight_in[r][c]),
-                        .in_weight_valid_t(weight_in_valid[r][c]),
-                        .out_weight_t(weight_out[r][c]),
-                        .out_weight_valid_t(weight_out_valid[r][c]),
-
-                        .in_activation_b(act_in[r+1][c]),
-                        .in_activation_valid_b(act_in_valid[r+1][c]),
-                        .out_activation_b(act_out[r+1][c]),
-                        .out_activation_valid_b(act_out_valid[r+1][c]),
-                        .in_partial_sum_b(psum_in[r+1][c]),
-                        .in_partial_sum_valid_b(psum_in_valid[r+1][c]),
-                        .out_partial_sum_b(psum_out[r+1][c]),
-                        .out_partial_sum_valid_b(psum_out_valid[r+1][c]),
-                        .in_weight_b(weight_in[r+1][c]),
-                        .in_weight_valid_b(weight_in_valid[r+1][c]),
-                        .out_weight_b(weight_out[r+1][c]),
-                        .out_weight_valid_b(weight_out_valid[r+1][c])
-                    );
+        for (c = 0; c < N; c++) begin : g_wskew
+            if (c == 0) begin : g_direct
+                assign cw_valid[c] = wvalid;
+                assign cw_row[c]   = wrow;
+                assign cw_data[c]  = wdata[c];
+            end else begin : g_delay
+                logic              dv [c];
+                logic [RW-1:0]     dr [c];
+                logic signed [7:0] dd [c];
+                always_ff @(posedge clk) begin
+                    if (reset) begin
+                        for (int i = 0; i < c; i++) dv[i] <= 1'b0;
+                    end else begin
+                        dv[0] <= wvalid;
+                        for (int i = 1; i < c; i++) dv[i] <= dv[i-1];
+                    end
+                    dr[0] <= wrow;
+                    dd[0] <= wdata[c];
+                    for (int i = 1; i < c; i++) begin
+                        dr[i] <= dr[i-1];
+                        dd[i] <= dd[i-1];
+                    end
                 end
+                assign cw_valid[c] = dv[c-1];
+                assign cw_row[c]   = dr[c-1];
+                assign cw_data[c]  = dd[c-1];
             end
-        end else begin : gen_pe_rows
-            for (r = 0; r < ARRAY_ROWS; r++) begin : gen_row
-                for (c = 0; c < NUM_COLS; c++) begin : gen_col
-                    pe #(.PSUM_WIDTH(PSUM_WIDTH)) pe_inst (
-                        .clk(clk),
-                        .reset(reset),
+        end
 
-                        .in_activation(act_in[r][c]),
-                        .in_activation_valid(act_in_valid[r][c]),
-                        .out_activation(act_out[r][c]),
-                        .out_activation_valid(act_out_valid[r][c]),
-
-                        .in_partial_sum(psum_in[r][c]),
-                        .in_partial_sum_valid(psum_in_valid[r][c]),
-                        .out_partial_sum(psum_out[r][c]),
-                        .out_partial_sum_valid(psum_out_valid[r][c]),
-
-                        .loading_phase(loading_phase),
-                        .capture_weight(capture_weight_col[c]),
-                        .in_weight(weight_in[r][c]),
-                        .in_weight_valid(weight_in_valid[r][c]),
-                        .out_weight(weight_out[r][c]),
-                        .out_weight_valid(weight_out_valid[r][c])
-                    );
+        for (r = 0; r < N; r++) begin : g_row
+            logic signed [7:0]  a  [N+1];
+            logic               f  [N+1];
+            logic               v  [N+1];
+            assign a[0] = act[r];
+            assign f[0] = act_first[r];
+            assign v[0] = act_valid[r];
+            for (c = 0; c < N; c++) begin : g_col
+                logic signed [31:0] p;
+                logic               pv;
+                logic signed [31:0] pin;
+                if (r == 0) begin : g_top
+                    assign pin = '0;
+                end else begin : g_mid
+                    assign pin = g_row[r-1].g_col[c].p;
+                end
+                pe u_pe (
+                    .clk(clk), .reset(reset),
+                    .act_in(a[c]), .first_in(f[c]), .act_valid_in(v[c]), .psum_in(pin),
+                    .wsel(cw_valid[c] && cw_row[c] == RW'(r)), .wdata(cw_data[c]),
+                    .act_out(a[c+1]), .first_out(f[c+1]), .act_valid_out(v[c+1]),
+                    .psum_out(p), .psum_valid(pv));
+                if (r == N - 1) begin : g_out
+                    assign psum[c]       = p;
+                    assign psum_valid[c] = pv;
                 end
             end
         end

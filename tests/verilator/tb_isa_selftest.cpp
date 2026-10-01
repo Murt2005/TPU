@@ -1,10 +1,10 @@
-// runs tpu_isa_selftest until its replay finishes, reports what the board's
+// runs tpu_selftest until its replay finishes, reports what the board's
 // LEDs and HEX displays would show, then reads every capture slot back through
 // SW9 + SW4..0 and the six HEX digits, exactly as a person at the board would
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
-#include "Vtpu_isa_selftest.h"
+#include "Vtpu_selftest.h"
 #include "verilated.h"
 
 static int unseg(int s) {
@@ -18,7 +18,7 @@ static int unseg(int s) {
 int main(int argc, char** argv) {
     auto ctx = std::make_unique<VerilatedContext>();
     ctx->commandArgs(argc, argv);
-    auto dut = std::make_unique<Vtpu_isa_selftest>(ctx.get());
+    auto dut = std::make_unique<Vtpu_selftest>(ctx.get());
     auto tick = [&] { dut->CLOCK_50 = 0; dut->eval(); dut->CLOCK_50 = 1; dut->eval(); };
     dut->KEY = 0xF;
     dut->SW = 0;

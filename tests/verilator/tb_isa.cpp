@@ -1,13 +1,13 @@
-// tpu_isa_top as a register-level transport for host/tpu/isa_device.py.
+// tpu_top as a register-level transport for host/tpu/isa_device.py.
 // stdin carries 'W' addr u32 (write, no reply), 'R' addr (read, 4-byte reply)
 // and 'Q' (quit); on start it writes its build parameters as 5 u32 words
 #include <cstdint>
 #include <cstdio>
 #include <memory>
-#include "Vtpu_isa_top.h"
+#include "Vtpu_top.h"
 #include "verilated.h"
 
-static std::unique_ptr<Vtpu_isa_top> dut;
+static std::unique_ptr<Vtpu_top> dut;
 
 static void tick() {
     dut->clk = 0;
@@ -24,7 +24,7 @@ static void put32(uint32_t v) {
 
 int main(int argc, char** argv) {
     Verilated::commandArgs(argc, argv);
-    dut = std::make_unique<Vtpu_isa_top>();
+    dut = std::make_unique<Vtpu_top>();
     dut->reset_n = 0;
     dut->avs_read = 0;
     dut->avs_write = 0;

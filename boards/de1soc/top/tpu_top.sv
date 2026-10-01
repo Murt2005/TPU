@@ -1,7 +1,7 @@
 `timescale 1ns / 1ps
 
-// DE1-SoC instruction-stream top: isa_bridge + isa_core + power-on reset
-module tpu_isa_top #(
+// DE1-SoC top: host_bridge + tpu_core + power-on reset
+module tpu_top #(
     parameter int N           = 8,
     parameter int WMEM_ROWS   = 8192,
     parameter int UB_DEPTH    = 16384,
@@ -43,7 +43,7 @@ module tpu_isa_top #(
     logic [9:0]  insn_free;
     logic [10:0] data_free, out_count;
 
-    isa_bridge u_bridge (
+    host_bridge u_bridge (
         .clk(clk), .reset(rst),
         .avs_address(avs_address), .avs_read(avs_read), .avs_readdata(avs_readdata),
         .avs_write(avs_write), .avs_writedata(avs_writedata), .avs_waitrequest(avs_waitrequest),
@@ -56,7 +56,7 @@ module tpu_isa_top #(
         .perf_cycles(perf_cycles), .perf_mm_beats(perf_mm_beats),
         .perf_mm_wstall(perf_mm_wstall), .perf_mm_sync(perf_mm_sync));
 
-    isa_core #(.N(N), .WMEM_ROWS(WMEM_ROWS), .UB_DEPTH(UB_DEPTH), .ACC_DEPTH(ACC_DEPTH),
+    tpu_core #(.N(N), .WMEM_ROWS(WMEM_ROWS), .UB_DEPTH(UB_DEPTH), .ACC_DEPTH(ACC_DEPTH),
                .PARAM_DEPTH(PARAM_DEPTH)) u_core (
         .clk(clk), .reset(rst | core_reset),
         .insn_push(insn_push), .insn_word(insn_word), .insn_full(insn_full),

@@ -1,9 +1,9 @@
 `timescale 1ns / 1ps
 
-import isa_pkg::*;
+import tpu_pkg::*;
 
 // LD engine: data FIFO words -> WMEM, UB, bias and quant tables
-module isa_ld #(
+module ld_engine #(
     parameter int N        = 8,
     parameter int WMEM_AW  = 13,
     parameter int UB_AW    = 14,

@@ -8,29 +8,19 @@ IFLAGS    := -g2012 -Wall
 
 CORE_DIR   := rtl/core
 PERIPH_DIR := rtl/peripherals
-PICO_DIR   := boards/pico2-ice/top
 HPS_DIR    := boards/de1soc/top
 TEST_DIR   := tests
 TB_DIR     := $(TEST_DIR)/sv
 SIM_DIR    := sim
 LOG_DIR    := $(SIM_DIR)/logs
 
-# yosys's own SB_MAC16 model, so pe_pair simulates against what synthesis maps to
-# extracted because verilator rejects other constructs in cells_sim.v
-CELLS_SIM    := $(shell yosys-config --datdir)/ice40/cells_sim.v
-SB_MAC16_SIM := $(SIM_DIR)/sb_mac16_sim.v
-
-$(SB_MAC16_SIM): $(CELLS_SIM) | $(SIM_DIR)
-	echo '`timescale 1ns / 1ps' > $@
-	sed -n '/^module SB_MAC16/,/^endmodule/p' $< >> $@
-	@grep -q endmodule $@ || { echo "SB_MAC16 extraction from $< failed"; rm -f $@; exit 1; }
-
-# tpu_pkg.sv first: the sequencer imports it
-SHARED_RTL := $(CORE_DIR)/tpu_pkg.sv \
-              $(filter-out $(CORE_DIR)/tpu_pkg.sv,$(wildcard $(CORE_DIR)/*.sv)) \
-              $(wildcard $(PERIPH_DIR)/*.sv)
-PICO_RTL   := $(SB_MAC16_SIM) $(SHARED_RTL) $(wildcard $(PICO_DIR)/*.sv)
-HPS_RTL    := $(SHARED_RTL) $(wildcard $(HPS_DIR)/*.sv)
+# the core, in compile order: tpu_pkg first (everything imports it)
+CORE_RTL := $(CORE_DIR)/tpu_pkg.sv $(CORE_DIR)/fifo.sv $(CORE_DIR)/systolic_data_setup.sv \
+            $(CORE_DIR)/pe.sv $(CORE_DIR)/mmu.sv $(CORE_DIR)/weight_fifo.sv \
+            $(CORE_DIR)/unified_buffer.sv $(CORE_DIR)/accumulator.sv $(CORE_DIR)/bias.sv \
+            $(CORE_DIR)/activation.sv $(CORE_DIR)/dispatch.sv $(CORE_DIR)/ld_engine.sv \
+            $(CORE_DIR)/wt_engine.sv $(CORE_DIR)/mm_engine.sv $(CORE_DIR)/act_engine.sv \
+            $(CORE_DIR)/tpu_core.sv $(PERIPH_DIR)/host_bridge.sv $(HPS_DIR)/tpu_top.sv
 
 all: test
 
@@ -47,7 +37,7 @@ list:
 	@for t in $(TESTS); do echo "  make test-$$t"; done
 	@echo ""
 	@echo "Other targets: make test | make build-<name> | make wave-<name> | make lint |"
-	@echo "  make check-protocol | make verilate-test | make sim-bridge |"
+	@echo "  make isa-test | make isa-sim | make isa-selftest-rom | make isa-selftest-sim |"
 	@echo "  make hw-test PORT=... [CONFIG=<name>] | make host-flags CONFIG=<name> | make clean"
 
 clean:

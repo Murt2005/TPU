@@ -1,12 +1,13 @@
 `timescale 1ns / 1ps
 
-import isa_pkg::*;
+import tpu_pkg::*;
 
 // MM engine: overlapped tiles. each window of max(m, N) cycles streams one tile's
 // m activation rows and, in its last N cycles, the next tile's weight rows into
 // w_next; the next tile's first row flips them in. a missing tile freezes the
-// whole window (WSTALL), which only ever widens the gaps the PEs rely on
-module isa_mm #(
+// whole window (WSTALL), which only ever widens the gaps the PEs rely on.
+// control only: tpu_core wires the UB, systolic data setup, mmu and accumulator
+module mm_engine #(
     parameter int N      = 8,
     parameter int UB_AW  = 14,
     parameter int ACC_AW = 10
@@ -20,20 +21,22 @@ module isa_mm #(
     input  logic [63:0]           completed,
     output logic                  done_pulse,
 
-    input  logic [N-1:0][N*8-1:0] slot,
-    input  logic                  slot_full,
-    output logic                  slot_take,
+    input  logic [N-1:0][N*8-1:0] tile,            // weight_fifo
+    input  logic                  tile_full,
+    output logic                  tile_take,
 
     output logic                  ub_re,           // always granted
     output logic [UB_AW-1:0]      ub_raddr,
-    input  logic [N*8-1:0]        ub_rdata,
+    output logic                  act_valid,       // the UB row read last cycle goes in now
+    output logic                  act_first,       // ... and it's a tile's first row: flip
 
-    output logic                  acc_re,          // always granted
-    output logic [ACC_AW-1:0]     acc_raddr,
-    input  logic [N*32-1:0]       acc_rdata,
-    output logic                  acc_we,
-    output logic [ACC_AW-1:0]     acc_waddr,
-    output logic [N*32-1:0]       acc_wdata,
+    output logic                  wvalid,          // the next tile's weight row, onto the
+    output logic [$clog2(N)-1:0]  wrow,            // mmu's row-select bus
+    output logic signed [N-1:0][7:0] wdata,
+
+    output logic                  tag_push,        // accumulator: where each issued row goes
+    output logic [ACC_AW:0]       tag_in,
+    input  logic                  row_written,
 
     output logic                  perf_beat,
     output logic                  perf_wstall,
@@ -41,9 +44,7 @@ module isa_mm #(
     output logic                  idle
 );
 
-    localparam int SKEW_DEPTH = (2 * N <= 4) ? 4 : (2 * N <= 8) ? 8 : (2 * N <= 16) ? 16 : (2 * N <= 32) ? 32 : 64;
-    localparam int TAG_DEPTH  = 64;
-    localparam int RW         = $clog2(N);
+    localparam int RW = $clog2(N);
 
     logic [63:0] insn, snap;
     assign insn = q_data[63:0];
@@ -71,98 +72,28 @@ module isa_mm #(
     logic act_now, wt_now, freeze, go, win_end;
     assign act_now = have_acts && pos < m;
     assign wt_now  = have_wts && pos >= w_start;
-    assign freeze  = wt_now && !slot_full;
+    assign freeze  = wt_now && !tile_full;
     assign go      = state == S_RUN && !freeze;
     assign win_end = go && pos == len - 9'd1;
 
-    // -- array ------------------------------------------------------------
     logic                     ub_valid_q, first_q;
     logic                     wreg_valid;
     logic [RW-1:0]            wreg_row;
     logic signed [N-1:0][7:0] wreg_data;
     logic [RW-1:0]            wrow_now;
-    assign wrow_now = RW'(pos - w_start);
-
-    logic signed [N-1:0][8:0] sds_in, skewed;
-    logic        [N-1:0]      skewed_valid;
-    always_comb
-        for (int r = 0; r < N; r++)
-            sds_in[r] = {first_q, ub_rdata[8*r +: 8]};
-
-    systolic_data_setup #(.ARRAY_ROWS(N), .DATA_WIDTH(9)) u_sds (
-        .clk(clk), .reset(reset),
-        .ub_read_data(sds_in), .ub_read_valid(ub_valid_q),
-        .mmu_in_row(skewed), .mmu_in_valid(skewed_valid)
-    );
-
-    logic signed [N-1:0][7:0] arr_act;
-    logic        [N-1:0]      arr_first;
-    always_comb
-        for (int r = 0; r < N; r++) begin
-            arr_act[r]   = skewed[r][7:0];
-            arr_first[r] = skewed[r][8];
-        end
-
-    logic signed [N-1:0][31:0] psum;
-    logic        [N-1:0]       psum_valid;
-
-    isa_array #(.N(N)) u_array (
-        .clk(clk), .reset(reset),
-        .act(arr_act), .act_first(arr_first), .act_valid(skewed_valid),
-        .wvalid(wreg_valid), .wrow(wreg_row), .wdata(wreg_data),
-        .psum(psum), .psum_valid(psum_valid)
-    );
-
-    // -- column re-alignment + row tags -------------------------------------
-    logic [N-1:0]              col_empty;
-    logic signed [N-1:0][31:0] col_head;
-    logic                      row_pop;
-
-    genvar gc;
-    generate
-        for (gc = 0; gc < N; gc++) begin : g_col
-            fifo #(.WIDTH(32), .DEPTH(SKEW_DEPTH)) u_col (
-                .clk(clk), .reset(reset),
-                .write_enable(psum_valid[gc]), .write_data(psum[gc]),
-                .read_enable(row_pop), .read_data(col_head[gc]),
-                .full(), .empty(col_empty[gc])
-            );
-        end
-    endgenerate
-
-    logic                tag_push, tag_empty;
-    logic [ACC_AW:0]     tag_in, tag_head;     // {overwrite, acc_row}
-
-    fifo #(.WIDTH(ACC_AW + 1), .DEPTH(TAG_DEPTH)) u_tags (
-        .clk(clk), .reset(reset),
-        .write_enable(tag_push), .write_data(tag_in),
-        .read_enable(row_pop), .read_data(tag_head),
-        .full(), .empty(tag_empty)
-    );
-
-    assign row_pop = (col_empty == '0) && !tag_empty;
-
-    // read-modify-write: read at pop, add and write back the next cycle. the same
-    // ACC row comes round again at most once per window (>= N >= 2 cycles), so
-    // the write always lands before the next read
-    logic                  s1_valid, s1_ow;
-    logic [ACC_AW-1:0]     s1_addr;
-    logic [N*32-1:0]       s1_psum;
-
-    assign acc_re    = row_pop && !tag_head[ACC_AW];
-    assign acc_raddr = tag_head[ACC_AW-1:0];
-    assign acc_we    = s1_valid;
-    assign acc_waddr = s1_addr;
-    always_comb
-        for (int c = 0; c < N; c++)
-            acc_wdata[32*c +: 32] = s1_ow ? s1_psum[32*c +: 32] : acc_rdata[32*c +: 32] + s1_psum[32*c +: 32];
+    assign wrow_now  = RW'(pos - w_start);
+    assign act_valid = ub_valid_q;
+    assign act_first = first_q;
+    assign wvalid    = wreg_valid;
+    assign wrow      = wreg_row;
+    assign wdata     = wreg_data;
 
     // -- control -----------------------------------------------------------
     assign ub_re     = go && act_now;
     assign ub_raddr  = UB_AW'(chunk_base + 16'(pos));
     assign tag_push  = ub_re;
     assign tag_in    = {(k == 13'd0) && !acc_flag, ACC_AW'(acc_base + 16'(pos))};
-    assign slot_take = go && wt_now && pos == len - 9'd1;
+    assign tile_take = go && wt_now && pos == len - 9'd1;
 
     logic wait_ok;
     assign wait_ok = wait_met(insn[51:48], snap, completed);
@@ -193,10 +124,6 @@ module isa_mm #(
             wreg_valid <= 1'b0;
             wreg_row   <= '0;
             wreg_data  <= '0;
-            s1_valid   <= 1'b0;
-            s1_ow      <= 1'b0;
-            s1_addr    <= '0;
-            s1_psum    <= '0;
             done_pulse <= 1'b0;
         end else begin
             done_pulse <= 1'b0;
@@ -207,13 +134,9 @@ module isa_mm #(
             wreg_valid <= go && wt_now;
             wreg_row   <= wrow_now;
             for (int c = 0; c < N; c++)
-                wreg_data[c] <= slot[wrow_now][8*c +: 8];
+                wreg_data[c] <= tile[wrow_now][8*c +: 8];
 
-            s1_valid <= row_pop;
-            s1_ow    <= tag_head[ACC_AW];
-            s1_addr  <= tag_head[ACC_AW-1:0];
-            s1_psum  <= col_head;
-            inflight <= inflight + 8'(tag_push) - 8'(s1_valid);
+            inflight <= inflight + 8'(tag_push) - 8'(row_written);
 
             case (state)
                 S_IDLE: if (q_pop) begin

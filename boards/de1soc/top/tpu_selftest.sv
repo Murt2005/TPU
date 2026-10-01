@@ -1,11 +1,11 @@
 `timescale 1ns / 1ps
 
-// DE1-SoC FPGA-only bring-up: tpu_isa_top driven by isa_replay, no HPS.
+// DE1-SoC FPGA-only bring-up: tpu_top driven by replay, no HPS.
 // LEDR0 pass, LEDR1 fail, LEDR2 running, LEDR3 timeout, LEDR4 core ERR,
 // LEDR9 heartbeat. HEX3..2: the running test's mark, or the first failing one;
 // HEX1..0: the mismatch count; "PASS" when clean. KEY0 reruns, KEY3..1 unused.
 // SW9 up: HEX5..0 show capture slot SW4..0 (perf counters) in hex
-module tpu_isa_selftest #(
+module tpu_selftest #(
     parameter int    N        = 8,
     parameter int    ROM_DEPTH = 16384,
     parameter        ROM_FILE  = "isa_selftest.hex"
@@ -25,7 +25,7 @@ module tpu_isa_selftest #(
     logic clk;
     assign clk = CLOCK_50;
 
-    // same power-on reset as tpu_isa_top, so the replay waits for the core's
+    // same power-on reset as tpu_top, so the replay waits for the core's
     logic [8:0] por_ctr = '0;
     logic       por_done = 1'b0;
     always_ff @(posedge clk)
@@ -43,7 +43,7 @@ module tpu_isa_selftest #(
     logic        avs_read, avs_write, avs_waitrequest;
     logic [31:0] avs_readdata, avs_writedata;
 
-    tpu_isa_top #(.N(N)) u_tpu (
+    tpu_top #(.N(N)) u_tpu (
         .clk(clk), .reset_n(!run_reset),
         .avs_address(avs_address), .avs_read(avs_read), .avs_readdata(avs_readdata),
         .avs_write(avs_write), .avs_writedata(avs_writedata), .avs_waitrequest(avs_waitrequest));
@@ -55,7 +55,7 @@ module tpu_isa_selftest #(
     logic [15:0] mismatches;
     logic [7:0]  first_bad_mark, mark;
 
-    isa_replay #(.DEPTH(ROM_DEPTH), .ROM_FILE(ROM_FILE)) u_replay (
+    replay #(.DEPTH(ROM_DEPTH), .ROM_FILE(ROM_FILE)) u_replay (
         .clk(clk), .reset(run_reset),
         .avs_address(avs_address), .avs_read(avs_read), .avs_readdata(avs_readdata),
         .avs_write(avs_write), .avs_writedata(avs_writedata), .avs_waitrequest(avs_waitrequest),

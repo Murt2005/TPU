@@ -1,9 +1,9 @@
 `timescale 1ns / 1ps
 
-import isa_pkg::*;
+import tpu_pkg::*;
 
 // dispatcher: decodes in order, one instruction per cycle, into four engine queues
-module isa_dispatch #(
+module dispatch #(
     parameter int N           = 8,
     parameter int WMEM_ROWS   = 8192,
     parameter int UB_DEPTH    = 16384,

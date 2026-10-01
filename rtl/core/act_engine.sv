@@ -1,11 +1,12 @@
 `timescale 1ns / 1ps
 
-import isa_pkg::*;
+import tpu_pkg::*;
 
 // ACT engine: ACC rows -> bias -> ReLU/identity -> optional requantize -> UB or
-// host out FIFO, plus RD_UB. shares the ACC and UB read ports with MM, which has
-// priority there; ACT has priority on the UB write port
-module isa_act #(
+// host out FIFO, plus RD_UB. control only: tpu_core wires the bias and activation
+// units. shares the ACC and UB read ports with MM, which has priority there; ACT
+// has priority on the UB write port
+module act_engine #(
     parameter int N      = 8,
     parameter int UB_AW  = 14,
     parameter int ACC_AW = 10,
@@ -20,14 +21,16 @@ module isa_act #(
     input  logic [63:0]          completed,
     output logic                 done_pulse,
 
-    output logic                 acc_re,
     output logic [ACC_AW-1:0]    acc_raddr,
     input  logic                 acc_busy,       // MM owns the port this cycle
-    input  logic [N*32-1:0]      acc_rdata,
 
-    output logic [PAR_AW-1:0]    bias_raddr,
-    input  logic [N*32-1:0]      bias_rdata,
-    input  logic [N*32-1:0]      quant_rdata,    // same address as bias
+    output logic [PAR_AW-1:0]    bias_raddr,     // the bias and quant tables
+    output logic                 use_bias,       // bias unit
+    output logic                 relu,           // activation unit
+    input  logic [N*32-1:0]      act_row,        //   biased, ReLU'd: stage 1
+    output logic                 mul_en,         //   stage 2 multiplies row
+    output logic [N*32-1:0]      mul_in,
+    input  logic [N*8-1:0]       q_row,          //   stage 3
 
     output logic                 ub_we,
     output logic [UB_AW-1:0]     ub_waddr,
@@ -57,7 +60,7 @@ module isa_act #(
     state_t state;
 
     logic        is_rd_ub;
-    logic        relu, use_bias, rq, to_ub;
+    logic        rq, to_ub;
     logic [15:0] ub_out;
     logic [8:0]  m;
     logic [10:0] nb, b;
@@ -71,8 +74,9 @@ module isa_act #(
     assign acc_raddr  = ACC_AW'(row_addr);
     assign ub_raddr   = UB_AW'(row_addr);
     assign bias_raddr = PAR_AW'(par);
-    assign acc_re     = state == S_READ && !is_rd_ub && !acc_busy;
     assign ub_re      = state == S_READ && is_rd_ub && !ub_busy;
+    assign mul_en     = state == S_MUL;
+    assign mul_in     = row;
 
     logic [7:0] words_per_row;
     assign words_per_row = (is_rd_ub || rq) ? 8'(WPR) : 8'(N);
@@ -87,38 +91,6 @@ module isa_act #(
     assign wait_ok = wait_met(insn[51:48], snap, completed);
     assign q_pop   = q_valid && state == S_IDLE && (op != OP_WAIT || wait_ok);
     assign idle    = state == S_IDLE && !q_valid;
-
-    // requantize in three registered stages (bias+ReLU, multiply, round): in one
-    // cycle the path missed 50 MHz on the Cyclone V by 4 ns.
-    // saturate to 27 bits, multiply by M0 (27x25, one DSP each)
-    function automatic logic signed [51:0] rq_mul(input logic signed [31:0] v, input logic [23:0] m0);
-        logic signed [26:0] v27;
-        v27 = (v > 32'sd67108863) ? 27'sd67108863 : (v < -32'sd67108864) ? -27'sd67108864 : v[26:0];
-        return v27 * $signed({1'b0, m0});
-    endfunction
-
-    // add half, arithmetic shift, clamp to int8
-    function automatic logic [7:0] rq_round(input logic signed [51:0] p, input logic [5:0] shift);
-        logic signed [63:0] prod, rounded;
-        prod = 64'(p);
-        rounded = (shift == 6'd0) ? prod : (prod + (64'sd1 <<< (shift - 6'd1))) >>> shift;
-        return (rounded > 64'sd127) ? 8'sd127 : (rounded < -64'sd128) ? 8'h80 : rounded[7:0];
-    endfunction
-
-    logic [N*32-1:0] act_row;
-    always_comb
-        for (int c = 0; c < N; c++) begin
-            logic signed [31:0] v;
-            v = acc_rdata[32*c +: 32] + (use_bias ? bias_rdata[32*c +: 32] : 32'd0);
-            act_row[32*c +: 32] = (relu && v < 0) ? 32'd0 : v;
-        end
-
-    // quant_rdata holds still across S_LATCH..S_RND: its address (par) only moves per block
-    logic signed [N-1:0][51:0] prod_row;
-    logic [N*8-1:0]            q_row;
-    always_comb
-        for (int c = 0; c < N; c++)
-            q_row[8*c +: 8] = rq_round(prod_row[c], quant_rdata[32*c+24 +: 6]);
 
     always_ff @(posedge clk) begin
         if (reset) begin
@@ -135,7 +107,6 @@ module isa_act #(
             par        <= '0;
             w          <= '0;
             row        <= '0;
-            prod_row   <= '0;
             rq         <= 1'b0;
             to_ub      <= 1'b0;
             ub_out     <= '0;
@@ -175,11 +146,7 @@ module isa_act #(
                     w     <= '0;
                     state <= rq ? S_MUL : to_ub ? S_WRITE : S_EMIT;
                 end
-                S_MUL: begin
-                    for (int c = 0; c < N; c++)
-                        prod_row[c] <= rq_mul(row[32*c +: 32], quant_rdata[32*c +: 24]);
-                    state <= S_RND;
-                end
+                S_MUL: state <= S_RND;                 // the activation unit multiplies row
                 S_RND: begin
                     row   <= (N*32)'(q_row);
                     state <= to_ub ? S_WRITE : S_EMIT;

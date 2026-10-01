@@ -2,7 +2,7 @@
 
 // instruction-stream host bridge: 12-register Avalon-MM slave, read latency 1,
 // waitrequest only on writes into a full FIFO
-module isa_bridge (
+module host_bridge (
     input  logic        clk,
     input  logic        reset,
 

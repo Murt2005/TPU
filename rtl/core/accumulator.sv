@@ -1,109 +1,97 @@
 `timescale 1ns / 1ps
 
-// accumulator: re-aligns the mmu's skewed columns into rows, holds the K-tiling sum
+// accumulators: the array's columns come out skewed by one cycle each, so per-column
+// FIFOs re-align them into rows; each row carries a tag {overwrite, ACC row} pushed
+// when its activations were issued, and is written (or added) into the ACC memory.
+// ACT reads ACC through the same port; MM has priority
 module accumulator #(
-    parameter int NUM_COLS   = 2,
-    parameter int PSUM_WIDTH = 16,
-    parameter int FIFO_DEPTH = 4,
-    parameter int ROWS_PER_PASS = 2
+    parameter int N         = 8,
+    parameter int ACC_DEPTH = 1024,
+    parameter int ACC_AW    = $clog2(ACC_DEPTH)
 ) (
-    input  logic clk,
-    input  logic reset,
+    input  logic                      clk,
+    input  logic                      reset,
 
-    input  logic signed [NUM_COLS-1:0][PSUM_WIDTH-1:0] in_partial_sum,
-    input  logic        [NUM_COLS-1:0]                 in_partial_sum_valid,
+    input  logic signed [N-1:0][31:0] psum,
+    input  logic        [N-1:0]       psum_valid,
 
-    input  logic tile_first,
-    input  logic tile_last,
+    input  logic                      tag_push,
+    input  logic [ACC_AW:0]           tag_in,        // {overwrite, acc_row}
+    output logic                      row_written,   // a row reaches ACC this cycle
 
-    output logic signed [NUM_COLS-1:0][PSUM_WIDTH-1:0] out_row,
-    output logic                         out_row_valid,
-
-    output logic                         pass_done,
-
-    // no backpressure: the consumer must take the row on out_row_valid
-    output logic any_fifo_full
+    input  logic [ACC_AW-1:0]         act_raddr,
+    output logic                      act_busy,      // MM owns the read port this cycle
+    output logic [N*32-1:0]           rdata          // one cycle after the address
 );
 
-    localparam int ROW_IDX_W = (ROWS_PER_PASS > 1) ? $clog2(ROWS_PER_PASS) : 1;
+    localparam int SKEW_DEPTH = (2 * N <= 4) ? 4 : (2 * N <= 8) ? 8 : (2 * N <= 16) ? 16 : (2 * N <= 32) ? 32 : 64;
+    localparam int TAG_DEPTH  = 64;
 
-    logic                          fifo_empty [NUM_COLS];
-    logic                          fifo_full  [NUM_COLS];
-    logic signed [PSUM_WIDTH-1:0]  fifo_rd_data [NUM_COLS];
-    logic                          pop_row;
-
-    logic all_fifos_have_data;
-    always_comb begin
-        all_fifos_have_data = 1'b1;
-        for (int c = 0; c < NUM_COLS; c++) begin
-            all_fifos_have_data &= !fifo_empty[c];
-        end
-    end
-
-    assign pop_row = all_fifos_have_data;
-
-    always_comb begin
-        any_fifo_full = 1'b0;
-        for (int c = 0; c < NUM_COLS; c++) begin
-            any_fifo_full |= fifo_full[c];
-        end
-    end
+    logic [N-1:0]              col_empty;
+    logic signed [N-1:0][31:0] col_head;
+    logic                      row_pop;
 
     genvar gc;
     generate
-        for (gc = 0; gc < NUM_COLS; gc++) begin : col_fifo
-            fifo #(
-                .WIDTH(PSUM_WIDTH),
-                .DEPTH(FIFO_DEPTH)
-            ) u_fifo (
-                .clk     (clk),
-                .reset   (reset),
-                .write_enable   (in_partial_sum_valid[gc]),
-                .write_data (in_partial_sum[gc]),
-                .read_enable   (pop_row),
-                .read_data (fifo_rd_data[gc]),
-                .full    (fifo_full[gc]),
-                .empty   (fifo_empty[gc])
+        for (gc = 0; gc < N; gc++) begin : g_col
+            fifo #(.WIDTH(32), .DEPTH(SKEW_DEPTH)) u_col (
+                .clk(clk), .reset(reset),
+                .write_enable(psum_valid[gc]), .write_data(psum[gc]),
+                .read_enable(row_pop), .read_data(col_head[gc]),
+                .full(), .empty(col_empty[gc])
             );
         end
     endgenerate
 
-    logic signed [PSUM_WIDTH-1:0] psum_reg [ROWS_PER_PASS][NUM_COLS];
-    logic [ROW_IDX_W-1:0]         row_idx;
+    logic            tag_empty;
+    logic [ACC_AW:0] tag_head;
+
+    fifo #(.WIDTH(ACC_AW + 1), .DEPTH(TAG_DEPTH)) u_tags (
+        .clk(clk), .reset(reset),
+        .write_enable(tag_push), .write_data(tag_in),
+        .read_enable(row_pop), .read_data(tag_head),
+        .full(), .empty(tag_empty)
+    );
+
+    assign row_pop = (col_empty == '0) && !tag_empty;
+
+    // read-modify-write: read at pop, add and write back the next cycle. the same
+    // ACC row comes round again at most once per window (>= N >= 2 cycles), so
+    // the write always lands before the next read
+    logic                  mm_re;
+    logic [ACC_AW-1:0]     mm_raddr;
+    logic                  s1_valid, s1_ow;
+    logic [ACC_AW-1:0]     s1_addr;
+    logic [N*32-1:0]       s1_psum;
+    logic [N*32-1:0]       wdata;
+
+    assign mm_re       = row_pop && !tag_head[ACC_AW];
+    assign mm_raddr    = tag_head[ACC_AW-1:0];
+    assign act_busy    = mm_re;
+    assign row_written = s1_valid;
+    always_comb
+        for (int c = 0; c < N; c++)
+            wdata[32*c +: 32] = s1_ow ? s1_psum[32*c +: 32] : rdata[32*c +: 32] + s1_psum[32*c +: 32];
 
     always_ff @(posedge clk) begin
         if (reset) begin
-            out_row_valid <= 1'b0;
-            pass_done     <= 1'b0;
-            row_idx       <= '0;
-            for (int r = 0; r < ROWS_PER_PASS; r++)
-                for (int c = 0; c < NUM_COLS; c++)
-                    psum_reg[r][c] <= '0;
-            for (int c = 0; c < NUM_COLS; c++)
-                out_row[c] <= '0;
+            s1_valid <= 1'b0;
+            s1_ow    <= 1'b0;
+            s1_addr  <= '0;
+            s1_psum  <= '0;
         end else begin
-            out_row_valid <= 1'b0;
-            pass_done     <= 1'b0;
-            if (pop_row) begin
-                for (int c = 0; c < NUM_COLS; c++) begin
-                    if (tile_first) begin
-                        psum_reg[row_idx][c] <= fifo_rd_data[c];
-                        if (tile_last) out_row[c] <= fifo_rd_data[c];
-                    end else begin
-                        psum_reg[row_idx][c] <= psum_reg[row_idx][c] + fifo_rd_data[c];
-                        if (tile_last) out_row[c] <= psum_reg[row_idx][c] + fifo_rd_data[c];
-                    end
-                end
-                out_row_valid <= tile_last;
-
-                if (row_idx == ROW_IDX_W'(ROWS_PER_PASS - 1)) begin
-                    row_idx   <= '0;
-                    pass_done <= 1'b1;
-                end else begin
-                    row_idx <= row_idx + 1'b1;
-                end
-            end
+            s1_valid <= row_pop;
+            s1_ow    <= tag_head[ACC_AW];
+            s1_addr  <= tag_head[ACC_AW-1:0];
+            s1_psum  <= col_head;
         end
+    end
+
+    // the ACC memory: registered read, so it maps to block RAM
+    logic [N*32-1:0] acc [ACC_DEPTH];
+    always_ff @(posedge clk) begin
+        if (s1_valid) acc[s1_addr] <= wdata;
+        rdata <= acc[mm_re ? mm_raddr : act_raddr];
     end
 
 endmodule

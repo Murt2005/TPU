@@ -1,11 +1,11 @@
 `timescale 1ns / 1ps
 
-// replays a ROM transcript into isa_bridge's Avalon slave and checks every read.
+// replays a ROM transcript into host_bridge's Avalon slave and checks every read.
 // entry = {op[3:0], addr[3:0], data[31:0]}; the transcript comes from the
 // reference model (gen_selftest.py), so no host is needed to validate silicon.
 // CAP reads a register into one of 32 capture slots (perf counters, which the
 // model can't predict); CHECK bounds a slot, or the difference of two, on chip
-module isa_replay #(
+module replay #(
     parameter int    DEPTH    = 16384,
     parameter        ROM_FILE = "isa_selftest.hex",
     parameter int    TIMEOUT  = 1 << 26        // cycles per WAIT_DONE

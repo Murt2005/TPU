@@ -1,78 +1,70 @@
-`timescale 1ns/1ps
+`timescale 1ns / 1ps
 
-// processing element (PE)
-module pe #(
-    parameter int PSUM_WIDTH = 16
-) (
-    input  logic                clk,
-    input  logic                reset,
+// overlap PE: w_next loads from the column's weight bus while w_cur computes;
+// the first activation of a tile carries a flip bit that promotes w_next
+module pe (
+    input  logic               clk,
+    input  logic               reset,
 
-    input  logic signed [7:0]   in_activation,
-    output logic signed [7:0]   out_activation,
-    input  logic                in_activation_valid,
-    output logic                out_activation_valid,
+    input  logic signed [7:0]  act_in,
+    input  logic               first_in,
+    input  logic               act_valid_in,
+    input  logic signed [31:0] psum_in,
 
-    input  logic signed [PSUM_WIDTH-1:0]  in_partial_sum,
-    output logic signed [PSUM_WIDTH-1:0]  out_partial_sum,
-    input  logic                in_partial_sum_valid,
-    output logic                out_partial_sum_valid,
+    input  logic               wsel,
+    input  logic signed [7:0]  wdata,
 
-    input  logic                loading_phase,
-    input  logic                capture_weight,
-    input  logic signed [7:0]   in_weight,
-    output logic signed [7:0]   out_weight,
-    input  logic                in_weight_valid,
-    output logic                out_weight_valid
+    output logic signed [7:0]  act_out,
+    output logic               first_out,
+    output logic               act_valid_out,
+    output logic signed [31:0] psum_out,
+    output logic               psum_valid
 );
 
-    // uses a bare '0 since an unsigned literal in the MAC's ternary below would make
-    // the whole addition unsigned and silently break sign extension of the product
-    localparam logic signed [PSUM_WIDTH-1:0] PSUM_ZERO = '0;
-
-    logic signed [7:0] weight_reg;
+    logic signed [7:0] w_cur, w_next, w_use;
+    assign w_use = first_in ? w_next : w_cur;
 
     always_ff @(posedge clk) begin
         if (reset) begin
-            out_activation        <= 8'sd0;
-            out_activation_valid  <= 1'b0;
-            out_partial_sum       <= PSUM_ZERO;
-            out_partial_sum_valid <= 1'b0;
-            out_weight            <= 8'sd0;
-            out_weight_valid      <= 1'b0;
-            weight_reg            <= 8'sd0;
+            w_cur         <= '0;
+            w_next        <= '0;
+            act_out       <= '0;
+            first_out     <= 1'b0;
+            act_valid_out <= 1'b0;
+            psum_out      <= '0;
+            psum_valid    <= 1'b0;
         end else begin
-            
-            if (loading_phase) begin
-                out_weight       <= in_weight;
-                out_weight_valid <= in_weight_valid;
-                
-                if (capture_weight && in_weight_valid) begin
-                    weight_reg   <= in_weight;
-                end
-            end else begin
-                out_weight       <= 8'sd0;
-                out_weight_valid <= 1'b0;
+            if (wsel)
+                w_next <= wdata;
+            act_out       <= act_in;
+            first_out     <= first_in;
+            act_valid_out <= act_valid_in;
+            psum_valid    <= act_valid_in;
+            if (act_valid_in) begin
+                psum_out <= 32'(w_use * act_in) + psum_in;
+                if (first_in)
+                    w_cur <= w_next;
             end
-
-            if (!loading_phase) begin
-                out_activation       <= in_activation;
-                out_activation_valid <= in_activation_valid;
-
-                if (in_activation_valid) begin
-                    out_partial_sum       <= (weight_reg * in_activation) + (in_partial_sum_valid ? in_partial_sum : PSUM_ZERO);
-                    out_partial_sum_valid <= 1'b1;
-                end else begin
-                    out_partial_sum       <= in_partial_sum;
-                    out_partial_sum_valid <= in_partial_sum_valid;
-                end
-            end else begin
-                out_activation        <= 8'sd0;
-                out_activation_valid  <= 1'b0;
-                out_partial_sum       <= PSUM_ZERO;
-                out_partial_sum_valid <= 1'b0;
-            end
-            
         end
     end
+
+`ifndef SYNTHESIS
+    // scheduler invariants: one weight write per flip, and never a flip without one
+    logic pending;
+    always_ff @(posedge clk) begin
+        if (reset) begin
+            pending <= 1'b0;
+        end else begin
+            if (act_valid_in && first_in && !pending)
+                $fatal(1, "pe %m: flip with no pending weight");
+            if (wsel && pending && !(act_valid_in && first_in))
+                $fatal(1, "pe %m: weight overwritten before its flip");
+            if (wsel)
+                pending <= 1'b1;
+            else if (act_valid_in && first_in)
+                pending <= 1'b0;
+        end
+    end
+`endif
 
 endmodule

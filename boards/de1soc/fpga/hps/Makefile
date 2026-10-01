@@ -1,4 +1,4 @@
-# DE1-SoC with the HPS: Terasic's rev H GHRD + tpu_isa on the lightweight bridge
+# DE1-SoC with the HPS: Terasic's rev H GHRD + the TPU on the lightweight bridge
 # at 0xFF200000. Terasic's files are extracted into build/ (not tracked); only the
 # component, the qsys edit and this flow live in the repo. run inside the Quartus
 # VM (see README.md); ARM programs build with arm-linux-gnueabihf-gcc there too
@@ -24,7 +24,7 @@ $(GHRD)/stamp-tpu:
 	python3 patch_top.py $(GHRD)/ghrd_top.v
 	printf '\nset_global_assignment -name SYSTEMVERILOG_FILE $(HERE)/../../top/hex_display.sv\n' >> $(GHRD)/soc_system.qsf
 	# pre-generated qip instead of QSYS_FILE, so the compile needn't find our component;
-	# parallel helpers deadlock under Rosetta; isa_pe's checks are sim-only
+	# parallel helpers deadlock under Rosetta; pe.sv's checks are sim-only
 	cd $(GHRD) && sed -i 's#^set_global_assignment -name QSYS_FILE soc_system.qsys#set_global_assignment -name QIP_FILE soc_system/synthesis/soc_system.qip#' soc_system.qsf
 	# Terasic's qsf has no trailing newline: every append starts with one
 	printf '\nset_global_assignment -name NUM_PARALLEL_PROCESSORS 1\nset_global_assignment -name VERILOG_MACRO "SYNTHESIS=1"\n' >> $(GHRD)/soc_system.qsf
@@ -35,7 +35,7 @@ ghrd: $(GHRD)/stamp-tpu
 qsys: ghrd
 	cd $(GHRD) && qsys-generate soc_system.qsys --synthesis=VERILOG --search-path="$(HERE),ip/**/*,$$"
 
-$(SOF): ghrd ../../top/hex_display.sv $(wildcard ../../../../rtl/isa/*.sv) ../../../../rtl/peripherals/isa_bridge.sv ../../top/tpu_isa_top.sv tpu_isa_hw.tcl
+$(SOF): ghrd ../../top/hex_display.sv $(wildcard ../../../../rtl/core/*.sv) ../../../../rtl/peripherals/host_bridge.sv ../../top/tpu_top.sv tpu_hw.tcl
 	$(MAKE) qsys
 	cd $(GHRD) && quartus_sh --flow compile soc_system
 

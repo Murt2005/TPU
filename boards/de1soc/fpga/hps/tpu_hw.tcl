@@ -1,23 +1,21 @@
-# Platform Designer component: tpu_isa_top as an Avalon-MM slave for the HPS
+# Platform Designer component: tpu_top as an Avalon-MM slave for the HPS
 # lightweight bridge. word-addressed, 12 registers, fixed read latency 1,
-# waitrequest only on writes into a full FIFO (see rtl/peripherals/isa_bridge.sv)
+# waitrequest only on writes into a full FIFO (see rtl/peripherals/host_bridge.sv)
 package require -exact qsys 16.1
 
-set_module_property NAME tpu_isa
+set_module_property NAME tpu
 set_module_property VERSION 1.0
-set_module_property DISPLAY_NAME "TPU instruction-stream core"
+set_module_property DISPLAY_NAME "TPU"
 set_module_property GROUP "TPU"
 set_module_property EDITABLE false
 
 set rtl ../../../../rtl
 set files [list \
-    $rtl/isa/isa_pkg.sv $rtl/core/fifo.sv $rtl/core/systolic_data_setup.sv \
-    $rtl/isa/isa_pe.sv $rtl/isa/isa_array.sv $rtl/isa/isa_dispatch.sv $rtl/isa/isa_ld.sv \
-    $rtl/isa/isa_wt.sv $rtl/isa/isa_mm.sv $rtl/isa/isa_act.sv $rtl/isa/isa_core.sv \
-    $rtl/peripherals/isa_bridge.sv ../../top/tpu_isa_top.sv]
+    $rtl/core/tpu_pkg.sv $rtl/core/fifo.sv $rtl/core/systolic_data_setup.sv $rtl/core/pe.sv $rtl/core/mmu.sv $rtl/core/weight_fifo.sv $rtl/core/unified_buffer.sv $rtl/core/accumulator.sv $rtl/core/bias.sv $rtl/core/activation.sv $rtl/core/dispatch.sv $rtl/core/ld_engine.sv $rtl/core/wt_engine.sv $rtl/core/mm_engine.sv $rtl/core/act_engine.sv $rtl/core/tpu_core.sv $rtl/peripherals/host_bridge.sv \
+    ../../top/tpu_top.sv]
 
 add_fileset QUARTUS_SYNTH QUARTUS_SYNTH "" ""
-set_fileset_property QUARTUS_SYNTH TOP_LEVEL tpu_isa_top
+set_fileset_property QUARTUS_SYNTH TOP_LEVEL tpu_top
 foreach f $files {
     add_fileset_file [file tail $f] SYSTEM_VERILOG PATH $f
 }
