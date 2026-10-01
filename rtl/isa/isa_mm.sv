@@ -2,9 +2,10 @@
 
 import isa_pkg::*;
 
-// MM engine: drives the systolic array serially (phase 1) and accumulates into ACC.
-// per tile: copy the slot into weight_fifo bottom row first, gap, swap, load,
-// stream m UB rows, then drain before the next tile
+// MM engine: overlapped tiles. each window of max(m, N) cycles streams one tile's
+// m activation rows and, in its last N cycles, the next tile's weight rows into
+// w_next; the next tile's first row flips them in. a missing tile freezes the
+// whole window (WSTALL), which only ever widens the gaps the PEs rely on
 module isa_mm #(
     parameter int N      = 8,
     parameter int UB_AW  = 14,
@@ -42,6 +43,7 @@ module isa_mm #(
 
     localparam int SKEW_DEPTH = (2 * N <= 4) ? 4 : (2 * N <= 8) ? 8 : (2 * N <= 16) ? 16 : (2 * N <= 32) ? 32 : 64;
     localparam int TAG_DEPTH  = 64;
+    localparam int RW         = $clog2(N);
 
     logic [63:0] insn, snap;
     assign insn = q_data[63:0];
@@ -49,59 +51,66 @@ module isa_mm #(
     logic [5:0] op;
     assign op = insn[63:58];
 
-    typedef enum logic [2:0] {S_IDLE, S_WAIT_TILE, S_LOADW, S_GAP, S_SWAP, S_LOADING, S_STREAM, S_DRAIN} state_t;
+    typedef enum logic [1:0] {S_IDLE, S_RUN, S_DRAIN} state_t;
     state_t state;
 
     logic        acc_flag;
     logic [8:0]  m;
     logic [12:0] kt, k;
-    logic [10:0] nb, b;
     logic [15:0] chunk_base, ub_base;
     logic [15:0] acc_base;
-    logic [8:0]  cnt;
-    logic [8:0]  rows_written;
+    logic        have_acts, have_wts;     // this window streams a tile / loads the next
+    logic [31:0] wt_left;                 // tiles whose weights are still to load
+    logic [8:0]  pos;
+    logic [7:0]  inflight;                // rows issued, not yet written to ACC
+
+    logic [8:0] len, w_start;
+    assign len     = (have_acts && m > 9'(N)) ? m : 9'(N);
+    assign w_start = len - 9'(N);
+
+    logic act_now, wt_now, freeze, go, win_end;
+    assign act_now = have_acts && pos < m;
+    assign wt_now  = have_wts && pos >= w_start;
+    assign freeze  = wt_now && !slot_full;
+    assign go      = state == S_RUN && !freeze;
+    assign win_end = go && pos == len - 9'd1;
 
     // -- array ------------------------------------------------------------
-    logic                         wf_we_any;
-    logic [7:0]                   wf_row;
-    logic signed [N-1:0][7:0]     wf_wdata;
-    logic                         swap_banks, loading_phase;
-    logic signed [N-1:0][7:0]     wf_col;
-    logic        [N-1:0]          wf_col_valid;
+    logic                     ub_valid_q, first_q;
+    logic                     wreg_valid;
+    logic [RW-1:0]            wreg_row;
+    logic signed [N-1:0][7:0] wreg_data;
+    logic [RW-1:0]            wrow_now;
+    assign wrow_now = RW'(pos - w_start);
 
+    logic signed [N-1:0][8:0] sds_in, skewed;
+    logic        [N-1:0]      skewed_valid;
     always_comb
-        for (int c = 0; c < N; c++)
-            wf_wdata[c] = slot[wf_row][8*c +: 8];
+        for (int r = 0; r < N; r++)
+            sds_in[r] = {first_q, ub_rdata[8*r +: 8]};
 
-    weight_fifo #(.WEIGHT_WIDTH(8), .FIFO_DEPTH(SKEW_DEPTH), .NUM_COLS(N)) u_wf (
-        .clk(clk), .reset(reset),
-        .write_enable_col({N{wf_we_any}}), .write_data_col(wf_wdata),
-        .swap_banks(swap_banks), .loading_phase(loading_phase),
-        .out_col(wf_col), .out_col_valid(wf_col_valid),
-        .shadow_loaded(), .active_bank(), .active_empty(), .active_full(), .any_shadow_full()
-    );
-
-    logic                         ub_valid_q;
-    logic signed [N-1:0][7:0]     sds_in;
-    logic signed [N-1:0][7:0]     skewed;
-    logic        [N-1:0]          skewed_valid;
-
-    assign sds_in = ub_rdata;
-
-    systolic_data_setup #(.ARRAY_ROWS(N), .DATA_WIDTH(8)) u_sds (
+    systolic_data_setup #(.ARRAY_ROWS(N), .DATA_WIDTH(9)) u_sds (
         .clk(clk), .reset(reset),
         .ub_read_data(sds_in), .ub_read_valid(ub_valid_q),
         .mmu_in_row(skewed), .mmu_in_valid(skewed_valid)
     );
 
+    logic signed [N-1:0][7:0] arr_act;
+    logic        [N-1:0]      arr_first;
+    always_comb
+        for (int r = 0; r < N; r++) begin
+            arr_act[r]   = skewed[r][7:0];
+            arr_first[r] = skewed[r][8];
+        end
+
     logic signed [N-1:0][31:0] psum;
     logic        [N-1:0]       psum_valid;
 
-    mmu #(.ARRAY_ROWS(N), .NUM_COLS(N), .DATA_WIDTH(8), .PSUM_WIDTH(32), .USE_MAC16_PAIR(0)) u_mmu (
-        .clk(clk), .reset(reset), .loading_phase(loading_phase),
-        .capture_weight_col(wf_col_valid), .in_col(wf_col), .in_col_valid(wf_col_valid),
-        .in_row(skewed), .in_row_valid(skewed_valid),
-        .out_partial_sum(psum), .out_partial_sum_valid(psum_valid)
+    isa_array #(.N(N)) u_array (
+        .clk(clk), .reset(reset),
+        .act(arr_act), .act_first(arr_first), .act_valid(skewed_valid),
+        .wvalid(wreg_valid), .wrow(wreg_row), .wdata(wreg_data),
+        .psum(psum), .psum_valid(psum_valid)
     );
 
     // -- column re-alignment + row tags -------------------------------------
@@ -133,8 +142,9 @@ module isa_mm #(
 
     assign row_pop = (col_empty == '0) && !tag_empty;
 
-    // read-modify-write: read at pop, add and write back the next cycle.
-    // rows of one tile are distinct, and tiles are serialized, so no forwarding
+    // read-modify-write: read at pop, add and write back the next cycle. the same
+    // ACC row comes round again at most once per window (>= N >= 2 cycles), so
+    // the write always lands before the next read
     logic                  s1_valid, s1_ow;
     logic [ACC_AW-1:0]     s1_addr;
     logic [N*32-1:0]       s1_psum;
@@ -148,58 +158,62 @@ module isa_mm #(
             acc_wdata[32*c +: 32] = s1_ow ? s1_psum[32*c +: 32] : acc_rdata[32*c +: 32] + s1_psum[32*c +: 32];
 
     // -- control -----------------------------------------------------------
-    logic stream_now;
-    assign stream_now = (state == S_STREAM);
-    assign ub_re      = stream_now;
-    assign ub_raddr   = UB_AW'(chunk_base + 16'(cnt));
-    assign tag_push   = stream_now;
-    assign tag_in     = {(k == 13'd0) && !acc_flag, ACC_AW'(acc_base + 16'(cnt))};
-
-    assign wf_we_any     = (state == S_LOADW);
-    assign wf_row        = 8'(N - 1) - 8'(cnt);            // bottom row first
-    assign slot_take     = (state == S_LOADW) && cnt == 9'(N - 1);
-    assign swap_banks    = (state == S_SWAP);
-    assign loading_phase = (state == S_LOADING);
+    assign ub_re     = go && act_now;
+    assign ub_raddr  = UB_AW'(chunk_base + 16'(pos));
+    assign tag_push  = ub_re;
+    assign tag_in    = {(k == 13'd0) && !acc_flag, ACC_AW'(acc_base + 16'(pos))};
+    assign slot_take = go && wt_now && pos == len - 9'd1;
 
     logic wait_ok;
     assign wait_ok = wait_met(insn[51:48], snap, completed);
     assign q_pop   = q_valid && state == S_IDLE && (op != OP_WAIT || wait_ok);
     assign idle    = state == S_IDLE && !q_valid;
 
-    assign perf_beat   = stream_now;
-    assign perf_wstall = (state == S_WAIT_TILE) && !slot_full;
+    assign perf_beat   = ub_re;
+    assign perf_wstall = state == S_RUN && freeze;
     assign perf_sync   = q_valid && state == S_IDLE && op == OP_WAIT && !wait_ok;
 
     always_ff @(posedge clk) begin
         if (reset) begin
-            state        <= S_IDLE;
-            acc_flag     <= 1'b0;
-            m            <= '0;
-            kt           <= '0;
-            k            <= '0;
-            nb           <= '0;
-            b            <= '0;
-            chunk_base   <= '0;
-            ub_base      <= '0;
-            acc_base     <= '0;
-            cnt          <= '0;
-            rows_written <= '0;
-            ub_valid_q   <= 1'b0;
-            s1_valid     <= 1'b0;
-            s1_ow        <= 1'b0;
-            s1_addr      <= '0;
-            s1_psum      <= '0;
-            done_pulse   <= 1'b0;
+            state      <= S_IDLE;
+            acc_flag   <= 1'b0;
+            m          <= '0;
+            kt         <= '0;
+            k          <= '0;
+            chunk_base <= '0;
+            ub_base    <= '0;
+            acc_base   <= '0;
+            have_acts  <= 1'b0;
+            have_wts   <= 1'b0;
+            wt_left    <= '0;
+            pos        <= '0;
+            inflight   <= '0;
+            ub_valid_q <= 1'b0;
+            first_q    <= 1'b0;
+            wreg_valid <= 1'b0;
+            wreg_row   <= '0;
+            wreg_data  <= '0;
+            s1_valid   <= 1'b0;
+            s1_ow      <= 1'b0;
+            s1_addr    <= '0;
+            s1_psum    <= '0;
+            done_pulse <= 1'b0;
         end else begin
             done_pulse <= 1'b0;
             ub_valid_q <= ub_re;
+            first_q    <= pos == 9'd0;
+
+            // weight row registered to line up with the UB read latency
+            wreg_valid <= go && wt_now;
+            wreg_row   <= wrow_now;
+            for (int c = 0; c < N; c++)
+                wreg_data[c] <= slot[wrow_now][8*c +: 8];
 
             s1_valid <= row_pop;
             s1_ow    <= tag_head[ACC_AW];
             s1_addr  <= tag_head[ACC_AW-1:0];
             s1_psum  <= col_head;
-            if (s1_valid)
-                rows_written <= rows_written + 9'd1;
+            inflight <= inflight + 8'(tag_push) - 8'(s1_valid);
 
             case (state)
                 S_IDLE: if (q_pop) begin
@@ -207,65 +221,44 @@ module isa_mm #(
                         acc_flag   <= insn[57];
                         m          <= 9'(insn[55:48]) + 9'd1;
                         kt         <= 13'(insn[47:36]) + 13'd1;
-                        nb         <= 11'(insn[35:26]) + 11'd1;
                         acc_base   <= 16'(insn[25:16]);
                         ub_base    <= 16'(insn[15:2]);
                         chunk_base <= 16'(insn[15:2]);
                         k          <= '0;
-                        b          <= '0;
-                        state      <= S_WAIT_TILE;
+                        have_acts  <= 1'b0;
+                        have_wts   <= 1'b1;
+                        wt_left    <= (32'(insn[35:26]) + 1) * (32'(insn[47:36]) + 1);
+                        pos        <= '0;
+                        state      <= S_RUN;
                     end else begin
                         done_pulse <= 1'b1;            // WAIT
                     end
                 end
-                S_WAIT_TILE: if (slot_full) begin
-                    cnt   <= '0;
-                    state <= S_LOADW;
-                end
-                S_LOADW: begin
-                    if (cnt == 9'(N - 1)) begin
-                        cnt   <= '0;
-                        state <= S_GAP;
-                    end else begin
-                        cnt <= cnt + 9'd1;
-                    end
-                end
-                S_GAP:  state <= S_SWAP;
-                S_SWAP: state <= S_LOADING;
-                S_LOADING: begin                       // N drain cycles + 1 guard
-                    if (cnt == 9'(N)) begin
-                        cnt          <= '0;
-                        rows_written <= '0;
-                        state        <= S_STREAM;
-                    end else begin
-                        cnt <= cnt + 9'd1;
-                    end
-                end
-                S_STREAM: begin
-                    if (cnt == m - 9'd1) begin
-                        cnt   <= '0;
-                        state <= S_DRAIN;
-                    end else begin
-                        cnt <= cnt + 9'd1;
-                    end
-                end
-                S_DRAIN: if (rows_written == m) begin
-                    if (k == kt - 13'd1) begin
-                        k          <= '0;
-                        chunk_base <= ub_base;
-                        acc_base   <= acc_base + 16'(m);
-                        if (b == nb - 11'd1) begin
-                            done_pulse <= 1'b1;
-                            state      <= S_IDLE;
-                        end else begin
-                            b     <= b + 11'd1;
-                            state <= S_WAIT_TILE;
+                S_RUN: if (go) begin
+                    pos <= pos + 9'd1;
+                    if (win_end) begin
+                        pos <= '0;
+                        if (have_acts) begin
+                            if (k == kt - 13'd1) begin
+                                k          <= '0;
+                                chunk_base <= ub_base;
+                                acc_base   <= acc_base + 16'(m);
+                            end else begin
+                                k          <= k + 13'd1;
+                                chunk_base <= chunk_base + 16'(m);
+                            end
                         end
-                    end else begin
-                        k          <= k + 13'd1;
-                        chunk_base <= chunk_base + 16'(m);
-                        state      <= S_WAIT_TILE;
+                        have_acts <= have_wts;
+                        if (have_wts)
+                            wt_left <= wt_left - 32'd1;
+                        have_wts <= have_wts && wt_left > 32'd1;
+                        if (!have_wts)
+                            state <= S_DRAIN;
                     end
+                end
+                S_DRAIN: if (inflight == 8'd0) begin
+                    done_pulse <= 1'b1;
+                    state      <= S_IDLE;
                 end
                 default: state <= S_IDLE;
             endcase

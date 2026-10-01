@@ -178,7 +178,7 @@ def main(binary):
         check(f"requantizer, {len(vals):,} inputs (every int16 + edges + random int32): {name}",
               bad == 0, f"{bad} differ")
 
-    # -- phase 2: full MNIST program on chip ------------------------------------
+    # -- phase 2: full MNIST program, layers chained in the UB ----------------
     from tpu.isa_compile import compile_mlp
     from infer import predict_batch_offline
     hs = float(mdl["hidden_scale"])
@@ -205,8 +205,55 @@ def main(binary):
                 got = dev.run(prog, data)
                 same &= got == mod.run(prog, data)
                 preds += list(cm.decode(got).argmax(1)[:len(x20[i:i + m])])
-            check(f"MNIST full program on chip, 20 images, m={m}: RTL == model, argmax == host path",
+            check(f"MNIST full program chained on the core, 20 images, m={m}: RTL == model, argmax == host path",
                   same and preds == host_pred, f"same={same} {preds} vs {host_pred}")
+
+    # -- phase 3: random concurrent programs, WAITs from isa_waits -------------
+    import isa_progs
+    from tpu.isa_waits import check_waits, insert_waits
+    prng = np.random.default_rng(5)
+    init = isa_progs.init_program(n, prng)
+    bad = left = raced = 0
+    count = int(os.environ.get("ISA_RANDOM_PROGS", "40"))
+    for t in range(count):
+        raw, data = isa_progs.random_program(n, prng)
+        prog = insert_waits(raw, n) + [isa.signal(9)]
+        raced += bool(check_waits(raw, n))
+        left += len(check_waits(prog, n))
+        dev.reset()
+        mod = model()
+        dev.run(*init)
+        mod.run(*init)
+        dev.reset()
+        mod.reset()
+        got = dev.run(prog, data)
+        want = mod.run(prog, data)
+        if got != want or mod.err is not None:
+            bad += 1
+            if bad == 1:
+                print(f"    first mismatch: program {t}, model err {mod.err}")
+    check(f"{count} random concurrent programs ({raced} with hazards before WAIT insertion): "
+          f"RTL == model", bad == 0 and left == 0 and raced > count // 2,
+          f"bad={bad} hazards left={left} raced={raced}")
+
+    # -- phase 3: steady-state tile rate ---------------------------------------
+    tiles = 8
+    for m in (1, n, 2 * n + 3):
+        dev.reset()
+        dev.run([isa.wr_wmem(0, 2 * tiles * n), isa.wr_ub(0, 2 * tiles * m),
+                 isa.wait(isa.WT, isa.LD), isa.wait(isa.MM, isa.LD), isa.signal(1)],
+                [0] * (2 * tiles * n * n // 4 + 2 * tiles * m * n // 4))
+        runs = []
+        for kt in (tiles, 2 * tiles):
+            dev.reset()
+            dev.run([isa.set_wbase(0), isa.matmul(m, kt, 1, 0, 0), isa.signal(2)])
+            runs.append(dev.perf())
+        period = max(m, n)
+        dc = runs[1]["cycles"] - runs[0]["cycles"]
+        check(f"one tile per max(m, N) = {period} cycles in steady state, m={m}: "
+              f"{tiles} more tiles take {dc} cycles, no extra WSTALL",
+              abs(dc - tiles * period) <= 8 and runs[1]["mm_wstall"] == runs[0]["mm_wstall"]
+              and runs[1]["mm_beats"] == 2 * tiles * m, f"{runs}")
 
     # -- status ---------------------------------------------------------------
     link.read32(OUT)

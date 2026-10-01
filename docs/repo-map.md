@@ -58,18 +58,19 @@ All four present the same byte-stream interface to `tpu_core`.
 | `hps_bridge.sv` | Avalon-MM slave for the DE1-SoC's HPS; fixed read latency 1, no CDC |
 | `isa_bridge.sv` | The instruction-stream core's 12-register Avalon-MM slave (instructions, data, out, status, perf) |
 
-**`rtl/isa/` — the instruction-stream core (DE1-SoC, phase 1)**
+**`rtl/isa/` — the instruction-stream core (DE1-SoC, phases 1–3)**
 
-The 64-bit instruction set from the DE1-SoC instruction-stream spec. Phase 1: no overlap, no requantizer, no DDR3; the array is driven serially through `rtl/core/`'s `mmu`, `weight_fifo` and `systolic_data_setup`.
+The 64-bit instruction set from the DE1-SoC instruction-stream spec, through phase 3: requantizer, layers chained through the UB, and tiles overlapped one per `max(m, N)` cycles. No DDR3 yet. Reuses `rtl/core/`'s `fifo` and `systolic_data_setup`; the array is its own (`isa_pe`, `isa_array`).
 
 | File | What |
 |---|---|
 | `isa_pkg.sv` | Opcodes, error codes, reserved-bit masks, the `WAIT` check (mirrors `host/tpu/isa.py`) |
 | `isa_dispatch.sv` | In-order decode, error checks, routing to the four engine queues, `WAIT` snapshots, `SIGNAL` fence |
 | `isa_ld.sv` | LD engine: data FIFO words into WMEM, UB and the bias/quant tables |
-| `isa_wt.sv` | WT engine: `SET_WBASE`, and WMEM tiles into the tile slot |
-| `isa_mm.sv` | MM engine: slot into the array, UB rows streamed, column re-alignment, accumulator read-modify-write |
-| `isa_act.sv` | ACT engine: `ACTIVATE` (bias, ReLU) and `RD_UB` to the host out FIFO |
+| `isa_wt.sv` | WT engine: `SET_WBASE`, and WMEM tiles into a two-slot tile buffer |
+| `isa_mm.sv` | MM engine: overlapped windows (one tile's rows streamed while the next tile's weights load), column re-alignment, accumulator read-modify-write |
+| `isa_pe.sv`, `isa_array.sv` | Overlap PE (`w_cur`/`w_next`, flipped by the tile's first activation) and the N×N grid with a per-column skewed row-select weight bus |
+| `isa_act.sv` | ACT engine: `ACTIVATE` (bias, ReLU, requantize) to the UB or the host out FIFO, and `RD_UB` |
 | `isa_core.sv` | Host FIFOs, dispatcher, engine queues, memories, status, perf counters |
 
 ## `boards/` — one directory per target
@@ -124,6 +125,8 @@ The 64-bit instruction set from the DE1-SoC instruction-stream spec. Phase 1: no
 | `tpu/isa.py` | Instruction-stream encoder/decoder, from one field table |
 | `tpu/isa_model.py` | The instruction-stream reference model the RTL is compared against |
 | `tpu/isa_layout.py` | Host-side layout for the core's fixed strides (weight tiles, K-chunk-major UB) |
+| `tpu/isa_compile.py` | Compiles an int8 MLP into the core's load and infer programs |
+| `tpu/isa_waits.py` | Per-engine read/write sets; finds unordered hazards and inserts the minimal `WAIT`s |
 | `tpu/isa_device.py` | Driver for `isa_bridge`'s registers, plus `IsaSimLink` for the Verilator model |
 | `tpu/cli.py` | Argument parsing and `--selftest`; `tpu/__main__.py` makes `python3 -m tpu` work |
 
@@ -133,7 +136,7 @@ The 64-bit instruction set from the DE1-SoC instruction-stream spec. Phase 1: no
 |---|---|
 | `sv/` | 23 Icarus testbenches (`make test`) — list below |
 | `verilator/tb_tpu_top.cpp` | C++ full-chip bench: drives `tpu_top`'s real host pins (or injects bytes into `tpu_core` directly) across 12 shape/PHY/width combos; with `--bridge` it is the `--link sim` transport (`make sim-bridge`) |
-| `isa/test_isa_model.py`, `isa/test_isa_rtl.py` | The instruction-stream model, and the RTL against it word for word (`make isa-test`) |
+| `isa/test_isa_model.py`, `isa/test_isa_rtl.py`, `isa/isa_progs.py` | The instruction-stream model, and the RTL against it word for word (`make isa-test`) |
 | `verilator/tb_isa.cpp` | `tpu_isa_top` as a register-level transport for `isa_device.py` |
 | `check_protocol.py` | Checks the four copies of the wire-protocol constants agree (`make check-protocol`, part of `make lint`) |
 | `hw/hw_regression.py` | 14-case regression against real silicon over the `tpu` driver (`make hw-test`) |

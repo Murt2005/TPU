@@ -152,7 +152,7 @@ def test_mnist_full():
             out = model.run(*cm.infer_program(xb))
             assert model.err is None, model.err
             preds += list(cm.decode(out).argmax(1)[:len(x[i:i + m])])
-        check(f"MNIST full program on chip, 20 images, m={m}: argmax == host path",
+        check(f"MNIST full program chained on the core, 20 images, m={m}: argmax == host path",
               list(preds) == list(host_pred), f"{preds} vs {list(host_pred)}")
 
 
@@ -169,6 +169,30 @@ def test_requant_vs_host_round():
           list(diff) == [10450], f"differs at {list(diff[:10])}")
 
 
+def test_waits():
+    """the compiled program's WAITs are exactly the hazards isa_waits finds"""
+    from tpu.isa_compile import compile_mlp
+    from tpu.isa_waits import check_waits, insert_waits
+    x, layers, _ = mnist_layers()
+    cm = compile_mlp(layers, 8)
+    prog, data = cm.infer_program(x[:8])
+    ok = check_waits(prog, 8) == []
+    waits = [i for i, w in enumerate(prog) if isa.decode(w)[0] == "WAIT"]
+    for i in waits:
+        ok &= bool(check_waits(prog[:i] + prog[i + 1:], 8))
+    bare = [w for w in prog if isa.decode(w)[0] != "WAIT"]
+    redo = insert_waits(bare, 8)
+    ok &= check_waits(redo, 8) == [] and len(redo) == len(prog)
+    model = IsaModel(n=8)
+    model.run(*cm.load_program())
+    model.reset()
+    a = model.run(prog, data)
+    model.reset()
+    ok &= a == model.run(redo, data)
+    check("isa_waits: compiled MNIST program hazard-free, every WAIT needed, re-insertion matches",
+          ok)
+
+
 if __name__ == "__main__":
     rng = random.Random(0)
     test_roundtrip(rng)
@@ -177,5 +201,6 @@ if __name__ == "__main__":
     test_mnist_layer1()
     test_requant_vs_host_round()
     test_mnist_full()
+    test_waits()
     print(f"{'ALL ISA MODEL TESTS PASSED' if not failures else f'{len(failures)} FAILED'}")
     sys.exit(1 if failures else 0)

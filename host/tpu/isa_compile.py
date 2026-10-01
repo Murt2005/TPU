@@ -1,5 +1,5 @@
 """compile an int8 MLP into a load program and an infer program for the
-instruction-stream core. layers chain on chip: every layer but the last
+instruction-stream core. layers chain through the UB: every layer but the last
 requantizes into the UB, where the next layer reads it"""
 import numpy as np
 

@@ -71,8 +71,25 @@ first checks the model against independent references (`tpu.golden`, and
 MNIST layer 1 against `hw_layer` at 32 bits), then runs the RTL through its
 real bridge registers (`tests/verilator/tb_isa.cpp`) at N = 8 and N = 4 and
 requires every output word to match the model: every decode error, 40 random
-single layers including K-sums split across `MATMUL`s, MNIST layer 1, and
-the status and performance registers.
+single layers including K-sums split across `MATMUL`s, MNIST layer 1, the
+requantizer over every int16 input plus edges and random int32 for three
+quant tables, the two-layer MNIST program chained through the UB, and the
+status and performance registers.
+
+The engines run concurrently, so ordering is the program's job.
+`host/tpu/isa_waits.py` models what each engine reads and writes,
+`check_waits` finds cross-engine hazards that no `WAIT` orders, and
+`insert_waits` adds the minimal `WAIT`s. The RTL test generates 40 random
+legal programs (`ISA_RANDOM_PROGS` to raise it), inserts `WAIT`s, and
+requires the RTL to match the in-order model. Without the `WAIT`s nearly all
+of them diverge, which is what shows the overlap is real. The PEs carry
+simulation-only checks that a weight is never overwritten before its flip
+and never flipped without one. A rate test requires `T` extra tiles to cost
+exactly `T * max(m, N)` cycles with no extra `PERF_MM_WSTALL`, at m = 1,
+m = N and m > N.
+
+All of this is simulation. The core has not been built for, or run on, any
+board.
 
 ## Tier 3 — Verilator full-chip simulation (`make verilate-test`)
 

@@ -44,3 +44,6 @@ lint_off -rule UNUSEDSIGNAL -file "*rtl/isa/isa_core.sv"
 
 // mirrors host/tpu/isa.py, not every constant is used by the RTL yet
 lint_off -rule UNUSEDPARAM -file "*rtl/isa/isa_pkg.sv"
+
+// isa array: inner rows' valids and the last column's pass-through outputs end at the edge
+lint_off -rule UNUSEDSIGNAL -file "*rtl/isa/isa_array.sv"

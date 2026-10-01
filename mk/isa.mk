@@ -1,7 +1,7 @@
 # instruction-stream core (DE1-SoC spec)
 ISA_RTL := rtl/isa/isa_pkg.sv \
-           $(CORE_DIR)/fifo.sv $(CORE_DIR)/pe.sv $(CORE_DIR)/mmu.sv \
-           $(CORE_DIR)/weight_fifo.sv $(CORE_DIR)/systolic_data_setup.sv \
+           $(CORE_DIR)/fifo.sv $(CORE_DIR)/systolic_data_setup.sv \
+           rtl/isa/isa_pe.sv rtl/isa/isa_array.sv \
            rtl/isa/isa_dispatch.sv rtl/isa/isa_ld.sv rtl/isa/isa_wt.sv \
            rtl/isa/isa_mm.sv rtl/isa/isa_act.sv rtl/isa/isa_core.sv \
            $(PERIPH_DIR)/isa_bridge.sv $(HPS_DIR)/tpu_isa_top.sv
