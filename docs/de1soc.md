@@ -20,13 +20,14 @@ target was retired; it is preserved at the git tag `pico2-ice-final`.
 | TPU behind the HPS | `boards/de1soc/fpga/hps/` | Terasic's rev H reference design (GHRD) plus `tpu_top` at `0xFF200000`, plus a HEX display register at `0xFF210100`. U-Boot loads it from the SD card |
 | Full test suite from the ARM | `tests/isa/test_isa_rtl.py serial:<port>` | **Every functional test passes**: decode errors, 40 random layers, MNIST, requantizer sweeps, 40 random concurrent programs |
 | MNIST on the ARM | `software/mnist/de1soc/` | 10,000 test images: **97.50%**, 10,000/10,000 equal to the reference model; **109.5 µs/image** end to end (m=1), 77.6 µs (m=8) |
-| Weights from DDR3 (`MATMUL wsrc=1`) | `tests/isa/test_isa_rtl.py serial:<port>`, booted as in [`../boards/de1soc/fpga/hps/README.md`](../boards/de1soc/fpga/hps/README.md) | **Every test passes** (36), the DDR3 ones included: 30 random layers and MNIST (20 images, m = 1 and 8) with their weights streamed through the 128-bit FPGA-to-SDRAM port, equal to the model word for word; `CTRL.RESET` with reads in flight; extra tiles add no weight stalls (≤ 2 cycles over 8 tiles at m = 1, after a ~21-cycle start) |
+| DDR3 instructions (`MATMUL wsrc=1`, `RD_DDR_UB`, `SET_OBASE`, `ACTIVATE dst=DDR`) | `tests/isa/test_isa_rtl.py serial:<port>`, booted with `boards/de1soc/sw/ddr-boot.py` | **Every test passes** (44), equal to the model word for word: random layers and MNIST with weights streamed from DDR3; MNIST's hidden layer written to DDR3 and read back as the next layer's input; `RD_DDR_UB` at every alignment; `ACTIVATE dst=DDR` read back; 40 random concurrent programs mixing all of them over one DDR3 region; `CTRL.RESET` with reads in flight. A `MATMUL` from DDR3 starts after ~21 cycles of weight stall; extra tiles, and a second `MATMUL` behind it (prefetched), add at most 6 |
 | Drawing demo | `software/mnist/draw_demo.py --de1soc` | The digit appears on HEX0; 117 µs on the board, 7.5 ms round trip at 1.5625 Mbaud |
 
 | Build | ALMs | RAM blocks | DSPs | Timing at 50 MHz |
 |---|---|---|---|---|
 | self-test (core + ROM) | 7,587 (24%) | 351 / 397 | 78 / 87 | met, 3.1 ns slack |
 | GHRD + core + HEX | 9,637 (30%) | 339 / 397 | 78 / 87 | met, 3.4 ns slack |
+| GHRD + core + HEX + DDR3 port and probe (2026-10-02) | 11,191 (35%) | 355 / 397 | 78 / 87 | met, 2.7 ns slack |
 
 78 of the 87 DSPs are used: 64 PE multipliers, 8 requantizer lanes, and the
 tile-count products. That is what stands between 8×8 and 16×16 (§7).
@@ -171,10 +172,10 @@ See [`backlog.md`](backlog.md). Board-specific items:
 - **A bigger array.** 16×16 needs the PE multiplies packed three per DSP
   block (Cyclone V's 9×9 mode) or partly in logic. 78/87 DSPs are used at
   8×8.
-- **DDR3 (spec phase 5).** `MATMUL wsrc=1` (weights from DDR3) is built and
-  passes on the board (§1). `RD_DDR_UB`, `SET_OBASE` and `ACTIVATE dst=DDR`
-  are decoded and rejected as `UNIMPL`. Making the port setup and `mem=768M`
-  survive a power cycle needs a `u-boot.scr` on the card. The bandwidth
+- **DDR3 (spec phase 5).** All four DDR3 instructions are built and pass on
+  the board (§1). Making the port setup and `mem=768M` survive a power cycle
+  needs a `u-boot.scr` on the card; until then `ddr-boot.py` sets them up per
+  boot. The bandwidth
   they need is **measured on the board**: a burst-read master
   (`top/ddr-probe.sv`) on a 128-bit FPGA-to-SDRAM port at 50 MHz reads
   **800 MB/s**, the port's full width every cycle, from 2 bursts of 32 beats
