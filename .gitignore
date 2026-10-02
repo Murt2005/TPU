@@ -34,3 +34,10 @@ boards/de1soc/fpga/hps/build.log
 boards/de1soc/sw/isa_mmio
 boards/de1soc/sw/setbaud
 software/mnist/de1soc/build/
+
+# Qwen2.5-0.5B: downloaded weights, tokenizer and eval text (fetch.sh), exported
+# DDR3 images, and the PyTorch venv the float reference runs in
+software/qwen/model/
+software/qwen/data/
+software/qwen/out/
+software/qwen/.venv/

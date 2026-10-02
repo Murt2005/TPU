@@ -33,8 +33,14 @@ this is convenience.
 
 **DDR3 (spec phase 5).** `MATMUL wsrc=1` (prefetching across `MATMUL`s),
 `RD_DDR_UB`, `SET_OBASE` and `ACTIVATE dst=DDR` are built, and the card
-boots with the port live (`u-boot.scr`). Left: porting the LLM path
-(`software/llm/` at the tag `pico2-ice-final`) onto them. Sustained FPGA-to-SDRAM bandwidth is
+boots with the port live (`u-boot.scr`).
+
+**Qwen2.5-0.5B** (`software/qwen/`). Phases 1–2 done: int8 on the core costs
++1.74% perplexity with SmoothQuant, and the numpy reference, tokenizer and
+494 MB DDR3 image check out against PyTorch. Next: each layer as core
+programs, compared per `MATMUL` in Verilator (phase 3); the ARM runtime in C
+(phase 4); the board, with a DDR3 window larger than `mem=768M` leaves
+(phase 5). Sustained FPGA-to-SDRAM bandwidth is
 measured: 800 MB/s on a 128-bit port at 50 MHz, the port's peak, also under
 ARM memory load ([`de1soc.md`](de1soc.md) §7).
 
