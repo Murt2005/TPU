@@ -22,25 +22,23 @@ has the directory-level version.
 
 ## `rtl/` — the core
 
-`rtl/core/` is board-neutral: control and the TPUv1 datapath. See
+Everything under `rtl/` is board-neutral. See
 [`architecture.md`](architecture.md).
 
 | File | What |
 |---|---|
-| `tpu-pkg.sv` | opcodes, engines, error codes, legal-bit masks, `wait_counts_reached` (mirrors `host/tpu/isa.py`) |
 | `tpu-core.sv` | host FIFOs, dispatcher, engine queues, WMEM and the parameter tables, the datapath wiring, status and perf counters |
-| `dispatch.sv` | in-order decode, range checks, routing, `WAIT` snapshots, the `SIGNAL` fence |
-| `load-engine.sv`, `weight-engine.sv`, `matmul-engine.sv`, `activate-engine.sv` | the four engines (control only) |
-| `unified-buffer.sv` | the UB memory and its port priorities |
-| `systolic-data-setup.sv` | the row skew (element *i* delayed *i* cycles) |
-| `pe.sv`, `mmu.sv` | the PE (`weight_current`/`weight_next`, flip) and the N × N array with the skewed weight bus |
-| `weight-fifo.sv` | the two-slot tile buffer between WMEM and the array |
-| `accumulator.sv` | column de-skew, row tags, the ACC memory, read-modify-write |
-| `bias.sv`, `activation.sv` | bias add; ReLU and the requantizer |
-| `fifo.sv` | the generic show-ahead FIFO |
-
-`rtl/peripherals/host-bridge.sv`: the 12-register Avalon-MM slave the host
-drives ([`isa.md`](isa.md) §4).
+| `common/tpu-pkg.sv` | opcodes, engines, error codes, legal-bit masks, `wait_counts_reached` (mirrors `host/tpu/isa.py`) |
+| `common/fifo.sv` | the generic show-ahead FIFO (host FIFOs, engine queues, the accumulator's column and tag FIFOs) |
+| `control/dispatch.sv` | in-order decode, range checks, routing, `WAIT` snapshots, the `SIGNAL` fence |
+| `control/load-engine.sv`, `weight-engine.sv`, `matmul-engine.sv`, `activate-engine.sv` | the four engines (control only) |
+| `datapath/unified-buffer.sv` | the UB memory and its port priorities |
+| `datapath/systolic-data-setup.sv` | the row skew (element *i* delayed *i* cycles) |
+| `datapath/pe.sv`, `mmu.sv` | the PE (`weight_current`/`weight_next`, flip) and the N × N array with the skewed weight bus |
+| `datapath/weight-fifo.sv` | the two-slot tile buffer between WMEM and the array |
+| `datapath/accumulator.sv` | column de-skew, row tags, the ACC memory, read-modify-write |
+| `datapath/bias.sv`, `activation.sv` | bias add; ReLU and the requantizer |
+| `peripherals/host-bridge.sv` | the 12-register Avalon-MM slave the host drives ([`isa.md`](isa.md) §4) |
 
 ## `boards/de1soc/` — the board
 

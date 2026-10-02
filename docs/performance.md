@@ -108,9 +108,9 @@ synthesizing `pe.sv` standalone both ways). That ~7× is the single biggest
 lever in the whole design, from one synthesis flag with no RTL change:
 
 ```bash
-yosys -p "read_verilog -sv rtl/core/pe.sv; synth_ice40 -top pe -json /dev/null" \
+yosys -p "read_verilog -sv rtl/datapath/pe.sv; synth_ice40 -top pe -json /dev/null" \
     2>&1 | grep -E "SB_LUT4|SB_DFF|SB_MAC16"
-yosys -p "read_verilog -sv rtl/core/pe.sv; synth_ice40 -top pe -dsp -json /dev/null" \
+yosys -p "read_verilog -sv rtl/datapath/pe.sv; synth_ice40 -top pe -dsp -json /dev/null" \
     2>&1 | grep -E "SB_LUT4|SB_DFF|SB_MAC16"
 ```
 

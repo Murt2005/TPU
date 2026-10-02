@@ -2,19 +2,23 @@
 
 VERILATOR := verilator --assert
 
-CORE_DIR   := rtl/core
-PERIPH_DIR := rtl/peripherals
+RTL_DIR      := rtl
+COMMON_DIR   := $(RTL_DIR)/common
+DATAPATH_DIR := $(RTL_DIR)/datapath
+CONTROL_DIR  := $(RTL_DIR)/control
+PERIPH_DIR   := $(RTL_DIR)/peripherals
 HPS_DIR    := boards/de1soc/top
 TEST_DIR   := tests
 SIM_DIR    := sim
 
 # the core, in compile order: tpu_pkg first (everything imports it)
-CORE_RTL := $(CORE_DIR)/tpu-pkg.sv $(CORE_DIR)/fifo.sv $(CORE_DIR)/systolic-data-setup.sv \
-            $(CORE_DIR)/pe.sv $(CORE_DIR)/mmu.sv $(CORE_DIR)/weight-fifo.sv \
-            $(CORE_DIR)/unified-buffer.sv $(CORE_DIR)/accumulator.sv $(CORE_DIR)/bias.sv \
-            $(CORE_DIR)/activation.sv $(CORE_DIR)/dispatch.sv $(CORE_DIR)/load-engine.sv \
-            $(CORE_DIR)/weight-engine.sv $(CORE_DIR)/matmul-engine.sv $(CORE_DIR)/activate-engine.sv \
-            $(CORE_DIR)/tpu-core.sv $(PERIPH_DIR)/host-bridge.sv $(HPS_DIR)/tpu-top.sv
+CORE_RTL := $(COMMON_DIR)/tpu-pkg.sv $(COMMON_DIR)/fifo.sv \
+            $(DATAPATH_DIR)/systolic-data-setup.sv $(DATAPATH_DIR)/pe.sv $(DATAPATH_DIR)/mmu.sv \
+            $(DATAPATH_DIR)/weight-fifo.sv $(DATAPATH_DIR)/unified-buffer.sv $(DATAPATH_DIR)/accumulator.sv \
+            $(DATAPATH_DIR)/bias.sv $(DATAPATH_DIR)/activation.sv \
+            $(CONTROL_DIR)/dispatch.sv $(CONTROL_DIR)/load-engine.sv $(CONTROL_DIR)/weight-engine.sv \
+            $(CONTROL_DIR)/matmul-engine.sv $(CONTROL_DIR)/activate-engine.sv \
+            $(RTL_DIR)/tpu-core.sv $(PERIPH_DIR)/host-bridge.sv $(HPS_DIR)/tpu-top.sv
 
 all: test
 

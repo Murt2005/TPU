@@ -35,7 +35,7 @@ ghrd: $(GHRD)/stamp-tpu
 qsys: ghrd
 	cd $(GHRD) && qsys-generate soc_system.qsys --synthesis=VERILOG --search-path="$(HERE),ip/**/*,$$"
 
-$(SOF): ghrd ../../top/hex-display.sv $(wildcard ../../../../rtl/core/*.sv) ../../../../rtl/peripherals/host-bridge.sv ../../top/tpu-top.sv tpu_hw.tcl
+$(SOF): ghrd ../../top/hex-display.sv $(wildcard ../../../../rtl/*.sv ../../../../rtl/*/*.sv) ../../top/tpu-top.sv tpu_hw.tcl
 	$(MAKE) qsys
 	cd $(GHRD) && quartus_sh --flow compile soc_system
 

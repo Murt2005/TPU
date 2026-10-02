@@ -13,8 +13,8 @@ all: rbf
 rom:
 	cd $(REPO) && $(MAKE) --no-print-directory selftest-rom N=8
 
-$(SOF): isa_selftest.hex $(PROJECT).qsf $(PROJECT).sdc $(wildcard $(REPO)/rtl/core/*.sv) \
-        $(wildcard ../../top/*.sv) $(REPO)/rtl/peripherals/host-bridge.sv
+$(SOF): isa_selftest.hex $(PROJECT).qsf $(PROJECT).sdc $(wildcard $(REPO)/rtl/*.sv $(REPO)/rtl/*/*.sv) \
+        $(wildcard ../../top/*.sv)
 	quartus_sh --flow compile $(PROJECT) -c $(PROJECT)
 
 sof: $(SOF)

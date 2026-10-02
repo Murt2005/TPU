@@ -11,7 +11,7 @@ set_module_property EDITABLE false
 
 set rtl ../../../../rtl
 set files [list \
-    $rtl/core/tpu-pkg.sv $rtl/core/fifo.sv $rtl/core/systolic-data-setup.sv $rtl/core/pe.sv $rtl/core/mmu.sv $rtl/core/weight-fifo.sv $rtl/core/unified-buffer.sv $rtl/core/accumulator.sv $rtl/core/bias.sv $rtl/core/activation.sv $rtl/core/dispatch.sv $rtl/core/load-engine.sv $rtl/core/weight-engine.sv $rtl/core/matmul-engine.sv $rtl/core/activate-engine.sv $rtl/core/tpu-core.sv $rtl/peripherals/host-bridge.sv \
+    $rtl/common/tpu-pkg.sv $rtl/common/fifo.sv $rtl/datapath/systolic-data-setup.sv $rtl/datapath/pe.sv $rtl/datapath/mmu.sv $rtl/datapath/weight-fifo.sv $rtl/datapath/unified-buffer.sv $rtl/datapath/accumulator.sv $rtl/datapath/bias.sv $rtl/datapath/activation.sv $rtl/control/dispatch.sv $rtl/control/load-engine.sv $rtl/control/weight-engine.sv $rtl/control/matmul-engine.sv $rtl/control/activate-engine.sv $rtl/tpu-core.sv $rtl/peripherals/host-bridge.sv \
     ../../top/tpu-top.sv]
 
 add_fileset QUARTUS_SYNTH QUARTUS_SYNTH "" ""

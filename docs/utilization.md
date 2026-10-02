@@ -53,8 +53,8 @@ without raising `M_TILE` buys compute density and spends it on fill and drain.
 
 ## 2. The double-buffering already exists and is not wired up
 
-`rtl/core/weight-fifo.sv` implements full ping-pong banks — its header describes
-loading the shadow bank while the active bank drains. `rtl/core/tpu-core.sv` ties
+`rtl/datapath/weight-fifo.sv` implements full ping-pong banks — its header describes
+loading the shadow bank while the active bank drains. `rtl/tpu-core.sv` ties
 `shadow_loaded`, `active_bank` and `any_shadow_full` to nothing, and the
 sequencer never pulses `swap_banks` early. Every pass loads, computes, and
 drains to completion before the next begins.

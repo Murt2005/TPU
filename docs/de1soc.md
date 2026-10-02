@@ -30,7 +30,7 @@ target was retired; it is preserved at the git tag `pico2-ice-final`.
 78 of the 87 DSPs are used: 64 PE multipliers, 8 requantizer lanes, and the
 tile-count products. That is what stands between 8×8 and 16×16 (§7).
 
-These are the builds of the current `rtl/core/` (2026-10-01). The same core
+These are the builds of the current `rtl/` (2026-10-01). The same core
 before it moved out of `rtl/isa/` measured 6,635 ALMs for the self-test, with
 identical synthesis (78 DSPs, the same memory bits and registers), and was
 cycle-for-cycle the same on the board. The fitter packs the new module

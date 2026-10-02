@@ -74,7 +74,7 @@ the bench fails.
   active-low `reset_n`); every sequential block is `if (reset) ... else ...`.
 - Tunables are `parameter int`; derived values are `localparam`.
 - The instruction encoding lives in one table, `host/tpu/isa.py`, mirrored by
-  `rtl/core/tpu-pkg.sv`. Change both together, and reuse the constants rather
+  `rtl/common/tpu-pkg.sv`. Change both together, and reuse the constants rather
   than re-declaring literals.
 - Each module opens with a short comment naming what it is. Beyond that,
   comments are sparse: short, lowercase (unless the first word is all caps),

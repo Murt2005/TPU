@@ -11,7 +11,7 @@ is in [`architecture.md`](architecture.md).
 
 | | |
 |---|---|
-| RTL | `rtl/core/` (`tpu-pkg.sv` holds the constants) and `rtl/peripherals/host-bridge.sv` |
+| RTL | `rtl/` (`common/tpu-pkg.sv` holds the constants; `peripherals/host-bridge.sv` is the register interface) |
 | Top levels | `boards/de1soc/top/tpu-top.sv` (bridge + core); in the board designs, `tpu-selftest.sv` and the GHRD component |
 | Reference model | `host/tpu/isa_model.py`: executes a program in order with the exact arithmetic; the RTL must match it word for word |
 | Design spec | the instruction-stream spec doc (claude.ai artifact `FP1ach14aGXhH2N1aCLCox`). This page describes what is built |

@@ -41,9 +41,10 @@ host bus, the power-on reset, pins, the self-test harness) lives in
 
 ## 2. Inside `tpu_core`
 
-Control and datapath are separate files. The four engines are state machines
-that sequence the TPUv1 datapath blocks; `tpu-core.sv` wires the blocks
-between them.
+Control and datapath are separate folders. The four engines in
+`rtl/control/` are state machines that sequence the TPUv1 blocks in
+`rtl/datapath/`; `rtl/tpu-core.sv` wires them together, and `rtl/common/`
+holds what both use (`tpu-pkg.sv`, `fifo.sv`).
 
 ```
  host FIFOs ──► dispatch ──► queues (8 deep) ──► LD ─────► WMEM, UB, bias table, quant table
@@ -58,7 +59,7 @@ between them.
                                        unified_buffer (next layer) ◄───────────┴───► out FIFO
 ```
 
-### Control
+### Control (`rtl/control/`, plus `common/tpu-pkg.sv` and `tpu-core.sv`)
 
 | File | Does |
 |---|---|
@@ -73,7 +74,7 @@ between them.
 Every engine pops its queue only when idle. A `WAIT` at the head blocks it
 until the masked engines' completion counts reach the snapshot.
 
-### Datapath
+### Datapath (`rtl/datapath/`, plus `common/fifo.sv`)
 
 | File | TPUv1 block | Does | Latency |
 |---|---|---|---|

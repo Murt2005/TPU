@@ -234,7 +234,8 @@ uses. Its blocks, as this design builds them:
   multiply by a 24-bit scale, round, shift, clamp) that turns 32-bit sums into
   the next layer's int8 input.
 
-Each block is one file in `rtl/core/`, with control in separate engine files.
+Each block is one file in `rtl/datapath/`, with control in separate engine files in
+`rtl/control/`.
 [`docs/architecture.md`](docs/architecture.md) has the modules, timing and
 overlap scheme, and [`docs/isa.md`](docs/isa.md) the instructions, registers and
 data layouts.

@@ -4,7 +4,7 @@ UNIT_DIR   := $(TEST_DIR)/unit
 UNIT_TESTS := $(sort $(patsubst $(UNIT_DIR)/%-tb.sv,%,$(wildcard $(UNIT_DIR)/*-tb.sv)))
 unit_top    = $(subst -,_,$(1))_tb
 UNIT_SIM   := $(SIM_DIR)/unit
-CORE_FILES := $(filter $(CORE_DIR)/%,$(CORE_RTL))
+CORE_FILES := $(filter-out $(PERIPH_DIR)/%,$(filter $(RTL_DIR)/%,$(CORE_RTL)))
 REQUANT_VECTORS := $(UNIT_SIM)/requant_vectors.txt
 
 $(REQUANT_VECTORS): $(UNIT_DIR)/gen_requant.py host/tpu/golden.py | $(SIM_DIR)
