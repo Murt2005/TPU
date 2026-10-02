@@ -4,14 +4,15 @@ Getting [Qwen2.5-0.5B](https://huggingface.co/Qwen/Qwen2.5-0.5B) (24 layers,
 hidden 896, 14 query / 2 KV heads, SwiGLU 4,864, vocabulary 151,936, tied
 embedding) to run with every linear layer on the array and its weights streamed
 from DDR3, as the instruction-stream spec plans (its "Scaling to
-Qwen2.5-Coder-0.5B"). Status: phases 1 and 2 done. Nothing runs on the core yet.
+Qwen2.5-Coder-0.5B"). Status: phases 1–3 done. Every linear layer runs on the
+core in Verilator simulation, exact; not yet on the board.
 
 | Phase | What | Status |
 |---|---|---|
 | 1 | What the core's int8 arithmetic costs the model (`accuracy.py`) | **done**: +1.74% perplexity with SmoothQuant, no hardware change |
 | 2 | A numpy reference, the tokenizer, and the DDR3 weight image (`qwen.py`, `tokenizer.py`, `export.py`, `check.py`) | **done** |
-| 3 | Each layer as core programs, checked word for word in Verilator | next |
-| 4 | The host runtime in C on the ARM | |
+| 3 | Each layer as core programs, checked word for word in Verilator (`core_runtime.py`, `phase3.py`) | **done**: the whole model, every `MATMUL` exact |
+| 4 | The host runtime in C on the ARM | next |
 | 5 | On the board (needs a larger DDR3 window than `mem=768M` leaves) | |
 
 ## Setup
@@ -103,7 +104,55 @@ compound over 24 layers, where the residual stream reaches ~1,400. So
 phase 3 compares the core's int32 output word for word on identical int8
 inputs, and end-to-end runs are judged by perplexity.
 
-## What phase 3 has to respect
+## Phase 3: the layers on the core
+
+`core_runtime.py` turns each call of a linear layer into one program:
+- `RD_DDR_UB` loads the host's int8 rows, which the host wrote to DDR3 in the
+  UB's layout, in pieces of up to 4,096 entries.
+- `SET_WBASE` points at the matrix's first tile.
+- Per chunk of output blocks, it runs a `MATMUL wsrc=1`, then `SET_OBASE`
+  and an `ACTIVATE dst=DDR` that writes raw int32.
+- `SIGNAL` ends it.
+- The `WAIT`s come from `isa_waits`.
+
+It plugs into `qwen.CoreLinear.matmul`, the one place the core's arithmetic
+happens. The host reads the int32 back and dequantizes it in numpy, as before.
+Each layer is a chunk of 1,024 / m output blocks at most (the accumulator's
+rows): at m = 1, gate/up is 2 `MATMUL`s and the head 19.
+
+`phase3.py`, in Verilator (`tb_isa`, the 494 MB image in its DDR3 model):
+
+| Check | Result |
+|---|---|
+| layer 0's q/k/v, o, gate/up, down and the output head; random int8 rows, m = 1 and 5; random DDR3 timing | int32 == the reference matmul, word for word |
+| a 5-token prompt (m = 5), then 3 tokens decoded one at a time; every linear layer on the core, each `MATMUL` checked | 97 programs per pass, all exact; logits identical to the numpy core path |
+| greedy text on the simulated core | "The capital of France is" → " Paris. It is" |
+| one weight byte changed in the simulated DDR3 | caught: 2 output words differ |
+
+**Per decoded token** the core works through 7,718,144 tiles in 97 programs:
+**1.235 s of array time at 50 MHz**, the spec's figure. It also waits 0 cycles
+for weights. Each program's `RD_DDR_UB` holds MM back while WT is already
+prefetching that program's weights, so the first tile is there before the
+array needs it. Verilator runs it at about 1.8 M cycles/s, so 36 s of
+simulation per token.
+
+## What phase 4 has to do
+
+The host side of each layer moves to C on the ARM, with numpy's
+`core_runtime.py` and `qwen.py` as the specification:
+- **Quantizing inputs:** smoothing, per-row int8 rounding half to even
+  (`rintf`), written in the UB's layout.
+- **Dequantizing outputs**, plus RMSNorm, RoPE, attention over the KV cache,
+  SiLU and residuals.
+- **The embedding gather** from the head's tiles.
+- **Sampling.**
+
+The ARM's float math won't match numpy's bit for bit, and int8 rounding
+compounds any difference. So the comparison is per `MATMUL`: the runtime can
+log its int8 inputs, and the numpy reference recomputes those `MATMUL`s.
+End to end, the judge is perplexity.
+
+## The core's limits the programs respect
 
 - **The accumulator holds 1,024 rows.** So gate/up (1,216 blocks) takes 2
   `MATMUL`s and the head (18,992 blocks) 19.

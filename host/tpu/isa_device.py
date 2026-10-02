@@ -61,6 +61,10 @@ class IsaSimLink:
         if len(self._buf) > 1 << 16:
             self.flush()
 
+    def advance(self, cycles):
+        """run the model `cycles` clocks: its clock otherwise only moves with register accesses"""
+        self._buf += b"T" + struct.pack("<I", cycles)
+
     def ddr_read(self, address, count):
         """bytes from DDR3, as the host's loads see them"""
         self._buf += b"G" + struct.pack("<II", address, count)
@@ -260,6 +264,9 @@ class IsaSerialLink(IsaSimLink):
     # framebuffer at 0x3F000000 (isa_mmio refuses anything else)
     ddr_window = (0x30000000, 0x3F000000)
 
+    def advance(self, cycles):
+        pass                                     # the board's clock runs on its own
+
     def __init__(self, port, server="/mnt/boot/isa_mmio", baud=115200, timeout=10.0):
         self._con = BoardConsole(port, baud)
         self._buf = bytearray()
@@ -326,9 +333,11 @@ class IsaDevice:
         n = self.levels()["out_count"]
         return [self.link.read32(OUT) for _ in range(n)]
 
-    def run(self, program, data=(), timeout=60.0):
+    def run(self, program, data=(), timeout=60.0, advance=0):
         """push a program ending in SIGNAL plus its data, then collect output
-        until DONE. the instruction FIFO must hold the whole program (512)"""
+        until DONE. the instruction FIFO must hold the whole program (512).
+        advance: clocks to run a simulated core between status polls, for long
+        programs (it overshoots DONE, so cycle counts include up to that much)"""
         if len(program) > 512:
             raise ValueError("phase 1 driver: program must fit the 512-entry instruction FIFO")
         self.link.write32(CTRL, CTRL_CLEAR_DONE)
@@ -338,6 +347,8 @@ class IsaDevice:
         t0 = time.time()
         while True:
             out += self.drain()
+            if advance:
+                self.link.advance(advance)
             st = self.status()
             if st["err"]:
                 raise IsaError(f"error code {st['err_code']} at instruction "

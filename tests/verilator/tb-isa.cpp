@@ -1,7 +1,8 @@
 // tpu_top as a register-level transport for host/tpu/isa_device.py.
 // stdin carries 'W' addr u32 (write, no reply), 'R' addr (read, 4-byte reply),
 // 'D' addr u32 len u32 bytes (DDR3 write, no reply), 'G' addr u32 len u32 (DDR3
-// read, len bytes back), 'M' mode (DDR3 timing, no reply) and 'Q' (quit); on start
+// read, len bytes back), 'M' mode (DDR3 timing, no reply), 'T' n u32 (run n
+// cycles, no reply) and 'Q' (quit); on start
 // it writes its build parameters as 5 u32 words.
 // the DDR3 model behind tpu_top's master is the FPGA-to-SDRAM port as the core
 // sees it: one in-order port, at most 14 bursts pending, no read backpressure,
@@ -11,6 +12,7 @@
 // first beat, beats back to back; mode k >= 2 is the same with k cycles
 #include <cstdint>
 #include <cstdio>
+#include <algorithm>
 #include <cstdlib>
 #include <deque>
 #include <memory>
@@ -39,11 +41,24 @@ namespace ddr {
         auto p = pages.find(a >> 12);
         return p == pages.end() ? 0 : p->second[a & 0xFFF];
     }
-    void write(uint32_t a, const std::vector<uint8_t>& data) {
-        for (size_t i = 0; i < data.size(); i++) {
-            auto& page = pages[(a + i) >> 12];
+    // whole runs within a page at a time: Qwen's 494 MB of weights go through here
+    void write(uint32_t a, const uint8_t* data, size_t n) {
+        while (n) {
+            size_t k = std::min<size_t>(n, 4096 - (a & 0xFFF));
+            auto& page = pages[a >> 12];
             if (page.empty()) page.resize(4096);
-            page[(a + i) & 0xFFF] = data[i];
+            std::copy(data, data + k, page.begin() + (a & 0xFFF));
+            a += k; data += k; n -= k;
+        }
+    }
+    void write(uint32_t a, const std::vector<uint8_t>& data) { write(a, data.data(), data.size()); }
+    void read(uint32_t a, uint8_t* out, size_t n) {
+        while (n) {
+            size_t k = std::min<size_t>(n, 4096 - (a & 0xFFF));
+            auto p = pages.find(a >> 12);
+            if (p == pages.end()) std::fill(out, out + k, 0);
+            else std::copy(p->second.begin() + (a & 0xFFF), p->second.begin() + (a & 0xFFF) + k, out);
+            a += k; out += k; n -= k;
         }
     }
     [[noreturn]] void fail(const char* what) {
@@ -82,7 +97,7 @@ namespace ddr {
             if (dut->avm_read) {
                 Burst b{std::vector<uint8_t>(16 * dut->avm_burstcount), dut->avm_burstcount,
                         now + (random_timing ? 4 + rng() % 30 : latency)};
-                for (size_t i = 0; i < b.data.size(); i++) b.data[i] = byte(dut->avm_address + i);
+                read(dut->avm_address, b.data.data(), b.data.size());
                 pending.push_back(std::move(b));
             } else {
                 std::vector<uint8_t> one(1);
@@ -148,9 +163,15 @@ int main(int argc, char** argv) {
             uint32_t address, length;
             if (!get(&address, 4) || !get(&length, 4)) break;
             std::vector<uint8_t> data(length);
-            for (uint32_t i = 0; i < length; i++) data[i] = ddr::byte(address + i);
+            ddr::read(address, data.data(), length);
             fwrite(data.data(), 1, length, stdout);
             fflush(stdout);
+            continue;
+        }
+        if (cmd == 'T') {                    // let the core run: the clock only moves when told
+            uint32_t cycles;
+            if (!get(&cycles, 4)) break;
+            for (uint32_t i = 0; i < cycles; i++) tick();
             continue;
         }
         if (cmd == 'M') {
