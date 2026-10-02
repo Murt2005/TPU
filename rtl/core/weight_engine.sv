@@ -38,38 +38,38 @@ module weight_engine #(
     assign opcode = instruction[63:58];
 
     logic [31:0] weight_base;
-    logic [31:0] tiles_left;                          // tiles still to issue
-    logic [31:0] tile;
-    logic [7:0]  row;
-    logic        read_pending, read_slot, read_final;
+    logic [31:0] tiles_left;                                // tiles still to issue
+    logic [31:0] tile_index;
+    logic [7:0]  row_in_tile;
+    logic        read_pending, read_slot, read_is_last_row;
     logic [7:0]  read_row;
 
-    logic [23:0] matmul_tiles;
-    assign matmul_tiles = 24'(11'(instruction[35:26]) + 11'd1) * 24'(13'(instruction[47:36]) + 13'd1);
+    logic [23:0] matmul_tile_count;
+    assign matmul_tile_count = 24'(11'(instruction[35:26]) + 11'd1) * 24'(13'(instruction[47:36]) + 13'd1);
 
     logic issuing_read;
     assign issuing_read = tiles_left != 0 && fill_ready_in;
 
-    assign fill_advance_out      = issuing_read && row == 8'(ARRAY_SIZE - 1);
+    assign fill_advance_out      = issuing_read && row_in_tile == 8'(ARRAY_SIZE - 1);
     assign fill_write_enable_out = read_pending;
     assign fill_slot_out         = read_slot;
     assign fill_row_out          = read_row;
     assign fill_data_out         = WMEM_read_data_in;
 
-    assign WMEM_read_address_out = WMEM_ADDRESS_WIDTH'(tile * ARRAY_SIZE + 32'(row));
-    assign queue_pop_out      = queue_valid_in && tiles_left == 0 && !read_pending
-                        && (opcode != OPCODE_WAIT || wait_counts_reached(instruction[51:48], wait_snapshot, completed_in));
-    assign idle_out       = tiles_left == 0 && !read_pending && !queue_valid_in;
+    assign WMEM_read_address_out = WMEM_ADDRESS_WIDTH'(tile_index * ARRAY_SIZE + 32'(row_in_tile));
+    assign queue_pop_out         = queue_valid_in && tiles_left == 0 && !read_pending
+                                   && (opcode != OPCODE_WAIT || wait_counts_reached(instruction[51:48], wait_snapshot, completed_in));
+    assign idle_out              = tiles_left == 0 && !read_pending && !queue_valid_in;
 
     always_ff @(posedge clk) begin
         if (reset) begin
             weight_base          <= '0;
             tiles_left           <= '0;
-            tile                 <= '0;
-            row                  <= '0;
+            tile_index           <= '0;
+            row_in_tile          <= '0;
             read_pending         <= 1'b0;
             read_slot            <= 1'b0;
-            read_final           <= 1'b0;
+            read_is_last_row     <= 1'b0;
             read_row             <= '0;
             instruction_done_out <= 1'b0;
         end else begin
@@ -82,31 +82,31 @@ module weight_engine #(
                         instruction_done_out <= 1'b1;
                     end
                     OPCODE_MATMUL: begin
-                        tile        <= weight_base;
-                        tiles_left  <= 32'(matmul_tiles);
-                        weight_base <= weight_base + 32'(matmul_tiles);
-                        row         <= '0;
+                        tile_index  <= weight_base;
+                        tiles_left  <= 32'(matmul_tile_count);
+                        weight_base <= weight_base + 32'(matmul_tile_count);
+                        row_in_tile <= '0;
                     end
                     default: instruction_done_out <= 1'b1;   // WAIT
                 endcase
             end
 
             // one row read per cycle; the slot index flips as the last row issues
-            read_pending <= issuing_read;
-            read_slot    <= fill_slot_next_in;
-            read_row     <= row;
-            read_final   <= issuing_read && row == 8'(ARRAY_SIZE - 1) && tiles_left == 32'd1;
+            read_pending     <= issuing_read;
+            read_slot        <= fill_slot_next_in;
+            read_row         <= row_in_tile;
+            read_is_last_row <= issuing_read && row_in_tile == 8'(ARRAY_SIZE - 1) && tiles_left == 32'd1;
             if (issuing_read) begin
-                if (row == 8'(ARRAY_SIZE - 1)) begin
-                    row        <= '0;
-                    tile       <= tile + 32'd1;
-                    tiles_left <= tiles_left - 32'd1;
+                if (row_in_tile == 8'(ARRAY_SIZE - 1)) begin
+                    row_in_tile <= '0;
+                    tile_index  <= tile_index + 32'd1;
+                    tiles_left  <= tiles_left - 32'd1;
                 end else begin
-                    row <= row + 8'd1;
+                    row_in_tile <= row_in_tile + 8'd1;
                 end
             end
 
-            if (read_pending && read_row == 8'(ARRAY_SIZE - 1) && read_final)
+            if (read_pending && read_row == 8'(ARRAY_SIZE - 1) && read_is_last_row)
                 instruction_done_out <= 1'b1;
         end
     end

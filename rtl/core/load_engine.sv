@@ -36,7 +36,7 @@ module load_engine #(
     output logic                               idle_out
 );
 
-    localparam int WORDS_PER_ROW = ARRAY_SIZE / 4; // words per int8 row
+    localparam int WORDS_PER_INT8_ROW = ARRAY_SIZE / 4;
 
     logic [63:0] instruction, wait_snapshot;
     assign instruction   = queue_entry_in[63:0];
@@ -47,38 +47,38 @@ module load_engine #(
     logic                     busy;
     logic [5:0]               current_opcode;
     logic [16:0]              items_left;
-    logic [15:0]              address;
+    logic [15:0]              write_address;
     logic [7:0]               word_index;
-    logic [ARRAY_SIZE*32-1:0] buffer;
+    logic [ARRAY_SIZE*32-1:0] item_buffer;
 
-    logic int8_rows;
-    assign int8_rows = (current_opcode == OPCODE_WR_WMEM || current_opcode == OPCODE_WR_UB);
+    logic writes_int8_rows;
+    assign writes_int8_rows = (current_opcode == OPCODE_WR_WMEM || current_opcode == OPCODE_WR_UB);
     logic [7:0] words_per_item;
-    assign words_per_item = int8_rows ? 8'(WORDS_PER_ROW) : 8'(ARRAY_SIZE);
+    assign words_per_item = writes_int8_rows ? 8'(WORDS_PER_INT8_ROW) : 8'(ARRAY_SIZE);
 
     // the item including the word arriving this cycle
-    logic [ARRAY_SIZE*32-1:0] item;
+    logic [ARRAY_SIZE*32-1:0] assembled_item;
     always_comb begin
-        item                      = buffer;
-        item[32*word_index +: 32] = data_in;
+        assembled_item                      = item_buffer;
+        assembled_item[32*word_index +: 32] = data_in;
     end
 
-    logic last_word;
-    assign last_word = (word_index == words_per_item - 8'd1);
+    logic is_last_word;
+    assign is_last_word = (word_index == words_per_item - 8'd1);
 
     // hold a UB entry's last word while ACT is writing the UB
-    assign data_pop_out             = busy && data_valid_in && !(last_word && current_opcode == OPCODE_WR_UB && UB_write_blocked_in);
-    assign row_write_data_out       = item[ARRAY_SIZE*8-1:0];
-    assign parameter_write_data_out = item;
+    assign data_pop_out             = busy && data_valid_in && !(is_last_word && current_opcode == OPCODE_WR_UB && UB_write_blocked_in);
+    assign row_write_data_out       = assembled_item[ARRAY_SIZE*8-1:0];
+    assign parameter_write_data_out = assembled_item;
 
     always_comb begin
-        WMEM_write_enable_out         = data_pop_out && last_word && current_opcode == OPCODE_WR_WMEM;
-        UB_write_enable_out           = data_pop_out && last_word && current_opcode == OPCODE_WR_UB;
-        bias_write_enable_out         = data_pop_out && last_word && current_opcode == OPCODE_WR_BIAS;
-        quantization_write_enable_out = data_pop_out && last_word && current_opcode == OPCODE_WR_QUANT;
-        WMEM_write_address_out        = WMEM_ADDRESS_WIDTH'(address);
-        UB_write_address_out          = UB_ADDRESS_WIDTH'(address);
-        parameter_write_address_out   = PARAMETER_ADDRESS_WIDTH'(address);
+        WMEM_write_enable_out         = data_pop_out && is_last_word && current_opcode == OPCODE_WR_WMEM;
+        UB_write_enable_out           = data_pop_out && is_last_word && current_opcode == OPCODE_WR_UB;
+        bias_write_enable_out         = data_pop_out && is_last_word && current_opcode == OPCODE_WR_BIAS;
+        quantization_write_enable_out = data_pop_out && is_last_word && current_opcode == OPCODE_WR_QUANT;
+        WMEM_write_address_out        = WMEM_ADDRESS_WIDTH'(write_address);
+        UB_write_address_out          = UB_ADDRESS_WIDTH'(write_address);
+        parameter_write_address_out   = PARAMETER_ADDRESS_WIDTH'(write_address);
     end
 
     logic wait_satisfied;
@@ -91,9 +91,9 @@ module load_engine #(
             busy                 <= 1'b0;
             current_opcode       <= OPCODE_NOP;
             items_left           <= '0;
-            address              <= '0;
+            write_address        <= '0;
             word_index           <= '0;
-            buffer               <= '0;
+            item_buffer          <= '0;
             instruction_done_out <= 1'b0;
         end else begin
             instruction_done_out <= 1'b0;
@@ -105,24 +105,24 @@ module load_engine #(
                     current_opcode <= opcode;
                     word_index     <= '0;
                     case (opcode)
-                        OPCODE_WR_WMEM: begin address <= instruction[47:32];        items_left <= 17'(instruction[15:0]) + 1; end
-                        OPCODE_WR_UB:   begin address <= 16'(instruction[45:32]);   items_left <= 17'(instruction[11:0]) + 1; end
-                        default:        begin address <= 16'(instruction[39:32]);   items_left <= 17'(instruction[7:0]) + 1; end
+                        OPCODE_WR_WMEM: begin write_address <= instruction[47:32];        items_left <= 17'(instruction[15:0]) + 1; end
+                        OPCODE_WR_UB:   begin write_address <= 16'(instruction[45:32]);   items_left <= 17'(instruction[11:0]) + 1; end
+                        default:        begin write_address <= 16'(instruction[39:32]);   items_left <= 17'(instruction[7:0]) + 1; end
                     endcase
                 end
             end
             if (data_pop_out) begin
-                if (last_word) begin
-                    word_index <= '0;
-                    address    <= address + 16'd1;
+                if (is_last_word) begin
+                    word_index    <= '0;
+                    write_address <= write_address + 16'd1;
                     if (items_left == 17'd1) begin
                         busy                 <= 1'b0;
                         instruction_done_out <= 1'b1;
                     end
                     items_left <= items_left - 17'd1;
                 end else begin
-                    buffer     <= item;
-                    word_index <= word_index + 8'd1;
+                    item_buffer <= assembled_item;
+                    word_index  <= word_index + 8'd1;
                 end
             end
         end

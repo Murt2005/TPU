@@ -36,29 +36,29 @@ module dispatch #(
 
     logic [31:0] instruction_sequence;
     logic [31:0] weight_base;          // shadow of WT's WBASE, for weight range checks
-    logic        fence;
+    logic        fence_pending;
     logic [15:0] fence_tag;
 
     // -- decode -------------------------------------------------------------
     logic [5:0] opcode;
     assign opcode = instruction_in[63:58];
 
-    logic [63:0] legal_bits;
+    logic [63:0] legal_bit_mask;
     logic        opcode_known;
     always_comb begin
         opcode_known = 1'b1;
         case (opcode)
-            OPCODE_NOP:                         legal_bits = MASK_NOP;
-            OPCODE_WR_WMEM:                     legal_bits = MASK_WR_WMEM;
-            OPCODE_WR_UB, OPCODE_RD_UB:         legal_bits = MASK_WR_UB;
-            OPCODE_WR_BIAS, OPCODE_WR_QUANT:    legal_bits = MASK_WR_PARAMETER;
-            OPCODE_RD_DDR_UB:                   legal_bits = MASK_RD_DDR_UB;
-            OPCODE_SET_WBASE, OPCODE_SET_OBASE: legal_bits = MASK_SET_32_BIT;
-            OPCODE_MATMUL:                      legal_bits = MASK_MATMUL;
-            OPCODE_ACTIVATE:                    legal_bits = MASK_ACTIVATE;
-            OPCODE_WAIT:                        legal_bits = MASK_WAIT;
-            OPCODE_SIGNAL:                      legal_bits = MASK_SIGNAL;
-            default:                            begin legal_bits = '0; opcode_known = 1'b0; end
+            OPCODE_NOP:                         legal_bit_mask = MASK_NOP;
+            OPCODE_WR_WMEM:                     legal_bit_mask = MASK_WR_WMEM;
+            OPCODE_WR_UB, OPCODE_RD_UB:         legal_bit_mask = MASK_WR_UB;
+            OPCODE_WR_BIAS, OPCODE_WR_QUANT:    legal_bit_mask = MASK_WR_PARAMETER;
+            OPCODE_RD_DDR_UB:                   legal_bit_mask = MASK_RD_DDR_UB;
+            OPCODE_SET_WBASE, OPCODE_SET_OBASE: legal_bit_mask = MASK_SET_32_BIT;
+            OPCODE_MATMUL:                      legal_bit_mask = MASK_MATMUL;
+            OPCODE_ACTIVATE:                    legal_bit_mask = MASK_ACTIVATE;
+            OPCODE_WAIT:                        legal_bit_mask = MASK_WAIT;
+            OPCODE_SIGNAL:                      legal_bit_mask = MASK_SIGNAL;
+            default:                            begin legal_bit_mask = '0; opcode_known = 1'b0; end
         endcase
     end
 
@@ -108,7 +108,7 @@ module dispatch #(
         decode_error = ERROR_NONE;
         if (!opcode_known)
             decode_error = ERROR_OPCODE;
-        else if ((instruction_in & ~legal_bits) != 0)
+        else if ((instruction_in & ~legal_bit_mask) != 0)
             decode_error = ERROR_RESERVED;
         else if (opcode == OPCODE_ACTIVATE && (field_function[1] || field_destination == 2'd3))
             decode_error = ERROR_RESERVED;
@@ -152,19 +152,19 @@ module dispatch #(
     assign all_engines_quiet = (completed_in == dispatched_out);
 
     logic dispatch_now;
-    assign dispatch_now = instruction_valid_in && !error_out && !fence && decode_error == ERROR_NONE && (target_queues & queue_full_in) == 0;
+    assign dispatch_now = instruction_valid_in && !error_out && !fence_pending && decode_error == ERROR_NONE && (target_queues & queue_full_in) == 0;
 
     assign instruction_pop_out = dispatch_now;
     assign queue_push_out      = dispatch_now ? target_queues : 4'b0000;
     // a WAIT carries the counts dispatched so far, not including itself
     assign queue_entry_out   = {dispatched_out, instruction_in};
-    assign fence_pending_out = fence;
+    assign fence_pending_out = fence_pending;
 
     always_ff @(posedge clk) begin
         if (reset) begin
             instruction_sequence <= '0;
             weight_base          <= '0;
-            fence                <= 1'b0;
+            fence_pending        <= 1'b0;
             fence_tag            <= '0;
             dispatched_out       <= '0;
             error_out            <= 1'b0;
@@ -176,7 +176,7 @@ module dispatch #(
             if (clear_done_in)
                 done_out <= 1'b0;
 
-            if (instruction_valid_in && !error_out && !fence && decode_error != ERROR_NONE) begin
+            if (instruction_valid_in && !error_out && !fence_pending && decode_error != ERROR_NONE) begin
                 error_out          <= 1'b1;
                 error_code_out     <= decode_error;
                 error_sequence_out <= instruction_sequence;
@@ -192,15 +192,15 @@ module dispatch #(
                 else if (opcode == OPCODE_MATMUL)
                     weight_base <= weight_base + 32'(product_block_count_k_tiles);
                 if (opcode == OPCODE_SIGNAL) begin
-                    fence     <= 1'b1;
-                    fence_tag <= instruction_in[15:0];
+                    fence_pending <= 1'b1;
+                    fence_tag     <= instruction_in[15:0];
                 end
             end
 
-            if (fence && all_engines_quiet) begin
-                fence    <= 1'b0;
-                done_out <= 1'b1;
-                tag_out  <= fence_tag;
+            if (fence_pending && all_engines_quiet) begin
+                fence_pending <= 1'b0;
+                done_out      <= 1'b1;
+                tag_out       <= fence_tag;
             end
         end
     end

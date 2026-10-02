@@ -57,8 +57,8 @@ module matmul_engine #(
 
     logic        accumulate;
     logic [8:0]  activation_rows;
-    logic [12:0] k_tiles, k_tile;
-    logic [15:0] chunk_base, UB_base;
+    logic [12:0] k_tiles, k_tile_index;
+    logic [15:0] UB_chunk_base, UB_base;
     logic [15:0] ACC_base;
     logic        window_has_activations, window_has_weights; // this window streams a tile / loads the next
     logic [31:0] weight_tiles_left;                          // tiles whose weights are still to load
@@ -69,12 +69,12 @@ module matmul_engine #(
     assign window_length       = (window_has_activations && activation_rows > 9'(ARRAY_SIZE)) ? activation_rows : 9'(ARRAY_SIZE);
     assign weight_window_start = window_length - 9'(ARRAY_SIZE);
 
-    logic activation_issue_now, weight_issue_now, window_frozen, advance, window_end;
+    logic activation_issue_now, weight_issue_now, window_frozen, window_advance, window_end;
     assign activation_issue_now = window_has_activations && window_position < activation_rows;
     assign weight_issue_now     = window_has_weights && window_position >= weight_window_start;
     assign window_frozen        = weight_issue_now && !tile_full_in;
-    assign advance              = state == S_RUN && !window_frozen;
-    assign window_end           = advance && window_position == window_length - 9'd1;
+    assign window_advance       = state == S_RUN && !window_frozen;
+    assign window_end           = window_advance && window_position == window_length - 9'd1;
 
     logic                               activation_valid_delayed, activation_weight_flip_delayed;
     logic                               weight_register_valid;
@@ -89,11 +89,11 @@ module matmul_engine #(
     assign weight_data_out            = weight_register_data;
 
     // -- control -----------------------------------------------------------
-    assign UB_read_enable_out  = advance && activation_issue_now;
-    assign UB_read_address_out = UB_ADDRESS_WIDTH'(chunk_base + 16'(window_position));
+    assign UB_read_enable_out  = window_advance && activation_issue_now;
+    assign UB_read_address_out = UB_ADDRESS_WIDTH'(UB_chunk_base + 16'(window_position));
     assign tag_push_out        = UB_read_enable_out;
-    assign tag_out             = {(k_tile == 13'd0) && !accumulate, ACC_ADDRESS_WIDTH'(ACC_base + 16'(window_position))};
-    assign tile_take_out       = advance && weight_issue_now && window_position == window_length - 9'd1;
+    assign tag_out             = {(k_tile_index == 13'd0) && !accumulate, ACC_ADDRESS_WIDTH'(ACC_base + 16'(window_position))};
+    assign tile_take_out       = window_advance && weight_issue_now && window_position == window_length - 9'd1;
 
     logic wait_satisfied;
     assign wait_satisfied = wait_counts_reached(instruction[51:48], wait_snapshot, completed_in);
@@ -110,8 +110,8 @@ module matmul_engine #(
             accumulate                     <= 1'b0;
             activation_rows                <= '0;
             k_tiles                        <= '0;
-            k_tile                         <= '0;
-            chunk_base                     <= '0;
+            k_tile_index                   <= '0;
+            UB_chunk_base                  <= '0;
             UB_base                        <= '0;
             ACC_base                       <= '0;
             window_has_activations         <= 1'b0;
@@ -131,7 +131,7 @@ module matmul_engine #(
             activation_weight_flip_delayed <= window_position == 9'd0;
 
             // weight row registered to line up with the UB read latency
-            weight_register_valid <= advance && weight_issue_now;
+            weight_register_valid <= window_advance && weight_issue_now;
             weight_register_row   <= weight_row_now;
             for (int column = 0; column < ARRAY_SIZE; column++)
                 weight_register_data[column] <= tile_in[weight_row_now][8*column +: 8];
@@ -146,8 +146,8 @@ module matmul_engine #(
                         k_tiles                <= 13'(instruction[47:36]) + 13'd1;
                         ACC_base               <= 16'(instruction[25:16]);
                         UB_base                <= 16'(instruction[15:2]);
-                        chunk_base             <= 16'(instruction[15:2]);
-                        k_tile                 <= '0;
+                        UB_chunk_base          <= 16'(instruction[15:2]);
+                        k_tile_index           <= '0;
                         window_has_activations <= 1'b0;
                         window_has_weights     <= 1'b1;
                         weight_tiles_left      <= 32'(24'(11'(instruction[35:26]) + 11'd1) * 24'(13'(instruction[47:36]) + 13'd1));
@@ -157,18 +157,18 @@ module matmul_engine #(
                         instruction_done_out <= 1'b1;            // WAIT
                     end
                 end
-                S_RUN: if (advance) begin
+                S_RUN: if (window_advance) begin
                     window_position <= window_position + 9'd1;
                     if (window_end) begin
                         window_position <= '0;
                         if (window_has_activations) begin
-                            if (k_tile == k_tiles - 13'd1) begin
-                                k_tile     <= '0;
-                                chunk_base <= UB_base;
-                                ACC_base   <= ACC_base + 16'(activation_rows);
+                            if (k_tile_index == k_tiles - 13'd1) begin
+                                k_tile_index  <= '0;
+                                UB_chunk_base <= UB_base;
+                                ACC_base      <= ACC_base + 16'(activation_rows);
                             end else begin
-                                k_tile     <= k_tile + 13'd1;
-                                chunk_base <= chunk_base + 16'(activation_rows);
+                                k_tile_index  <= k_tile_index + 13'd1;
+                                UB_chunk_base <= UB_chunk_base + 16'(activation_rows);
                             end
                         end
                         window_has_activations <= window_has_weights;

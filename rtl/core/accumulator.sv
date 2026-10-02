@@ -9,19 +9,19 @@ module accumulator #(
     parameter int ACC_DEPTH         = 1024,
     parameter int ACC_ADDRESS_WIDTH = $clog2(ACC_DEPTH)
 ) (
-    input  logic                                clk,
-    input  logic                                reset,
+    input  logic  clk,
+    input  logic  reset,
 
     input  logic signed [ARRAY_SIZE-1:0][31:0]  partial_sum_in,
-    input  logic        [ARRAY_SIZE-1:0]        partial_sum_valid_in,
+    input  logic [ARRAY_SIZE-1:0]        partial_sum_valid_in,
 
-    input  logic                                tag_push_in,
-    input  logic        [ACC_ADDRESS_WIDTH:0]   tag_in,                    // {overwrite, ACC row}
-    output logic                                row_written_out,           // a row reaches ACC this cycle
+    input  logic                         tag_push_in,
+    input  logic [ACC_ADDRESS_WIDTH:0]   tag_in,                    // {overwrite, ACC row}
+    output logic                         row_written_out,           // a row reaches ACC this cycle
 
-    input  logic        [ACC_ADDRESS_WIDTH-1:0] activate_read_address_in,
-    output logic                                activate_read_blocked_out, // MM owns the read port this cycle
-    output logic        [ARRAY_SIZE*32-1:0]     read_data_out              // one cycle after the address
+    input  logic [ACC_ADDRESS_WIDTH-1:0] activate_read_address_in,
+    output logic                         activate_read_blocked_out, // MM owns the read port this cycle
+    output logic [ARRAY_SIZE*32-1:0]     read_data_out              // one cycle after the address
 );
 
     localparam int SKEW_DEPTH = (2 * ARRAY_SIZE <= 4) ? 4 : (2 * ARRAY_SIZE <= 8) ? 8 : (2 * ARRAY_SIZE <= 16) ? 16 : (2 * ARRAY_SIZE <= 32) ? 32 : 64;
@@ -71,15 +71,15 @@ module accumulator #(
     logic                         write_back_valid, write_back_overwrite;
     logic [ACC_ADDRESS_WIDTH-1:0] write_back_address;
     logic [ARRAY_SIZE*32-1:0]     write_back_partial_sum;
-    logic [ARRAY_SIZE*32-1:0]     write_data;
+    logic [ARRAY_SIZE*32-1:0]     write_back_data;
 
-    assign matmul_read_enable    = row_pop && !tag_head[ACC_ADDRESS_WIDTH];
-    assign matmul_read_address   = tag_head[ACC_ADDRESS_WIDTH-1:0];
+    assign matmul_read_enable        = row_pop && !tag_head[ACC_ADDRESS_WIDTH];
+    assign matmul_read_address       = tag_head[ACC_ADDRESS_WIDTH-1:0];
     assign activate_read_blocked_out = matmul_read_enable;
     assign row_written_out           = write_back_valid;
     always_comb
         for (int column = 0; column < ARRAY_SIZE; column++)
-            write_data[32*column +: 32] = write_back_overwrite ? write_back_partial_sum[32*column +: 32] : read_data_out[32*column +: 32] + write_back_partial_sum[32*column +: 32];
+            write_back_data[32*column +: 32] = write_back_overwrite ? write_back_partial_sum[32*column +: 32] : read_data_out[32*column +: 32] + write_back_partial_sum[32*column +: 32];
 
     always_ff @(posedge clk) begin
         if (reset) begin
@@ -98,7 +98,7 @@ module accumulator #(
     // the ACC memory: registered read, so it maps to block RAM
     logic [ARRAY_SIZE*32-1:0] memory [ACC_DEPTH];
     always_ff @(posedge clk) begin
-        if (write_back_valid) memory[write_back_address] <= write_data;
+        if (write_back_valid) memory[write_back_address] <= write_back_data;
         read_data_out <= memory[matmul_read_enable ? matmul_read_address : activate_read_address_in];
     end
 

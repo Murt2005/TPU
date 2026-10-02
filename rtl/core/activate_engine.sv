@@ -48,7 +48,7 @@ module activate_engine #(
     output logic                               idle_out
 );
 
-    localparam int WORDS_PER_ROW = ARRAY_SIZE / 4;
+    localparam int WORDS_PER_INT8_ROW = ARRAY_SIZE / 4;
 
     logic [63:0] instruction, wait_snapshot;
     assign instruction   = queue_entry_in[63:0];
@@ -60,32 +60,32 @@ module activate_engine #(
     state_t state;
 
     logic                     is_read_UB;
-    logic                     requantize, to_UB;
-    logic [15:0]              UB_output_address;
+    logic                     requantize, destination_is_UB;
+    logic [15:0]              UB_destination_address;
     logic [8:0]               activation_rows;
     logic [10:0]              block_count, block_index;
     logic [8:0]               row_in_block;
-    logic [15:0]              row_address;              // ACC row, or UB entry for RD_UB
-    logic [15:0]              items_left;               // RD_UB entries
+    logic [15:0]              read_address;                  // ACC row, or UB entry for RD_UB
+    logic [15:0]              UB_entries_left;               // RD_UB entries
     logic [7:0]               parameter_index;
-    logic [7:0]               word;                     // word within the row being emitted
-    logic [ARRAY_SIZE*32-1:0] row;                      // computed row, one word per column (or packed int8)
+    logic [7:0]               word_index;                    // word within the row being emitted
+    logic [ARRAY_SIZE*32-1:0] result_row;                    // computed row, one word per column (or packed int8)
 
-    assign ACC_read_address_out       = ACC_ADDRESS_WIDTH'(row_address);
-    assign UB_read_address_out        = UB_ADDRESS_WIDTH'(row_address);
+    assign ACC_read_address_out       = ACC_ADDRESS_WIDTH'(read_address);
+    assign UB_read_address_out        = UB_ADDRESS_WIDTH'(read_address);
     assign parameter_read_address_out = PARAMETER_ADDRESS_WIDTH'(parameter_index);
     assign UB_read_enable_out         = state == S_READ && is_read_UB && !UB_read_blocked_in;
     assign multiply_enable_out        = state == S_MULTIPLY;
-    assign multiply_row_out           = row;
+    assign multiply_row_out           = result_row;
 
-    logic [7:0] words_per_row;
-    assign words_per_row = (is_read_UB || requantize) ? 8'(WORDS_PER_ROW) : 8'(ARRAY_SIZE);
+    logic [7:0] words_to_emit;
+    assign words_to_emit = (is_read_UB || requantize) ? 8'(WORDS_PER_INT8_ROW) : 8'(ARRAY_SIZE);
 
     assign UB_write_enable_out  = state == S_WRITE;
-    assign UB_write_address_out = UB_ADDRESS_WIDTH'(UB_output_address);
-    assign UB_write_data_out    = row[ARRAY_SIZE*8-1:0];
+    assign UB_write_address_out = UB_ADDRESS_WIDTH'(UB_destination_address);
+    assign UB_write_data_out    = result_row[ARRAY_SIZE*8-1:0];
     assign output_push_out      = state == S_EMIT && !output_full_in;
-    assign output_word_out      = row[32*word +: 32];
+    assign output_word_out      = result_row[32*word_index +: 32];
 
     logic wait_satisfied;
     assign wait_satisfied = wait_counts_reached(instruction[51:48], wait_snapshot, completed_in);
@@ -94,67 +94,67 @@ module activate_engine #(
 
     always_ff @(posedge clk) begin
         if (reset) begin
-            state                <= S_IDLE;
-            is_read_UB           <= 1'b0;
-            relu_enable_out      <= 1'b0;
-            bias_enable_out      <= 1'b0;
-            activation_rows      <= '0;
-            block_count          <= '0;
-            block_index          <= '0;
-            row_in_block         <= '0;
-            row_address          <= '0;
-            items_left           <= '0;
-            parameter_index      <= '0;
-            word                 <= '0;
-            row                  <= '0;
-            requantize           <= 1'b0;
-            to_UB                <= 1'b0;
-            UB_output_address    <= '0;
-            instruction_done_out <= 1'b0;
+            state                  <= S_IDLE;
+            is_read_UB             <= 1'b0;
+            relu_enable_out        <= 1'b0;
+            bias_enable_out        <= 1'b0;
+            activation_rows        <= '0;
+            block_count            <= '0;
+            block_index            <= '0;
+            row_in_block           <= '0;
+            read_address           <= '0;
+            UB_entries_left        <= '0;
+            parameter_index        <= '0;
+            word_index             <= '0;
+            result_row             <= '0;
+            requantize             <= 1'b0;
+            destination_is_UB      <= 1'b0;
+            UB_destination_address <= '0;
+            instruction_done_out   <= 1'b0;
         end else begin
             instruction_done_out <= 1'b0;
             case (state)
                 S_IDLE: if (queue_pop_out) begin
                     if (opcode == OPCODE_ACTIVATE) begin
-                        is_read_UB        <= 1'b0;
-                        requantize        <= instruction[55];
-                        to_UB             <= instruction[54:53] == DESTINATION_UB;
-                        UB_output_address <= 16'(instruction[23:10]);
-                        relu_enable_out   <= instruction[57:56] == 2'd1;
-                        bias_enable_out   <= instruction[52];
-                        block_count       <= 11'(instruction[51:42]) + 11'd1;
-                        activation_rows   <= 9'(instruction[41:34]) + 9'd1;
-                        row_address       <= 16'(instruction[33:24]);
-                        parameter_index   <= instruction[9:2];
-                        block_index       <= '0;
-                        row_in_block      <= '0;
-                        state             <= S_READ;
+                        is_read_UB             <= 1'b0;
+                        requantize             <= instruction[55];
+                        destination_is_UB      <= instruction[54:53] == DESTINATION_UB;
+                        UB_destination_address <= 16'(instruction[23:10]);
+                        relu_enable_out        <= instruction[57:56] == 2'd1;
+                        bias_enable_out        <= instruction[52];
+                        block_count            <= 11'(instruction[51:42]) + 11'd1;
+                        activation_rows        <= 9'(instruction[41:34]) + 9'd1;
+                        read_address           <= 16'(instruction[33:24]);
+                        parameter_index        <= instruction[9:2];
+                        block_index            <= '0;
+                        row_in_block           <= '0;
+                        state                  <= S_READ;
                     end else if (opcode == OPCODE_RD_UB) begin
-                        is_read_UB  <= 1'b1;
-                        requantize  <= 1'b0;
-                        to_UB       <= 1'b0;
-                        row_address <= 16'(instruction[45:32]);
-                        items_left  <= 16'(instruction[11:0]) + 16'd1;
-                        state       <= S_READ;
+                        is_read_UB        <= 1'b1;
+                        requantize        <= 1'b0;
+                        destination_is_UB <= 1'b0;
+                        read_address      <= 16'(instruction[45:32]);
+                        UB_entries_left   <= 16'(instruction[11:0]) + 16'd1;
+                        state             <= S_READ;
                     end else begin
                         instruction_done_out <= 1'b1;            // WAIT
                     end
                 end
                 S_READ: if (is_read_UB ? !UB_read_blocked_in : !ACC_read_blocked_in) state <= S_LATCH;
                 S_LATCH: begin                         // read data valid this cycle
-                    row   <= is_read_UB ? (ARRAY_SIZE*32)'(UB_read_data_in) : activation_row_in;
-                    word  <= '0;
-                    state <= requantize ? S_MULTIPLY : to_UB ? S_WRITE : S_EMIT;
+                    result_row <= is_read_UB ? (ARRAY_SIZE*32)'(UB_read_data_in) : activation_row_in;
+                    word_index <= '0;
+                    state      <= requantize ? S_MULTIPLY : destination_is_UB ? S_WRITE : S_EMIT;
                 end
                 S_MULTIPLY: state <= S_ROUND;                 // the activation unit multiplies row
                 S_ROUND: begin
-                    row   <= (ARRAY_SIZE*32)'(quantized_row_in);
-                    state <= to_UB ? S_WRITE : S_EMIT;
+                    result_row <= (ARRAY_SIZE*32)'(quantized_row_in);
+                    state      <= destination_is_UB ? S_WRITE : S_EMIT;
                 end
                 S_WRITE: begin                         // one UB entry per row
-                    UB_output_address <= UB_output_address + 16'd1;
-                    row_address       <= row_address + 16'd1;
-                    state             <= S_READ;
+                    UB_destination_address <= UB_destination_address + 16'd1;
+                    read_address           <= read_address + 16'd1;
+                    state                  <= S_READ;
                     if (row_in_block == activation_rows - 9'd1) begin
                         row_in_block    <= '0;
                         parameter_index <= parameter_index + 8'd1;
@@ -168,12 +168,12 @@ module activate_engine #(
                     end
                 end
                 S_EMIT: if (output_push_out) begin
-                    if (word == words_per_row - 8'd1) begin
-                        row_address <= row_address + 16'd1;
-                        state       <= S_READ;
+                    if (word_index == words_to_emit - 8'd1) begin
+                        read_address <= read_address + 16'd1;
+                        state        <= S_READ;
                         if (is_read_UB) begin
-                            items_left <= items_left - 16'd1;
-                            if (items_left == 16'd1) begin
+                            UB_entries_left <= UB_entries_left - 16'd1;
+                            if (UB_entries_left == 16'd1) begin
                                 state                <= S_IDLE;
                                 instruction_done_out <= 1'b1;
                             end
@@ -189,7 +189,7 @@ module activate_engine #(
                             row_in_block <= row_in_block + 9'd1;
                         end
                     end else begin
-                        word <= word + 8'd1;
+                        word_index <= word_index + 8'd1;
                     end
                 end
                 default: state <= S_IDLE;

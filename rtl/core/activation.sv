@@ -21,16 +21,16 @@ module activation #(
 
     // saturate to 27 bits, multiply by M0 (27x25, one DSP each)
     function automatic logic signed [51:0] requantize_multiply(input logic signed [31:0] value, input logic [23:0] multiplier);
-        logic signed [26:0] value_27_bit;
-        value_27_bit = (value > 32'sd67108863) ? 27'sd67108863 : (value < -32'sd67108864) ? -27'sd67108864 : value[26:0];
-        return value_27_bit * $signed({1'b0, multiplier});
+        logic signed [26:0] saturated_value;
+        saturated_value = (value > 32'sd67108863) ? 27'sd67108863 : (value < -32'sd67108864) ? -27'sd67108864 : value[26:0];
+        return saturated_value * $signed({1'b0, multiplier});
     endfunction
 
     // add half, arithmetic shift, clamp to int8
     function automatic logic [7:0] requantize_round(input logic signed [51:0] product, input logic [5:0] shift);
         logic signed [63:0] product_wide, rounded;
         product_wide = 64'(product);
-        rounded = (shift == 6'd0) ? product_wide : (product_wide + (64'sd1 <<< (shift - 6'd1))) >>> shift;
+        rounded      = (shift == 6'd0) ? product_wide : (product_wide + (64'sd1 <<< (shift - 6'd1))) >>> shift;
         return (rounded > 64'sd127) ? 8'sd127 : (rounded < -64'sd128) ? 8'h80 : rounded[7:0];
     endfunction
 
