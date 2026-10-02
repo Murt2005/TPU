@@ -13,7 +13,7 @@ module mmu_tb;
     logic        [N-1:0]      skewed_valid;
     logic                     sds_valid = 1'b0;
     logic signed [N-1:0][7:0] activation;
-    logic        [N-1:0]      activation_first;
+    logic        [N-1:0]      activation_weight_flip;
     logic                     weight_valid = 1'b0;
     logic [$clog2(N)-1:0]     weight_row = '0;
     logic signed [N-1:0][7:0] weight_data = '0;
@@ -26,11 +26,11 @@ module mmu_tb;
     always_comb
         for (int r = 0; r < N; r++) begin
             activation[r]       = skewed[r][7:0];
-            activation_first[r] = skewed[r][8];
+            activation_weight_flip[r] = skewed[r][8];
         end
 
     mmu #(.ARRAY_SIZE(N)) dut (
-        .clk(clk), .reset(reset), .activation(activation), .activation_first(activation_first), .activation_valid(skewed_valid),
+        .clk(clk), .reset(reset), .activation(activation), .activation_weight_flip(activation_weight_flip), .activation_valid(skewed_valid),
         .weight_valid(weight_valid), .weight_row(weight_row), .weight_data(weight_data), .partial_sum(partial_sum), .partial_sum_valid(partial_sum_valid));
 
     always #5 clk = ~clk;

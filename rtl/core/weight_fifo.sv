@@ -1,7 +1,7 @@
 `timescale 1ns / 1ps
 
 // weight FIFO: a two-slot tile buffer between WMEM and the array. WT fills one slot
-// a row at a time while MM drains the other into the PEs' w_next registers. a slot
+// a row at a time while MM drains the other into the PEs' weight_next registers. a slot
 // MM releases refills the same cycle (its last row was read into MM's weight
 // register that cycle), so N-cycle windows never starve
 module weight_fifo #(

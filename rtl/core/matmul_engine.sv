@@ -4,7 +4,7 @@ import tpu_pkg::*;
 
 // MM engine: overlapped tiles. each window of max(m, N) cycles streams one tile's
 // m activation rows and, in its last N cycles, the next tile's weight rows into
-// w_next; the next tile's first row flips them in. a missing tile freezes the
+// weight_next; the next tile's first row flips them in. a missing tile freezes the
 // whole window (WSTALL), which only ever widens the gaps the PEs rely on.
 // control only: tpu_core wires the UB, systolic data setup, mmu and accumulator
 module matmul_engine #(
@@ -25,13 +25,13 @@ module matmul_engine #(
     input  logic                          tile_full,
     output logic                          tile_take,
 
-    output logic                          UB_read_enable,   // always granted
+    output logic                          UB_read_enable,         // always granted
     output logic [UB_ADDRESS_WIDTH-1:0]   UB_read_address,
-    output logic                          activation_valid, // the UB row read last cycle goes in now
-    output logic                          activation_first, // ... and it's a tile's first row: flip
+    output logic                          activation_valid,       // the UB row read last cycle goes in now
+    output logic                          activation_weight_flip, // ... and it's a tile's first row: flip
 
-    output logic                          weight_valid,     // the next tile's weight row, onto the
-    output logic [$clog2(ARRAY_SIZE)-1:0] weight_row,       // mmu's row-select bus
+    output logic                          weight_valid,           // the next tile's weight row, onto the
+    output logic [$clog2(ARRAY_SIZE)-1:0] weight_row,             // mmu's row-select bus
     output logic signed [ARRAY_SIZE-1:0][7:0] weight_data,
 
     output logic                       tag_push,                 // accumulator: where each issued row goes
@@ -76,17 +76,17 @@ module matmul_engine #(
     assign advance              = state == S_RUN && !window_frozen;
     assign window_end           = advance && window_position == window_length - 9'd1;
 
-    logic                               activation_valid_delayed, activation_first_delayed;
+    logic                               activation_valid_delayed, activation_weight_flip_delayed;
     logic                               weight_register_valid;
     logic        [ROW_SELECT_WIDTH-1:0] weight_register_row;
     logic signed [ARRAY_SIZE-1:0] [7:0] weight_register_data;
     logic        [ROW_SELECT_WIDTH-1:0] weight_row_now;
-    assign weight_row_now   = ROW_SELECT_WIDTH'(window_position - weight_window_start);
-    assign activation_valid = activation_valid_delayed;
-    assign activation_first = activation_first_delayed;
-    assign weight_valid     = weight_register_valid;
-    assign weight_row       = weight_register_row;
-    assign weight_data      = weight_register_data;
+    assign weight_row_now         = ROW_SELECT_WIDTH'(window_position - weight_window_start);
+    assign activation_valid       = activation_valid_delayed;
+    assign activation_weight_flip = activation_weight_flip_delayed;
+    assign weight_valid           = weight_register_valid;
+    assign weight_row             = weight_register_row;
+    assign weight_data            = weight_register_data;
 
     // -- control -----------------------------------------------------------
     assign UB_read_enable  = advance && activation_issue_now;
@@ -106,29 +106,29 @@ module matmul_engine #(
 
     always_ff @(posedge clk) begin
         if (reset) begin
-            state                    <= S_IDLE;
-            accumulate               <= 1'b0;
-            activation_rows          <= '0;
-            k_tiles                  <= '0;
-            k_tile                   <= '0;
-            chunk_base               <= '0;
-            UB_base                  <= '0;
-            ACC_base                 <= '0;
-            window_has_activations   <= 1'b0;
-            window_has_weights       <= 1'b0;
-            weight_tiles_left        <= '0;
-            window_position          <= '0;
-            rows_in_flight           <= '0;
-            activation_valid_delayed <= 1'b0;
-            activation_first_delayed <= 1'b0;
-            weight_register_valid    <= 1'b0;
-            weight_register_row      <= '0;
-            weight_register_data     <= '0;
-            instruction_done         <= 1'b0;
+            state                          <= S_IDLE;
+            accumulate                     <= 1'b0;
+            activation_rows                <= '0;
+            k_tiles                        <= '0;
+            k_tile                         <= '0;
+            chunk_base                     <= '0;
+            UB_base                        <= '0;
+            ACC_base                       <= '0;
+            window_has_activations         <= 1'b0;
+            window_has_weights             <= 1'b0;
+            weight_tiles_left              <= '0;
+            window_position                <= '0;
+            rows_in_flight                 <= '0;
+            activation_valid_delayed       <= 1'b0;
+            activation_weight_flip_delayed <= 1'b0;
+            weight_register_valid          <= 1'b0;
+            weight_register_row            <= '0;
+            weight_register_data           <= '0;
+            instruction_done               <= 1'b0;
         end else begin
-            instruction_done         <= 1'b0;
-            activation_valid_delayed <= UB_read_enable;
-            activation_first_delayed <= window_position == 9'd0;
+            instruction_done               <= 1'b0;
+            activation_valid_delayed       <= UB_read_enable;
+            activation_weight_flip_delayed <= window_position == 9'd0;
 
             // weight row registered to line up with the UB read latency
             weight_register_valid <= advance && weight_issue_now;

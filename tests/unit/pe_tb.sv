@@ -1,15 +1,17 @@
 `timescale 1ns / 1ps
 
-// pe: w_next loads from the weight bus while w_cur computes; a valid activation with
-// the flip bit computes with w_next and promotes it. psum = w * act + psum_in
+// pe: weight_next loads from the weight bus while weight_current computes; a valid
+// activation with the flip bit computes with weight_next and promotes it.
+// partial_sum_out = weight * activation_in + partial_sum_in
 module pe_tb;
     `include "check.svh"
 
     logic clk = 1'b0, reset = 1'b1;
-    logic signed [7:0]  activation_in = '0, weight_data = '0, activation_out;
-    logic               first_in = 1'b0, activation_valid_in = 1'b0, weight_select = 1'b0;
+    logic signed [7:0]  activation_in = '0, weight_in = '0, activation_out;
+    logic               weight_flip_in = 1'b0, activation_valid_in = 1'b0, weight_valid_in = 1'b0;
     logic signed [31:0] partial_sum_in = '0, partial_sum_out;
-    logic               first_out, activation_valid_out, partial_sum_valid;
+    logic               partial_sum_valid_in = 1'b0;
+    logic               weight_flip_out, activation_valid_out, partial_sum_valid_out;
 
     pe dut (.*);
 
@@ -17,13 +19,14 @@ module pe_tb;
     task automatic tick(); @(posedge clk); #1; endtask
 
     task automatic load(input logic signed [7:0] w);
-        weight_select = 1'b1; weight_data = w; tick(); weight_select = 1'b0;
+        weight_valid_in = 1'b1; weight_in = w; tick(); weight_valid_in = 1'b0;
     endtask
 
-    task automatic mac(input logic signed [7:0] a, input logic first, input logic signed [31:0] pin);
-        activation_in = a; first_in = first; activation_valid_in = 1'b1; partial_sum_in = pin;
+    task automatic mac(input logic signed [7:0] a, input logic flip, input logic signed [31:0] pin);
+        activation_in = a; weight_flip_in = flip; activation_valid_in = 1'b1;
+        partial_sum_in = pin; partial_sum_valid_in = 1'b1;
         tick();
-        activation_valid_in = 1'b0; first_in = 1'b0;
+        activation_valid_in = 1'b0; weight_flip_in = 1'b0; partial_sum_valid_in = 1'b0;
     endtask
 
     initial begin
@@ -33,13 +36,13 @@ module pe_tb;
         load(8'sd5);
         mac(8'sd3, 1'b1, 32'sd10);
         `CHECK_EQ(partial_sum_out, 32'sd25, "5*3 + 10")
-        `CHECK(partial_sum_valid && activation_valid_out && first_out, "valid and flip pass through")
+        `CHECK(partial_sum_valid_out && activation_valid_out && weight_flip_out, "valid and flip pass through")
         `CHECK_EQ(activation_out, 8'sd3, "activation passes right")
 
         `TEST("later activations keep using it")
         mac(8'sd4, 1'b0, 32'sd0);
         `CHECK_EQ(partial_sum_out, 32'sd20, "5*4")
-        `CHECK(!first_out, "no flip")
+        `CHECK(!weight_flip_out, "no flip")
 
         `TEST("the next weight loads without disturbing the current one")
         load(-8'sd7);
@@ -52,9 +55,9 @@ module pe_tb;
 
         `TEST("a write in the flip's own cycle is the next tile's weight")
         load(8'sd3);
-        weight_select = 1'b1; weight_data = 8'sd9;
+        weight_valid_in = 1'b1; weight_in = 8'sd9;
         mac(8'sd1, 1'b1, 32'sd0);
-        weight_select = 1'b0;
+        weight_valid_in = 1'b0;
         `CHECK_EQ(partial_sum_out, 32'sd3, "this tile flips to 3")
         mac(8'sd1, 1'b1, 32'sd0);
         `CHECK_EQ(partial_sum_out, 32'sd9, "the next tile flips to 9")
@@ -66,10 +69,12 @@ module pe_tb;
         mac(8'sd127, 1'b0, -32'sd5);
         `CHECK_EQ(partial_sum_out, -32'sd16261, "-128 * 127 - 5")
 
-        `TEST("an invalid activation neither computes nor flips")
+        `TEST("an invalid activation neither computes nor flips, even with a valid partial sum")
         load(8'sd2);
-        activation_in = 8'sd50; first_in = 1'b1; activation_valid_in = 1'b0; tick(); first_in = 1'b0;
-        `CHECK(!partial_sum_valid, "no valid out")
+        activation_in = 8'sd50; weight_flip_in = 1'b1; activation_valid_in = 1'b0; partial_sum_valid_in = 1'b1;
+        tick();
+        weight_flip_in = 1'b0; partial_sum_valid_in = 1'b0;
+        `CHECK(!partial_sum_valid_out, "no valid out")
         `CHECK_EQ(partial_sum_out, -32'sd16261, "psum held")
         mac(8'sd1, 1'b1, 32'sd0);
         `CHECK_EQ(partial_sum_out, 32'sd2, "the pending weight is still there")

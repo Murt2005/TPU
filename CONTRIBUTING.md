@@ -61,7 +61,9 @@ the bench fails.
   mnemonics stay as the ISA spells them (`OPCODE_WR_WMEM`). `clk`, `reset_n`
   and Avalon's `avs_*` keep their standard names.
 - `*_valid` beside each data bus; `in_*` / `out_*` port prefixes where a
-  module has both sides.
+  module has both sides. The PE, a systolic cell, ends every data port in
+  `_in` / `_out` with its valid beside it (`partial_sum_in`,
+  `partial_sum_valid_in`).
 - Synchronous, active-high `reset` inside modules (only the top exposes
   active-low `reset_n`); every sequential block is `if (reset) ... else ...`.
 - Tunables are `parameter int`; derived values are `localparam`.

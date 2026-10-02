@@ -172,7 +172,7 @@ module tpu_core #(
         .tile(tile), .tile_full(tile_full), .take(tile_take));
 
     // -- UB rows -> systolic data setup -> mmu -> accumulators ----------------------
-    logic                               activation_valid, activation_first;
+    logic                               activation_valid, activation_weight_flip;
     logic                               weight_valid;
     logic        [ROW_SELECT_WIDTH-1:0] weight_row;
     logic signed [ARRAY_SIZE-1:0] [7:0] weight_data;
@@ -184,7 +184,7 @@ module tpu_core #(
     logic        [ARRAY_SIZE-1:0]       skewed_valid;
     always_comb
         for (int row = 0; row < ARRAY_SIZE; row++)
-            skew_in[row] = {activation_first, UB_read_data[8*row +: 8]};
+            skew_in[row] = {activation_weight_flip, UB_read_data[8*row +: 8]};
 
     systolic_data_setup #(.ARRAY_ROWS(ARRAY_SIZE), .DATA_WIDTH(9)) u_systolic_data_setup (
         .clk(clk), .reset(reset),
@@ -192,18 +192,18 @@ module tpu_core #(
         .MMU_in_row(skewed), .MMU_in_valid(skewed_valid));
 
     logic signed [ARRAY_SIZE-1:0] [7:0]  array_activation;
-    logic        [ARRAY_SIZE-1:0]        array_first;
+    logic        [ARRAY_SIZE-1:0]        array_weight_flip;
     logic signed [ARRAY_SIZE-1:0] [31:0] partial_sum;
     logic        [ARRAY_SIZE-1:0]        partial_sum_valid;
     always_comb
         for (int row = 0; row < ARRAY_SIZE; row++) begin
             array_activation[row]   = skewed[row][7:0];
-            array_first[row] = skewed[row][8];
+            array_weight_flip[row] = skewed[row][8];
         end
 
     mmu #(.ARRAY_SIZE(ARRAY_SIZE)) u_mmu (
         .clk(clk), .reset(reset),
-        .activation(array_activation), .activation_first(array_first), .activation_valid(skewed_valid),
+        .activation(array_activation), .activation_weight_flip(array_weight_flip), .activation_valid(skewed_valid),
         .weight_valid(weight_valid), .weight_row(weight_row), .weight_data(weight_data),
         .partial_sum(partial_sum), .partial_sum_valid(partial_sum_valid));
 
@@ -257,7 +257,7 @@ module tpu_core #(
         .queue_valid(!queue_empty[ENGINE_MATMUL]), .queue_entry(queue_head[ENGINE_MATMUL]), .queue_pop(queue_pop[ENGINE_MATMUL]),
         .completed(completed), .instruction_done(instruction_done[ENGINE_MATMUL]),
         .tile(tile), .tile_full(tile_full), .tile_take(tile_take),
-        .UB_read_enable(matmul_UB_read_enable), .UB_read_address(matmul_UB_read_address), .activation_valid(activation_valid), .activation_first(activation_first),
+        .UB_read_enable(matmul_UB_read_enable), .UB_read_address(matmul_UB_read_address), .activation_valid(activation_valid), .activation_weight_flip(activation_weight_flip),
         .weight_valid(weight_valid), .weight_row(weight_row), .weight_data(weight_data),
         .tag_push(tag_push), .tag_in(tag_in), .row_written(row_written),
         .performance_beat(performance_beat), .performance_weight_stall(performance_weight_stall), .performance_sync_stall(performance_sync_stall),
