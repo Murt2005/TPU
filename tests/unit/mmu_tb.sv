@@ -1,6 +1,6 @@
 `timescale 1ns / 1ps
 
-// mmu: back-to-back tiles on the overlap schedule mm_engine uses (each tile's m rows
+// mmu: back-to-back tiles on the overlap schedule matmul_engine uses (each tile's m rows
 // at the start of a max(m, N) window, the next tile's weight rows in its last N
 // cycles), every output column against a plain matmul
 module mmu_tb;
@@ -30,8 +30,8 @@ module mmu_tb;
         end
 
     mmu #(.ARRAY_SIZE(N)) dut (
-        .clk(clk), .reset(reset), .activation(activation), .activation_weight_flip(activation_weight_flip), .activation_valid(skewed_valid),
-        .weight_valid(weight_valid), .weight_row(weight_row), .weight_data(weight_data), .partial_sum(partial_sum), .partial_sum_valid(partial_sum_valid));
+        .clk(clk), .reset(reset), .activation_in(activation), .weight_flip_in(activation_weight_flip), .activation_valid_in(skewed_valid),
+        .weight_valid_in(weight_valid), .weight_row_select_in(weight_row), .weight_in(weight_data), .partial_sum_out(partial_sum), .partial_sum_valid_out(partial_sum_valid));
 
     always #5 clk = ~clk;
     task automatic tick(); @(posedge clk); #1; endtask

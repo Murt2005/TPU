@@ -203,9 +203,9 @@ module tpu_core #(
 
     mmu #(.ARRAY_SIZE(ARRAY_SIZE)) u_mmu (
         .clk(clk), .reset(reset),
-        .activation(array_activation), .activation_weight_flip(array_weight_flip), .activation_valid(skewed_valid),
-        .weight_valid(weight_valid), .weight_row(weight_row), .weight_data(weight_data),
-        .partial_sum(partial_sum), .partial_sum_valid(partial_sum_valid));
+        .activation_in(array_activation), .weight_flip_in(array_weight_flip), .activation_valid_in(skewed_valid),
+        .weight_valid_in(weight_valid), .weight_row_select_in(weight_row), .weight_in(weight_data),
+        .partial_sum_out(partial_sum), .partial_sum_valid_out(partial_sum_valid));
 
     logic [ACC_ADDRESS_WIDTH-1:0] activate_ACC_read_address;
     logic                         activate_ACC_read_blocked;
