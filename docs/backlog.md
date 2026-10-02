@@ -32,9 +32,9 @@ everything (including file uploads) goes over the console, which works, so
 this is convenience.
 
 **DDR3 (spec phase 5).** `MATMUL wsrc=1` (prefetching across `MATMUL`s),
-`RD_DDR_UB`, `SET_OBASE` and `ACTIVATE dst=DDR` are built. Left: a
-`u-boot.scr` so the port setup and `mem=768M` survive a power cycle, and
-porting the LLM path (`software/llm/` at the tag `pico2-ice-final`) onto them. Sustained FPGA-to-SDRAM bandwidth is
+`RD_DDR_UB`, `SET_OBASE` and `ACTIVATE dst=DDR` are built, and the card
+boots with the port live (`u-boot.scr`). Left: porting the LLM path
+(`software/llm/` at the tag `pico2-ice-final`) onto them. Sustained FPGA-to-SDRAM bandwidth is
 measured: 800 MB/s on a 128-bit port at 50 MHz, the port's peak, also under
 ARM memory load ([`de1soc.md`](de1soc.md) §7).
 

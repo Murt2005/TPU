@@ -1,0 +1,20 @@
+# U-Boot script (u-boot.scr on the SD card's FAT partition, sourced by callscript
+# before the default boot): the TPU's GHRD with its FPGA-to-SDRAM port live.
+# loads soc_system_ddr.rbf, applies the port configuration from on-chip RAM (U-Boot
+# runs from SDRAM, and applycfg needs it idle), releases f2h_sdram0, and boots
+# Linux with mem=768M, leaving DDR3 from 0x30000000 up to the FPGA. without
+# soc_system_ddr.rbf it does nothing and the default boot runs; delete
+# u-boot.scr to go back for good. the same steps as boards/de1soc/sw/ddr-boot.py
+if fatload mmc 0:1 0x3000000 soc_system_ddr.rbf; then
+    fpga load 0 0x3000000 ${filesize}
+    run mmcload
+    mw ffffd000 e59f101c; mw ffffd004 e5910000; mw ffffd008 e3800008; mw ffffd00c e5810000
+    mw ffffd010 f57ff04f; mw ffffd014 e5910000; mw ffffd018 e3100008; mw ffffd01c 1afffffc
+    mw ffffd020 e12fff1e; mw ffffd024 ffc2505c
+    go ffffd000
+    run bridge_enable_handoff
+    mw ffc25080 133
+    setenv bootargs console=ttyS0,115200 root=/dev/mmcblk0p2 rw rootwait mem=768M
+    bootz ${loadaddr} - ${fdtaddr}
+fi
+echo u-boot.scr: no soc_system_ddr.rbf, booting the default

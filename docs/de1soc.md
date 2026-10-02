@@ -173,9 +173,8 @@ See [`backlog.md`](backlog.md). Board-specific items:
   block (Cyclone V's 9×9 mode) or partly in logic. 78/87 DSPs are used at
   8×8.
 - **DDR3 (spec phase 5).** All four DDR3 instructions are built and pass on
-  the board (§1). Making the port setup and `mem=768M` survive a power cycle
-  needs a `u-boot.scr` on the card; until then `ddr-boot.py` sets them up per
-  boot. The bandwidth
+  the board (§1). The card boots with the port live and `mem=768M`, through
+  `u-boot.scr` ("The FPGA-to-SDRAM port" in the hps README). The bandwidth
   they need is **measured on the board**: a burst-read master
   (`top/ddr-probe.sv`) on a 128-bit FPGA-to-SDRAM port at 50 MHz reads
   **800 MB/s**, the port's full width every cycle, from 2 bursts of 32 beats

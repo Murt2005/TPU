@@ -12,9 +12,9 @@ SOF   := $(GHRD)/output_files/soc_system.sof
 RBF   := build/soc_system.rbf
 MMIO  := build/isa_mmio
 
-.PHONY: all ghrd qsys sof rbf mmio setbaud ddr-probe clean
+.PHONY: all ghrd qsys sof rbf mmio setbaud ddr-probe recv uboot-scr clean
 
-all: rbf mmio setbaud ddr-probe
+all: rbf mmio setbaud ddr-probe recv uboot-scr
 
 $(GHRD)/stamp-tpu:
 	rm -rf $(GHRD) build/_cd && mkdir -p build/_cd
@@ -65,6 +65,19 @@ build/ddr_probe: ../../sw/ddr-probe.c
 	    -Wall -Wextra -Wl,--build-id=none -s -o $@ $<
 
 ddr-probe: build/ddr_probe
+
+# block-wise receiver for BoardConsole.upload(receiver=...); no libc
+build/recv: ../../sw/recv.c
+	arm-linux-gnueabihf-gcc -Os -static -nostdlib -ffreestanding -fno-stack-protector -marm \
+	    -Wall -Wextra -Wl,--build-id=none -s -o $@ $<
+
+recv: build/recv
+
+# boot with the FPGA-to-SDRAM port live: u-boot.scr and soc_system_ddr.rbf on the FAT partition
+build/u-boot.scr: u-boot-ddr.txt ../../sw/mk-uboot-scr.py
+	python3 ../../sw/mk-uboot-scr.py $< $@
+
+uboot-scr: build/u-boot.scr
 
 clean:
 	rm -rf build

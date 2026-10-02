@@ -143,13 +143,15 @@ class BoardConsole:
         time.sleep(0.1)
         self._quiet(0.3)
 
-    def upload(self, local, remote, rate=4096, fast=False):
+    def upload(self, local, remote, rate=4096, fast=False, receiver=None):
         """copy a file to the board (the HPS has no Ethernet here): the shell's tty
         goes raw and `dd` takes the bytes unescaped and unechoed. there's no flow
         control and `dd bs=1` onto FAT writes only ~6 KB/s, so the bytes are paced at
         `rate` per second; sent faster, the overflow is dropped and dd never finishes
-        (that lost a 7 MB bitstream). big files go faster on the SD card. written as
-        .part, renamed once the md5 matches"""
+        (that lost a 7 MB bitstream). receiver (boards/de1soc/sw/recv on the board)
+        reads in blocks instead and keeps up with the line: then `rate` is the pace
+        to hold, or None for the line rate. written as .part, renamed once the md5
+        matches"""
         import hashlib
         data = open(local, "rb").read()
         if fast:
@@ -158,19 +160,20 @@ class BoardConsole:
             self.run(f"rm -f {remote}.part", 0.3)
             self._quiet(0.5)
             # this busybox's head has no -c; dd bs=1 counts bytes exactly on a raw tty
-            self.launch(f"stty raw -echo; dd of={remote}.part bs=1 count={len(data)} 2>/dev/null; "
-                        f"stty sane")
+            take = (f"{receiver} {remote}.part {len(data)}" if receiver
+                    else f"dd of={remote}.part bs=1 count={len(data)} 2>/dev/null")
+            self.launch(f"stty raw -echo; {take}; stty sane")
             self._s.timeout = 0.2               # launch() left it long; the prompt wait polls
             time.sleep(0.3)
             self._s.reset_input_buffer()
             t0 = time.time()
             for i in range(0, len(data), 512):
                 self._s.write(data[i:i + 512])
-                ahead = (i + 512) / rate - (time.time() - t0)
+                ahead = (i + 512) / rate - (time.time() - t0) if rate else 0
                 if ahead > 0:
                     time.sleep(ahead)
             self._s.flush()
-            self._wait_prompt(timeout=60.0)
+            self._wait_prompt(timeout=120.0)
             md5 = hashlib.md5(data).hexdigest()
             out = self.run(f"md5sum {remote}.part", 1.0)
             if md5 not in out:
