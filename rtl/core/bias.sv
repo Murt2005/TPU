@@ -5,14 +5,14 @@
 module bias #(
     parameter int ARRAY_SIZE = 8
 ) (
-    input  logic [ARRAY_SIZE*32-1:0] in_row,
-    input  logic [ARRAY_SIZE*32-1:0] bias_row,
-    input  logic                     enable,
-    output logic [ARRAY_SIZE*32-1:0] out_row
+    input  logic [ARRAY_SIZE*32-1:0] row_in,
+    input  logic [ARRAY_SIZE*32-1:0] bias_row_in,
+    input  logic                     bias_enable_in,
+    output logic [ARRAY_SIZE*32-1:0] row_out
 );
 
     always_comb
         for (int column = 0; column < ARRAY_SIZE; column++)
-            out_row[32*column +: 32] = in_row[32*column +: 32] + (enable ? bias_row[32*column +: 32] : 32'd0);
+            row_out[32*column +: 32] = row_in[32*column +: 32] + (bias_enable_in ? bias_row_in[32*column +: 32] : 32'd0);
 
 endmodule

@@ -223,7 +223,7 @@ module tpu_core #(
     logic [ARRAY_SIZE*8-1:0]  quantized_row;
 
     bias #(.ARRAY_SIZE(ARRAY_SIZE)) u_bias (
-        .in_row(ACC_read_data), .bias_row(bias_read_data), .enable(use_bias), .out_row(biased));
+        .row_in(ACC_read_data), .bias_row_in(bias_read_data), .bias_enable_in(use_bias), .row_out(biased));
 
     activation #(.ARRAY_SIZE(ARRAY_SIZE)) u_activation (
         .clk(clk), .reset(reset),
