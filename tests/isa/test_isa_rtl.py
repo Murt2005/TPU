@@ -132,10 +132,10 @@ def main(binary):
     # -- MNIST layer 1 --------------------------------------------------------
     sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "software" / "mnist"))
     import train_mnist as T
-    from infer import _quantize, load_model
+    from mnist_model import quantize, load_model
     mdl = load_model()
     _, _, xi, _ = T.load_mnist()
-    x = _quantize(T.downsample(xi[:8]), float(mdl["in_scale"])).astype(np.int64)
+    x = quantize(T.downsample(xi[:8]), float(mdl["in_scale"])).astype(np.int64)
     prog, data, nb = layer_program(n, x, mdl["w1"], mdl["b1"])
     dev.reset()
     got = out_rows(dev.run(prog, data), 8, nb, n)[:, :64]
@@ -181,12 +181,12 @@ def main(binary):
 
     # -- phase 2: full MNIST program, layers chained in the UB ----------------
     from tpu.isa_compile import compile_mlp
-    from infer import predict_batch_offline
+    from mnist_model import predict_batch_offline
     hs = float(mdl["hidden_scale"])
     layers = [dict(w=mdl["w1"], b=mdl["b1"], relu=True, scale=1 / hs),
               dict(w=mdl["w2"], b=mdl["b2"], relu=True, scale=None)]
     xf = T.downsample(xi[:20])
-    x20 = _quantize(xf, float(mdl["in_scale"])).astype(np.int64)
+    x20 = quantize(xf, float(mdl["in_scale"])).astype(np.int64)
     host_pred = list(predict_batch_offline(mdl, xf))
     if n == 8:
         for m in (1, 8):

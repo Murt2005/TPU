@@ -121,7 +121,7 @@ def build(n):
 
     if n == 8:
         import train_mnist as T
-        from infer import _quantize, load_model
+        from mnist_model import quantize, load_model
         from tpu.isa_compile import compile_mlp
         mdl = load_model()
         _, _, xi, _ = T.load_mnist()
@@ -133,7 +133,7 @@ def build(n):
         t.run(*cm.load_program())
         t.mark(0x31, "MNIST 8 images, layers chained through the UB")
         t.reset()
-        t.run(*cm.infer_program(_quantize(T.downsample(xi[:8]), float(mdl["in_scale"])).astype(np.int64)))
+        t.run(*cm.infer_program(quantize(T.downsample(xi[:8]), float(mdl["in_scale"])).astype(np.int64)))
         t.perf("MNIST 8 images")
 
     # steady-state rate: kt and 2kt tiles of one MATMUL; the extra tiles must cost

@@ -3,7 +3,7 @@
 # model.bin,testset.bin} to the SD card's FAT partition
 REPO   := ../../..
 PY     ?= $(REPO)/.venv/bin/python
-TB_ISA ?= $(abspath $(REPO)/sim/verilator/isa_n8/tb_isa)
+TB_ISA ?= $(abspath $(REPO)/sim/verilator/core_n8/tb_isa)
 CFLAGS := -O2 -ffp-contract=off -Wall -Wextra
 
 .PHONY: data arm sim sim-bench
@@ -21,6 +21,6 @@ sim: build/mnist_tpu_sim
 build/mnist_tpu_sim: mnist_tpu.c
 	$(CC) -DSIM $(CFLAGS) -o $@ $< -lm
 
-# the whole flow against Verilator (make isa-sim first): bit-exact, not timing
+# the whole flow against Verilator (make rtl-sim first): bit-exact, not timing
 sim-bench: sim data
 	TB_ISA=$(TB_ISA) build/mnist_tpu_sim bench build/model.bin build/testset.bin 200

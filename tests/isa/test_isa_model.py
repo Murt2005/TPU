@@ -110,11 +110,11 @@ def test_random_layers(rng):
 def test_mnist_layer1():
     sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "software" / "mnist"))
     import train_mnist as T
-    from infer import _quantize, load_model
+    from mnist_model import quantize, load_model
     mdl = load_model()
     _, _, xi, _ = T.load_mnist()
     for m in (1, 8):
-        x = _quantize(T.downsample(xi[:20]), float(mdl["in_scale"])).astype(np.int64)
+        x = quantize(T.downsample(xi[:20]), float(mdl["in_scale"])).astype(np.int64)
         model = IsaModel(n=8, wmem_rows=8192, ub_depth=16384, acc_depth=1024, param_depth=256)
         got = np.concatenate([run_layer(model, x[i:i + m], mdl["w1"], mdl["b1"])
                               for i in range(0, len(x), m)])
@@ -126,11 +126,11 @@ def test_mnist_layer1():
 def mnist_layers():
     sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "software" / "mnist"))
     import train_mnist as T
-    from infer import _quantize, load_model, predict_batch_offline
+    from mnist_model import quantize, load_model, predict_batch_offline
     mdl = load_model()
     _, _, xi, _ = T.load_mnist()
     xf = T.downsample(xi[:20])
-    x = _quantize(xf, float(mdl["in_scale"])).astype(np.int64)
+    x = quantize(xf, float(mdl["in_scale"])).astype(np.int64)
     hs = float(mdl["hidden_scale"])
     layers = [dict(w=mdl["w1"], b=mdl["b1"], relu=True, scale=1 / hs, hidden_scale=hs),
               dict(w=mdl["w2"], b=mdl["b2"], relu=True, scale=None)]

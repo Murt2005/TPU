@@ -11,7 +11,7 @@ RBF     := $(OUT)/$(PROJECT).rbf
 all: rbf
 
 rom:
-	cd $(REPO) && $(MAKE) --no-print-directory isa-selftest-rom ISA_N=8
+	cd $(REPO) && $(MAKE) --no-print-directory selftest-rom N=8
 
 $(SOF): isa_selftest.hex $(PROJECT).qsf $(PROJECT).sdc $(wildcard $(REPO)/rtl/core/*.sv) \
         $(wildcard ../../top/*.sv) $(REPO)/rtl/peripherals/host_bridge.sv

@@ -1,5 +1,4 @@
-"""host driver for the TPU: `from tpu import TPU`"""
+"""the TPU's host package: instruction encoding (isa), the reference model
+(isa_model), layouts, the MLP compiler, the WAIT checker, device links, and the
+reference numerics (golden)"""
 from . import golden
-from .driver import TPU
-from .links import LINKS, MmioLink, SimLink, TPUError
-from .protocol import *  # noqa: F401,F403 -- CMD_*, FLAG_*, STATUS_*, DEFAULT_BAUD, ...

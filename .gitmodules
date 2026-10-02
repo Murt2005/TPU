@@ -1,3 +1,0 @@
-[submodule "firmware/pico-ice-sdk"]
-	path = boards/pico2-ice/firmware/pico-ice-sdk
-	url = https://github.com/tinyvision-ai-inc/pico-ice-sdk.git

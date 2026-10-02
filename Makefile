@@ -1,18 +1,12 @@
-# simulation, lint and hardware-test entry point; rules live in mk/, see `make list`
+# simulation and lint entry point; rules live in mk/, see `make list`
 
-IVERILOG  := iverilog
-VVP       := vvp
-GTKWAVE   := gtkwave
 VERILATOR := verilator
-IFLAGS    := -g2012 -Wall
 
 CORE_DIR   := rtl/core
 PERIPH_DIR := rtl/peripherals
 HPS_DIR    := boards/de1soc/top
 TEST_DIR   := tests
-TB_DIR     := $(TEST_DIR)/sv
 SIM_DIR    := sim
-LOG_DIR    := $(SIM_DIR)/logs
 
 # the core, in compile order: tpu_pkg first (everything imports it)
 CORE_RTL := $(CORE_DIR)/tpu_pkg.sv $(CORE_DIR)/fifo.sv $(CORE_DIR)/systolic_data_setup.sv \
@@ -24,26 +18,30 @@ CORE_RTL := $(CORE_DIR)/tpu_pkg.sv $(CORE_DIR)/fifo.sv $(CORE_DIR)/systolic_data
 
 all: test
 
-$(SIM_DIR) $(LOG_DIR):
+$(SIM_DIR):
 	@mkdir -p $@
 
-include mk/sim.mk
 include mk/verilator.mk
-include mk/hw.mk
-include mk/isa.mk
+include mk/core.mk
 include mk/unit.mk
 
+# the fast loop
+test: unit
+
+# every gate short of a board
+check: lint test sim-test selftest-sim
+
 list:
-	@echo "Unit benches (tests/unit/<name>_tb.sv):"
+	@echo "make test         the unit benches (tests/unit), the fast loop"
 	@for t in $(UNIT_TESTS); do echo "  make unit-$$t"; done
-	@echo "Legacy peripheral benches (tests/sv/<name>_tb.sv, Icarus):"
-	@for t in $(TESTS); do echo "  make test-$$t"; done
-	@echo ""
-	@echo "Other targets: make test (unit + legacy) | make unit | make lint |"
-	@echo "  make isa-test | make isa-sim | make isa-selftest-rom | make isa-selftest-sim |"
-	@echo "  make hw-test PORT=... [CONFIG=<name>] | make host-flags CONFIG=<name> | make clean"
+	@echo "make sim-test     reference-model checks, then the RTL vs the model at N = 8 and 4"
+	@echo "  make model-test | make rtl-test [N=4] | make rtl-sim [N=4]"
+	@echo "make selftest-sim the DE1-SoC self-test ROM in Verilator [ST_SLOTS=21]"
+	@echo "make lint         verilator lint: tpu_top at N = 8 and 4, tpu_selftest"
+	@echo "make check        all of the above"
+	@echo "make clean"
 
 clean:
 	rm -rf $(SIM_DIR)
 
-.PHONY: all list clean
+.PHONY: all test check list clean

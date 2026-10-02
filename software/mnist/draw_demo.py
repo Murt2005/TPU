@@ -1,18 +1,15 @@
 #!/usr/bin/env python3
-"""draw a digit and classify it on the TPU.
-pico2-ice: the board's LED flips green -> blue over the otherwise-idle second CDC port.
-DE1-SoC (--de1soc): the board's ARM runs the whole inference on the TPU and shows
-the digit on the HEX displays (software/mnist/de1soc/mnist_tpu serve)"""
+"""draw a digit and classify it: on the DE1-SoC (--de1soc), whose ARM runs the whole
+inference on the TPU and shows the digit on the HEX displays (software/mnist/de1soc/
+mnist_tpu serve), or offline with the host reference (--offline)"""
 import argparse
 import struct
 import time
 import tkinter as tk
 
 import numpy as np
-import serial
 
-from infer import HardwareBackend, MNISTInference, OfflineBackend, load_model
-from tpu import TPU
+from mnist_model import OfflineModel
 
 CANVAS_SIZE = 280   # 10x scale of a 28x28 MNIST image
 BRUSH_RADIUS = 14
@@ -120,9 +117,8 @@ class De1SocBoard:
 
 
 class DrawApp:
-    def __init__(self, root, inference, led_serial=None, title="MNIST on a 2x2 TPU", board=None):
+    def __init__(self, root, inference, title="MNIST", board=None):
         self.inference = inference
-        self.led_serial = led_serial
         self.board = board
         self.img = np.zeros((CANVAS_SIZE, CANVAS_SIZE), dtype=np.uint8)
         self.last_xy = None
@@ -148,8 +144,6 @@ class DrawApp:
         root.grid_columnconfigure(0, weight=1)
         root.grid_columnconfigure(1, weight=1)
 
-        self._set_led("g")
-
     def on_press(self, event):
         self.last_xy = (event.x, event.y)
         _stamp_circle(self.img, event.x, event.y, BRUSH_RADIUS)
@@ -172,7 +166,6 @@ class DrawApp:
         self.img[:] = 0
         self.canvas.delete("all")
         self.result_var.set("Draw a digit, then click Predict")
-        self._set_led("g")
         if self.board is not None:
             self.board.clear()
 
@@ -180,8 +173,7 @@ class DrawApp:
         if not self.img.any():
             self.result_var.set("Canvas is empty -- draw a digit first")
             return
-        self._set_led("g")
-        self.result_var.set("Running on TPU...")
+        self.result_var.set("Running...")
         self.canvas.update_idletasks()
 
         img28_u8 = normalize_drawing(self.img)
@@ -194,70 +186,32 @@ class DrawApp:
             timing = (f"\non the board: {self.board.last_us} us; "
                       f"with the serial link: {self.board.last_round_trip_ms:.0f} ms")
         self.result_var.set(f"Predicted: {digit}\n(top scores -- {breakdown}){timing}")
-        self._set_led("b")
-
-    def _set_led(self, cmd):
-        if self.led_serial is not None:
-            try:
-                self.led_serial.write(cmd.encode())
-            except Exception:
-                pass
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--port", help="serial device for the board's 'iCE40 UART' CDC port; omit for --offline")
-    p.add_argument("--led-port", help="serial device for the board's 'RP2040 logs' CDC port "
-                                       "(optional -- LED feedback is skipped if not given)")
-    p.add_argument("--offline", action="store_true", help="use the pure-numpy backend instead of real hardware")
     p.add_argument("--de1soc", metavar="PORT",
                    help="the DE1-SoC's HPS console (the CP2105 'Enhanced' port); the board runs "
                         "the inference on its TPU and shows the digit on the HEX displays")
     p.add_argument("--baud", type=int, default=115200,
                    help="console rate for the --de1soc session: 115200 (default) or 1562500, "
                         "the fastest the HPS UART and the CP2105 agree on (13.6x)")
-    p.add_argument("--rows", type=int, default=2,
-                    help="ARRAY_ROWS the flashed bitstream was built with (default 2)")
-    p.add_argument("--cols", type=int, default=2,
-                    help="NUM_COLS the flashed bitstream was built with (default 2)")
-    p.add_argument("--m-tile", type=int, default=None,
-                    help="M_TILE the flashed bitstream was built with (default: --rows)")
-    p.add_argument("--link", choices=("uart", "spi"), default="uart",
-                    help="host-link PHY the board is running (see python3 -m tpu --help)")
+    p.add_argument("--offline", action="store_true", help="classify with the host reference, no board")
     args = p.parse_args()
-
-    if args.de1soc:
-        board = De1SocBoard(args.de1soc, baud=args.baud)
-        root = tk.Tk()
-        try:
-            DrawApp(root, board, title="MNIST on the DE1-SoC TPU (8x8)", board=board)
-            root.mainloop()
-        finally:
-            board.close()
-        return
-
-    if not args.offline and not args.port:
-        p.error("--port is required unless --offline or --de1soc is given")
-
-    model = load_model()
-    led_serial = serial.Serial(args.led_port, 115200, timeout=1) if args.led_port else None
+    if bool(args.de1soc) == args.offline:
+        p.error("give exactly one of --de1soc PORT or --offline")
 
     root = tk.Tk()
-
     if args.offline:
-        inference = MNISTInference(OfflineBackend(), model)
-        DrawApp(root, inference, led_serial)
+        DrawApp(root, OfflineModel(), title="MNIST, host reference")
         root.mainloop()
         return
-
-    with TPU(args.port, rows=args.rows, cols=args.cols, m_tile=args.m_tile,
-             link=args.link) as tpu:
-        inference = MNISTInference(HardwareBackend(tpu), model)
-        DrawApp(root, inference, led_serial)
+    board = De1SocBoard(args.de1soc, baud=args.baud)
+    try:
+        DrawApp(root, board, title="MNIST on the DE1-SoC TPU (8x8)", board=board)
         root.mainloop()
-
-    if led_serial is not None:
-        led_serial.close()
+    finally:
+        board.close()
 
 
 if __name__ == "__main__":

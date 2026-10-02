@@ -14,7 +14,7 @@ import numpy as np
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 import train_mnist as T                                         # noqa: E402
-from infer import _quantize, load_model, predict_batch_offline  # noqa: E402
+from mnist_model import quantize, load_model, predict_batch_offline  # noqa: E402
 from tpu.isa_compile import compile_mlp                         # noqa: E402
 from tpu.isa_model import IsaModel                              # noqa: E402
 
@@ -57,7 +57,7 @@ def main():
     _, _, xi, yi = T.load_mnist()
     xi, yi = xi[:a.count], yi[:a.count]
     xf = T.downsample(xi)
-    xq = _quantize(xf, float(mdl["in_scale"])).astype(np.int8)
+    xq = quantize(xf, float(mdl["in_scale"])).astype(np.int8)
     host = np.asarray(predict_batch_offline(mdl, xf))
 
     # the reference model's predictions: what the TPU must produce exactly
