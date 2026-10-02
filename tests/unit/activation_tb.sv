@@ -7,9 +7,9 @@ module activation_tb;
 
     localparam int N = 4;
     logic clk = 1'b0, reset = 1'b1;
-    logic [N*32-1:0] in_row = '0, out_row, multiply_in = '0, quantization_row = '0;
-    logic relu = 1'b0, multiply_enable = 1'b0;
-    logic [N*8-1:0] quantized_row;
+    logic [N*32-1:0] row_in = '0, row_out, multiply_row_in = '0, quantization_row_in = '0;
+    logic            relu_enable_in = 1'b0, multiply_enable_in = 1'b0;
+    logic [N*8-1:0]  quantized_row_out;
 
     activation #(.ARRAY_SIZE(N)) dut (.*);
 
@@ -27,11 +27,11 @@ module activation_tb;
         tick(); tick(); reset = 1'b0;
 
         `TEST("ReLU zeroes negatives, identity doesn't")
-        in_row = {-32'sd1, 32'sd0, 32'sd7, 32'h80000000};
-        relu = 1'b1; #1;
-        `CHECK_EQ(out_row, {32'sd0, 32'sd0, 32'sd7, 32'sd0}, "relu")
-        relu = 1'b0; #1;
-        `CHECK_EQ(out_row, in_row, "identity")
+        row_in = {-32'sd1, 32'sd0, 32'sd7, 32'h80000000};
+        relu_enable_in = 1'b1; #1;
+        `CHECK_EQ(row_out, {32'sd0, 32'sd0, 32'sd7, 32'sd0}, "relu")
+        relu_enable_in = 1'b0; #1;
+        `CHECK_EQ(row_out, row_in, "identity")
 
         `TEST("requantizer matches tpu.golden.requant")
         if (!$value$plusargs("vectors=%s", path)) $fatal(1, "pass +vectors=<file>");
@@ -44,16 +44,16 @@ module activation_tb;
         `CHECK(v.size() > 1000, $sformatf("only %0d vectors", v.size()))
         for (int i = 0; i + N <= v.size(); i += N) begin
             for (int l = 0; l < N; l++) begin
-                multiply_in[32*l +: 32]    = v[i + l];
-                quantization_row[32*l +: 32] = q[i + l];
+                multiply_row_in[32*l +: 32]     = v[i + l];
+                quantization_row_in[32*l +: 32] = q[i + l];
             end
-            multiply_enable = 1'b1; tick(); multiply_enable = 1'b0;
+            multiply_enable_in = 1'b1; tick(); multiply_enable_in = 1'b0;
             for (int l = 0; l < N; l++) begin
                 nv++;
-                if (quantized_row[8*l +: 8] !== want[i + l]) begin
+                if (quantized_row_out[8*l +: 8] !== want[i + l]) begin
                     bad++;
                     if (bad <= 5)
-                        `CHECK_EQ(quantized_row[8*l +: 8], want[i + l], $sformatf("v=0x%h q=0x%h", v[i + l], q[i + l]))
+                        `CHECK_EQ(quantized_row_out[8*l +: 8], want[i + l], $sformatf("v=0x%h q=0x%h", v[i + l], q[i + l]))
                 end
             end
         end

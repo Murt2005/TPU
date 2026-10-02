@@ -9,14 +9,14 @@ module activation #(
     input  logic                     clk,
     input  logic                     reset,
 
-    input  logic [ARRAY_SIZE*32-1:0] in_row,           // biased
-    input  logic                     relu,
-    output logic [ARRAY_SIZE*32-1:0] out_row,
+    input  logic [ARRAY_SIZE*32-1:0] row_in,              // biased
+    input  logic                     relu_enable_in,
+    output logic [ARRAY_SIZE*32-1:0] row_out,
 
-    input  logic                     multiply_enable,  // stage 2: multiply mul_in by the M0s
-    input  logic [ARRAY_SIZE*32-1:0] multiply_in,
-    input  logic [ARRAY_SIZE*32-1:0] quantization_row, // {shift[29:24], M0[23:0]} per column; held across stages
-    output logic [ARRAY_SIZE*8-1:0]  quantized_row     // stage 3: round, shift, clamp
+    input  logic                     multiply_enable_in,  // stage 2: multiply this row by the M0s
+    input  logic [ARRAY_SIZE*32-1:0] multiply_row_in,
+    input  logic [ARRAY_SIZE*32-1:0] quantization_row_in, // {shift[29:24], M0[23:0]} per column; held across stages
+    output logic [ARRAY_SIZE*8-1:0]  quantized_row_out    // stage 3: round, shift, clamp
 );
 
     // saturate to 27 bits, multiply by M0 (27x25, one DSP each)
@@ -36,19 +36,19 @@ module activation #(
 
     always_comb
         for (int column = 0; column < ARRAY_SIZE; column++)
-            out_row[32*column +: 32] = (relu && $signed(in_row[32*column +: 32]) < 0) ? 32'd0 : in_row[32*column +: 32];
+            row_out[32*column +: 32] = (relu_enable_in && $signed(row_in[32*column +: 32]) < 0) ? 32'd0 : row_in[32*column +: 32];
 
     logic signed [ARRAY_SIZE-1:0][51:0] product_row;
     always_ff @(posedge clk) begin
         if (reset)
             product_row <= '0;
-        else if (multiply_enable)
+        else if (multiply_enable_in)
             for (int column = 0; column < ARRAY_SIZE; column++)
-                product_row[column] <= requantize_multiply(multiply_in[32*column +: 32], quantization_row[32*column +: 24]);
+                product_row[column] <= requantize_multiply(multiply_row_in[32*column +: 32], quantization_row_in[32*column +: 24]);
     end
 
     always_comb
         for (int column = 0; column < ARRAY_SIZE; column++)
-            quantized_row[8*column +: 8] = requantize_round(product_row[column], quantization_row[32*column+24 +: 6]);
+            quantized_row_out[8*column +: 8] = requantize_round(product_row[column], quantization_row_in[32*column+24 +: 6]);
 
 endmodule

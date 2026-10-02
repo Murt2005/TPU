@@ -227,8 +227,8 @@ module tpu_core #(
 
     activation #(.ARRAY_SIZE(ARRAY_SIZE)) u_activation (
         .clk(clk), .reset(reset),
-        .in_row(biased), .relu(relu), .out_row(activation_row),
-        .multiply_enable(multiply_enable), .multiply_in(multiply_in), .quantization_row(quantization_read_data), .quantized_row(quantized_row));
+        .row_in(biased), .relu_enable_in(relu), .row_out(activation_row),
+        .multiply_enable_in(multiply_enable), .multiply_row_in(multiply_in), .quantization_row_in(quantization_read_data), .quantized_row_out(quantized_row));
 
     // -- engines -------------------------------------------------------------------
     logic [3:0] engine_idle;
