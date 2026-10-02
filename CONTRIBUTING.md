@@ -53,17 +53,19 @@ the bench fails.
 
 - Names are spelled out, with `_` between words: `lower_snake_case` for
   signals, ports, functions and instances (`u_` + the module name);
-  `UPPER_SNAKE_CASE` for parameters, constants and states. No `_i`/`_o`
-  direction suffixes.
+  `UPPER_SNAKE_CASE` for parameters, constants and states. A name says what
+  the value is (`k_tile_index`, `destination_is_UB`, `words_to_emit`), not
+  just its type or shape (`row`, `word`, `buffer`).
+- Every module port ends in `_in` or `_out` by direction
+  (`activate_read_address_in`, `read_data_out`), and a valid sits beside its data
+  (`partial_sum_in` / `partial_sum_valid_in`). The exceptions keep their
+  standard names: `clk`, `reset`, the board top's `reset_n`, and Avalon's
+  `avs_*`.
 - Four acronyms stay short, in capitals even inside a lower-case name:
   **UB** (unified buffer), **WMEM** (weight memory), **ACC** (accumulator
   memory) and **MMU** (the array), e.g. `activate_UB_write_address`. Opcode
-  mnemonics stay as the ISA spells them (`OPCODE_WR_WMEM`). `clk`, `reset_n`
-  and Avalon's `avs_*` keep their standard names.
-- `*_valid` beside each data bus; `in_*` / `out_*` port prefixes where a
-  module has both sides. The PE, a systolic cell, ends every data port in
-  `_in` / `_out` with its valid beside it (`partial_sum_in`,
-  `partial_sum_valid_in`).
+  mnemonics stay as the ISA spells them (`OPCODE_WR_WMEM`).
+- Ports, declarations and runs of assignments are aligned in columns.
 - Synchronous, active-high `reset` inside modules (only the top exposes
   active-low `reset_n`); every sequential block is `if (reset) ... else ...`.
 - Tunables are `parameter int`; derived values are `localparam`.
