@@ -109,6 +109,14 @@ def set_wbase(wbase):
     return encode("SET_WBASE", wbase=wbase)
 
 
+def set_obase(obase):
+    return encode("SET_OBASE", obase=obase)
+
+
+def rd_ddr_ub(ub_addr, n, ddr_addr):
+    return encode("RD_DDR_UB", ub_addr=ub_addr, n=n, ddr_addr=ddr_addr)
+
+
 def matmul(m, k_tiles, n_blocks, acc_addr, ub_addr, accumulate=False, wsrc=0):
     return encode("MATMUL", acc=int(accumulate), wsrc=wsrc, m=m, k_tiles=k_tiles,
                   n_blocks=n_blocks, acc_addr=acc_addr, ub_addr=ub_addr)

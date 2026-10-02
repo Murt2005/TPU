@@ -11,7 +11,7 @@ import numpy as np
 from tpu import golden, isa
 from tpu.isa_device import ERR_SEQ, OUT, IsaDevice, IsaError, open_link
 from tpu.isa_layout import bias_entries, out_rows, ub_entries, weight_rows
-from tpu.isa_model import (ERR_COMBO, ERR_OPCODE, ERR_RANGE, ERR_RESERVED, ERR_UNIMPL,
+from tpu.isa_model import (ERR_COMBO, ERR_OPCODE, ERR_RANGE, ERR_RESERVED,
                            IsaModel)
 
 failures = []
@@ -79,9 +79,6 @@ def main(binary):
         ("reserved bit", isa.nop() | 1, ERR_RESERVED),
         ("reserved FUNC", isa.encode("ACTIVATE", func=2, dst=1), ERR_RESERVED),
         ("reserved DST", isa.encode("ACTIVATE", dst=3), ERR_RESERVED),
-        ("RD_DDR_UB unimplemented", isa.encode("RD_DDR_UB"), ERR_UNIMPL),
-        ("SET_OBASE unimplemented", isa.encode("SET_OBASE"), ERR_UNIMPL),
-        ("ACTIVATE to DDR3", isa.activate(1, 1, 0, dst=isa.DST_DDR), ERR_UNIMPL),
         ("ACTIVATE int32 into UB", isa.activate(1, 1, 0, dst=isa.DST_UB), ERR_COMBO),
         ("WR_UB past the end", isa.wr_ub(link.ub_depth - 2, 5), ERR_RANGE),
         ("MATMUL ACC past the end", isa.matmul(8, 1, link.acc_depth // 8 + 1, 0, 0), ERR_RANGE),
@@ -132,18 +129,27 @@ def main(binary):
             bad += 1
     check(f"{count} random single layers, RTL == model == tpu.golden", bad == 0, f"{bad} bad")
 
-    # -- phase 5: weights from DDR3 (MATMUL wsrc=1) ----------------------------
-    dev.reset()
-    m = model()
-    words = [isa.set_wbase((1 << 30) // (n * n)), isa.matmul(1, 1, 1, 0, 0, wsrc=1), isa.signal(1)]
-    m.run(words)
-    try:
-        dev.run(words, timeout=5)
-        got = None
-    except IsaError:
-        got = (dev.status()["err_code"], link.read32(ERR_SEQ))
-    check("decode error: MATMUL from DDR3 past its end", got == (ERR_RANGE, 1)
-          and m.err is not None and (m.err.code, m.err.seq) == got, f"rtl {got}, model {m.err}")
+    # -- phase 5: DDR3 decode errors (after one instruction that sets a base) --
+    ddr_end = 1 << 30
+    for name, words, code in [
+            ("MATMUL from DDR3 past its end", [isa.set_wbase(ddr_end // (n * n)), isa.matmul(1, 1, 1, 0, 0, wsrc=1)],
+             ERR_RANGE),
+            ("RD_DDR_UB, misaligned", [isa.nop(), isa.rd_ddr_ub(0, 1, n // 2)], ERR_RESERVED),
+            ("RD_DDR_UB past DDR3's end", [isa.nop(), isa.rd_ddr_ub(0, 2, ddr_end - n)], ERR_RANGE),
+            ("RD_DDR_UB past the UB's end", [isa.nop(), isa.rd_ddr_ub(link.ub_depth - 1, 2, 0)], ERR_RANGE),
+            ("SET_OBASE, misaligned", [isa.nop(), isa.set_obase(2)], ERR_RESERVED),
+            ("ACTIVATE to DDR3 past its end", [isa.set_obase(ddr_end - 4 * n + 4), isa.activate(1, 1, 0, dst=isa.DST_DDR)],
+             ERR_RANGE)]:
+        dev.reset()
+        m = model()
+        m.run(words + [isa.signal(1)])
+        try:
+            dev.run(words + [isa.signal(1)], timeout=5)
+            got = None
+        except IsaError:
+            got = (dev.status()["err_code"], link.read32(ERR_SEQ))
+        check(f"decode error: {name}", got == (code, 1) and m.err is not None and (m.err.code, m.err.seq) == got,
+              f"rtl {got}, model {m.err}")
 
     def ddr_layer(x, w, b, relu, split, base):
         prog, data, nb = layer_program(n, x, w, b, relu=relu, k_split=split, ddr_base=base)
@@ -187,6 +193,45 @@ def main(binary):
     b = nrng.integers(-1000, 1000, 2 * n)
     got, want, _ = ddr_layer(x, w, b, True, None, link.ddr_window[0] + 0x200000)
     check("CTRL.RESET mid-stream: the next DDR3 MATMUL is still exact", got == want)
+
+    # RD_DDR_UB: entries at every alignment within a beat, read back with RD_UB
+    lo = link.ddr_window[0]
+    bad = 0
+    for start in range(0, 48, n):
+        rows = nrng.integers(-128, 128, (13, n))
+        address = lo + 0x10000 + start
+        link.ddr_write(address, rows.astype(np.int8).tobytes())
+        mod = model()
+        mod.ddr.write(address, rows)
+        prog = [isa.rd_ddr_ub(7, 13, address), isa.wait(isa.ACT, isa.LD), isa.rd_ub(7, 13), isa.signal(1)]
+        dev.reset()
+        got = dev.run(prog)
+        bad += got != mod.run(prog) or got != isa.pack_int8(rows)
+    check("RD_DDR_UB, every entry alignment: RTL == model == the rows written", bad == 0, f"{bad} bad")
+
+    # ACTIVATE dst=DDR: the host's words at OBASE, OBASE advancing; read back from DDR3
+    bad = 0
+    for rq in (False, True):
+        acc_rows = nrng.integers(-128, 128, (2 * 3, n))
+        wts = nrng.integers(-128, 128, (n, 2 * n))
+        rows, kt, nb = weight_rows(wts, n)
+        base = lo + 0x20000 + 4 * int(nrng.integers(0, 16))
+        prog = [isa.wr_wmem(0, len(rows)), isa.wr_ub(0, 3), isa.wr_quant(0, 2),
+                isa.wait(isa.WT, isa.LD), isa.wait(isa.MM, isa.LD), isa.wait(isa.ACT, isa.LD),
+                isa.set_wbase(0), isa.matmul(3, kt, nb, 0, 0), isa.wait(isa.ACT, isa.MM), isa.set_obase(base),
+                isa.activate(nb, 3, 0, func=isa.FUNC_RELU, rq=rq, bias=False, dst=isa.DST_DDR),
+                isa.activate(1, 2, 0, func=isa.FUNC_IDENTITY, rq=rq, bias=False, dst=isa.DST_DDR), isa.signal(5)]
+        data = (isa.pack_int8(rows) + isa.pack_int8(acc_rows[:3])
+                + [isa.quant_word(1 << 23, 6)] * (2 * n))
+        size = (nb * 3 + 2) * (n if rq else 4 * n)
+        link.ddr_write(base, bytes(size + 64))
+        mod = model()
+        mod.ddr.write(base, bytes(size + 64))
+        dev.reset()
+        dev.run(prog, data)
+        mod.run(prog, data)
+        bad += link.ddr_read(base, size + 64) != mod.ddr.read(base, size + 64) or mod.err is not None
+    check("ACTIVATE dst=DDR, int32 and requantized, two in a row: DDR3 bytes RTL == model", bad == 0, f"{bad} bad")
 
     # -- MNIST layer 1 --------------------------------------------------------
     sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "software" / "mnist"))
@@ -289,6 +334,37 @@ def main(binary):
             check(f"MNIST with its weights in DDR3, 20 images, m={m}: RTL == model, argmax == host path",
                   same and preds == host_pred, f"same={same} {preds} vs {host_pred}")
 
+        # the hidden layer requantized into DDR3 and read back with RD_DDR_UB
+        m = 8
+        cm = compile_mlp(layers, m, n)
+        p0, p1 = cm.plan
+        dev.reset()
+        mod = model()
+        lp = cm.load_program()
+        dev.run(*lp)
+        mod.run(*lp)
+        hidden = link.ddr_window[0] + 0x40000
+        preds, same = [], True
+        for i in range(0, 16, m):
+            ub = ub_entries(x20[i:i + m], n)
+            prog = [isa.wr_ub(p0["ub_in"], len(ub)), isa.set_wbase(0), isa.set_obase(hidden),
+                    isa.wait(isa.MM, isa.LD),
+                    isa.matmul(m, p0["kt"], p0["nb"], p0["acc"], p0["ub_in"]), isa.wait(isa.ACT, isa.MM),
+                    isa.activate(p0["nb"], m, p0["acc"], func=isa.FUNC_RELU, rq=True, dst=isa.DST_DDR,
+                                 param_idx=p0["par"]),
+                    isa.wait(isa.LD, isa.ACT), isa.rd_ddr_ub(p1["ub_in"], p0["nb"] * m, hidden),
+                    isa.wait(isa.MM, isa.LD),
+                    isa.matmul(m, p1["kt"], p1["nb"], p1["acc"], p1["ub_in"]), isa.wait(isa.ACT, isa.MM),
+                    isa.activate(p1["nb"], m, p1["acc"], func=isa.FUNC_RELU, dst=isa.DST_HOST, param_idx=p1["par"]),
+                    isa.signal(3)]
+            dev.reset()
+            mod.reset()
+            got = dev.run(prog, isa.pack_int8(ub))
+            same &= got == mod.run(prog, isa.pack_int8(ub))
+            preds += list(cm.decode(got).argmax(1))
+        check("MNIST's hidden layer through DDR3 (ACTIVATE dst=DDR, RD_DDR_UB), 16 images: RTL == model, "
+              "argmax == host path", same and preds == host_pred[:16], f"same={same} {preds}")
+
     # -- phase 3: random concurrent programs, WAITs from isa_waits -------------
     import isa_progs
     from tpu.isa_waits import check_waits, insert_waits
@@ -315,6 +391,35 @@ def main(binary):
                 print(f"    first mismatch: program {t}, model err {mod.err}")
     check(f"{count} random concurrent programs ({raced} with hazards before WAIT insertion): "
           f"RTL == model", bad == 0 and left == 0 and raced > count // 2,
+          f"bad={bad} hazards left={left} raced={raced}")
+
+    # the same with DDR3 in play: RD_DDR_UB, ACTIVATE dst=DDR and MATMUL wsrc=1 over one
+    # small region, so they collide; the outputs and the region afterwards must agree
+    region = link.ddr_window[0] + 0x80000
+    fill = prng.integers(-128, 128, isa_progs.DDR_REGION).astype(np.int8).tobytes()
+    bad = left = raced = 0
+    for t in range(count):
+        raw, data = isa_progs.random_program(n, prng, ddr_base=region)
+        prog = insert_waits(raw, n) + [isa.signal(9)]
+        raced += bool(check_waits(raw, n))
+        left += len(check_waits(prog, n))
+        link.ddr_write(region, fill)
+        dev.reset()
+        mod = model()
+        mod.ddr.write(region, fill)
+        dev.run(*init)
+        mod.run(*init)
+        dev.reset()
+        mod.reset()
+        got = dev.run(prog, data)
+        want = mod.run(prog, data)
+        if (got != want or mod.err is not None
+                or link.ddr_read(region, isa_progs.DDR_REGION) != mod.ddr.read(region, isa_progs.DDR_REGION)):
+            bad += 1
+            if bad == 1:
+                print(f"    first mismatch: DDR3 program {t}, model err {mod.err}")
+    check(f"{count} random concurrent programs using DDR3 ({raced} with hazards before WAIT insertion): "
+          f"RTL == model, outputs and DDR3", bad == 0 and left == 0 and raced > count // 2,
           f"bad={bad} hazards left={left} raced={raced}")
 
     # -- phase 3: steady-state tile rate ---------------------------------------
@@ -378,6 +483,34 @@ def main(binary):
                   f"stall {extra} cycles at most (WSTALL {min(stalls[tiles])}..{max(stalls[tiles])} at "
                   f"{tiles} tiles, {min(stalls[2 * tiles])}..{max(stalls[2 * tiles])} at {2 * tiles})",
                   beats_ok and extra < tiles, f"{stalls}")
+
+    # prefetch across MATMULs: a second MATMUL from DDR3 straight after the first
+    # finds its weights already on the way, so it adds no weight stall. the
+    # simulated port answers in 40 cycles here: past the weight FIFO's two-tile
+    # lead, so without prefetch the second MATMUL would stall
+    link.ddr_timing(False, latency=40)
+    for m in (1, n):
+        if link.cycle_exact:
+            runs = []
+            for count_matmuls in (1, 2):
+                dev.reset()
+                dev.run([isa.set_wbase(link.ddr_window[0] // (n * n))]
+                        + [isa.matmul(m, tiles, 1, 0, 0, wsrc=1)] * count_matmuls + [isa.signal(2)])
+                runs.append(dev.perf())
+            check(f"prefetch across MATMULs, m={m}: the second adds {runs[1]['mm_wstall'] - runs[0]['mm_wstall']} "
+                  f"WSTALL cycles", runs[1]["mm_wstall"] == runs[0]["mm_wstall"], f"{runs}")
+        else:
+            stalls = {1: [], 2: []}
+            for _ in range(5):
+                for count_matmuls in (1, 2):
+                    dev.reset()
+                    dev.run([isa.set_wbase(link.ddr_window[0] // (n * n))]
+                            + [isa.matmul(m, tiles, 1, 0, 0, wsrc=1)] * count_matmuls + [isa.signal(2)])
+                    stalls[count_matmuls].append(dev.perf()["mm_wstall"])
+            extra = max(stalls[2]) - min(stalls[1])
+            check(f"prefetch across MATMULs, m={m}: the second adds {extra} WSTALL cycles at most "
+                  f"(one MATMUL {min(stalls[1])}..{max(stalls[1])}, two {min(stalls[2])}..{max(stalls[2])})",
+                  extra < tiles, f"{stalls}")
     link.ddr_timing(True)
 
     # -- status ---------------------------------------------------------------

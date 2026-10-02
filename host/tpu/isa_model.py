@@ -52,12 +52,16 @@ class Ddr:
 
 class IsaModel:
     def __init__(self, n=8, wmem_rows=8192, ub_depth=16384, acc_depth=1024,
-                 param_depth=256, phase=3, ddr_weights=True, ddr_bytes=1 << 30):
-        """ddr_weights: MATMUL wsrc=1 (weights from DDR3) is implemented, as in the
-        RTL; without it, ERR_UNIMPL like the rest of phase 5. tile t of a wsrc=1 MATMUL is the
-        n*n bytes at DDR3 byte address t*n*n, rows in WMEM order"""
+                 param_depth=256, phase=3, ddr=True, ddr_bytes=1 << 30):
+        """ddr: the DDR3 instructions (phase 5) are implemented, as in the RTL:
+        MATMUL wsrc=1, RD_DDR_UB, SET_OBASE, ACTIVATE dst=DDR; without it, each is
+        ERR_UNIMPL. tile t of a wsrc=1 MATMUL is the n*n bytes at DDR3 byte address
+        t*n*n, rows in WMEM order. RD_DDR_UB reads n-byte UB entries from an n-byte
+        aligned address. ACTIVATE dst=DDR writes the words it would send the host,
+        little-endian and back to back, at OBASE (4-byte aligned), which advances
+        past them"""
         assert n % 4 == 0, "R = C must be a multiple of 4 (rows pack into whole words)"
-        self.n, self.phase, self.ddr_weights = n, phase, ddr_weights
+        self.n, self.phase, self.ddr_enabled = n, phase, ddr
         self.ddr = Ddr(ddr_bytes)
         self.wmem_rows, self.ub_depth = wmem_rows, ub_depth
         self.acc_depth, self.param_depth = acc_depth, param_depth
@@ -71,6 +75,7 @@ class IsaModel:
     def reset(self):
         """CTRL.RESET: memories keep their contents"""
         self.wbase = 0
+        self.obase = 0
         self.seq = 0
         self.out = []
         self.done, self.tag = False, 0
@@ -78,7 +83,7 @@ class IsaModel:
 
     # -- decode ---------------------------------------------------------------
 
-    def check(self, word, wbase):
+    def check(self, word, wbase, obase=0):
         """the error code the dispatcher raises for `word`, or 0"""
         name, f = isa.decode(word)
         if name is None:
@@ -87,9 +92,12 @@ class IsaModel:
             return ERR_RESERVED
         if name == "ACTIVATE" and (f["func"] > 1 or f["dst"] == 3):
             return ERR_RESERVED
-        if self.phase < 5 and (
+        # DDR3 addresses' alignment bits are reserved: an entry for RD_DDR_UB, a word for OBASE
+        if (name == "RD_DDR_UB" and f["ddr_addr"] % self.n) or (name == "SET_OBASE" and f["obase"] % 4):
+            return ERR_RESERVED
+        if self.phase < 5 and not self.ddr_enabled and (
                 name in ("RD_DDR_UB", "SET_OBASE")
-                or (name == "MATMUL" and f["wsrc"] and not self.ddr_weights)
+                or (name == "MATMUL" and f["wsrc"])
                 or (name == "ACTIVATE" and f["dst"] == isa.DST_DDR)):
             return ERR_UNIMPL
         if self.phase < 2 and name == "ACTIVATE" and f["rq"]:
@@ -110,11 +118,19 @@ class IsaModel:
                                  and (not (f["bias"] or f["rq"])
                                       or f["param_idx"] + f["n_blocks"] <= self.param_depth)
                                  and (f["dst"] != isa.DST_UB
-                                      or f["ub_addr"] + f["n_blocks"] * f["m"] <= self.ub_depth)),
+                                      or f["ub_addr"] + f["n_blocks"] * f["m"] <= self.ub_depth)
+                                 and (f["dst"] != isa.DST_DDR
+                                      or obase + self.activate_bytes(f) <= self.ddr.size)),
+            "RD_DDR_UB": lambda: (f["ub_addr"] + f["n"] <= self.ub_depth
+                                  and f["ddr_addr"] + f["n"] * n <= self.ddr.size),
         }
         if name in fits and not fits[name]():
             return ERR_RANGE
         return ERR_NONE
+
+    def activate_bytes(self, f):
+        """bytes an ACTIVATE sends: n int32 per row, or n int8 with rq"""
+        return f["n_blocks"] * f["m"] * (self.n if f["rq"] else 4 * self.n)
 
     def _weights_fit(self, f, wbase):
         end_tile = wbase + f["n_blocks"] * f["k_tiles"]
@@ -148,7 +164,7 @@ class IsaModel:
             return words
 
         for word in program:
-            code = self.check(word, self.wbase)
+            code = self.check(word, self.wbase, self.obase)
             if code:
                 self.err = IsaError(code, self.seq, word)
                 break
@@ -188,6 +204,14 @@ class IsaModel:
     def _set_wbase(self, f, take):
         self.wbase = f["wbase"]
 
+    def _set_obase(self, f, take):
+        self.obase = f["obase"]
+
+    def _rd_ddr_ub(self, f, take):
+        n, a = self.n, f["ub_addr"]
+        raw = self.ddr.read(f["ddr_addr"], f["n"] * n)
+        self.ub[a:a + f["n"]] = np.frombuffer(raw, np.int8).reshape(f["n"], n)
+
     @staticmethod
     def _wrap32(x):
         return ((x + (1 << 31)) % (1 << 32)) - (1 << 31)
@@ -221,11 +245,13 @@ class IsaModel:
             if f["dst"] == isa.DST_UB:
                 a = f["ub_addr"] + b * m
                 self.ub[a:a + m] = v.astype(np.int8)
-            elif f["rq"]:
-                self.out += isa.pack_int8(v)
-            else:
-                for row in v:
-                    self.out += isa.pack_int32(row)
+                continue
+            words = isa.pack_int8(v) if f["rq"] else [w for row in v for w in isa.pack_int32(row)]
+            if f["dst"] == isa.DST_HOST:
+                self.out += words
+            else:                                  # DDR3 at OBASE, which advances past them
+                self.ddr.write(self.obase, b"".join(w.to_bytes(4, "little") for w in words))
+                self.obase += 4 * len(words)
 
     def _rd_ub(self, f, take):
         rows = self.ub[f["ub_addr"]:f["ub_addr"] + f["n"]]

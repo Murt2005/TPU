@@ -2,8 +2,10 @@
 
 import tpu_pkg::*;
 
-// ACT engine: ACC rows -> bias -> ReLU/identity -> optional requantize -> UB or
-// host out FIFO, plus RD_UB. control only: tpu_core wires the bias and activation
+// ACT engine: ACC rows -> bias -> ReLU/identity -> optional requantize -> UB, host
+// out FIFO or DDR3, plus RD_UB and SET_OBASE. to DDR3 the words the host would get
+// go to ddr_writer at OBASE, which advances past them; such an ACTIVATE completes
+// once the writer has handed every word to the bus. control only: tpu_core wires the bias and activation
 // units. shares the ACC and UB read ports with MM, which has priority there; ACT
 // has priority on the UB write port
 module activate_engine #(
@@ -45,6 +47,11 @@ module activate_engine #(
     output logic [31:0]                        output_word_out,
     input  logic                               output_full_in,
 
+    output logic                               DDR_word_valid_out,         // ddr_writer
+    output logic [31:0]                        DDR_word_address_out,
+    input  logic                               DDR_full_in,
+    input  logic                               DDR_idle_in,
+
     output logic                               idle_out
 );
 
@@ -56,11 +63,12 @@ module activate_engine #(
     logic [5:0] opcode;
     assign opcode = instruction[63:58];
 
-    typedef enum logic [2:0] {S_IDLE, S_READ, S_LATCH, S_MULTIPLY, S_ROUND, S_EMIT, S_WRITE} state_t;
+    typedef enum logic [2:0] {S_IDLE, S_READ, S_LATCH, S_MULTIPLY, S_ROUND, S_EMIT, S_WRITE, S_DRAIN} state_t;
     state_t state;
 
     logic                     is_read_UB;
-    logic                     requantize, destination_is_UB;
+    logic                     requantize, destination_is_UB, destination_is_DDR;
+    logic [31:0]              output_base;                   // OBASE
     logic [15:0]              UB_destination_address;
     logic [8:0]               activation_rows;
     logic [10:0]              block_count, block_index;
@@ -84,8 +92,13 @@ module activate_engine #(
     assign UB_write_enable_out  = state == S_WRITE;
     assign UB_write_address_out = UB_ADDRESS_WIDTH'(UB_destination_address);
     assign UB_write_data_out    = result_row[ARRAY_SIZE*8-1:0];
-    assign output_push_out      = state == S_EMIT && !output_full_in;
+    assign output_push_out      = state == S_EMIT && !destination_is_DDR && !output_full_in;
     assign output_word_out      = result_row[32*word_index +: 32];
+    assign DDR_word_valid_out   = state == S_EMIT && destination_is_DDR && !DDR_full_in;
+    assign DDR_word_address_out = output_base;
+
+    logic word_emitted;
+    assign word_emitted = output_push_out || DDR_word_valid_out;
 
     logic wait_satisfied;
     assign wait_satisfied = wait_counts_reached(instruction[51:48], wait_snapshot, completed_in);
@@ -109,6 +122,8 @@ module activate_engine #(
             result_row             <= '0;
             requantize             <= 1'b0;
             destination_is_UB      <= 1'b0;
+            destination_is_DDR     <= 1'b0;
+            output_base            <= '0;
             UB_destination_address <= '0;
             instruction_done_out   <= 1'b0;
         end else begin
@@ -119,6 +134,7 @@ module activate_engine #(
                         is_read_UB             <= 1'b0;
                         requantize             <= instruction[55];
                         destination_is_UB      <= instruction[54:53] == DESTINATION_UB;
+                        destination_is_DDR     <= instruction[54:53] == DESTINATION_DDR;
                         UB_destination_address <= 16'(instruction[23:10]);
                         relu_enable_out        <= instruction[57:56] == 2'd1;
                         bias_enable_out        <= instruction[52];
@@ -133,11 +149,14 @@ module activate_engine #(
                         is_read_UB        <= 1'b1;
                         requantize        <= 1'b0;
                         destination_is_UB <= 1'b0;
+                        destination_is_DDR <= 1'b0;
                         read_address      <= 16'(instruction[45:32]);
                         UB_entries_left   <= 16'(instruction[11:0]) + 16'd1;
                         state             <= S_READ;
                     end else begin
-                        instruction_done_out <= 1'b1;            // WAIT
+                        if (opcode == OPCODE_SET_OBASE)
+                            output_base <= instruction[31:0];
+                        instruction_done_out <= 1'b1;            // SET_OBASE, WAIT
                     end
                 end
                 S_READ: if (is_read_UB ? !UB_read_blocked_in : !ACC_read_blocked_in) state <= S_LATCH;
@@ -167,7 +186,9 @@ module activate_engine #(
                         row_in_block <= row_in_block + 9'd1;
                     end
                 end
-                S_EMIT: if (output_push_out) begin
+                S_EMIT: if (word_emitted) begin
+                    if (destination_is_DDR)
+                        output_base <= output_base + 32'd4;
                     if (word_index == words_to_emit - 8'd1) begin
                         read_address <= read_address + 16'd1;
                         state        <= S_READ;
@@ -181,8 +202,12 @@ module activate_engine #(
                             row_in_block    <= '0;
                             parameter_index <= parameter_index + 8'd1;
                             if (block_index == block_count - 11'd1) begin
-                                state                <= S_IDLE;
-                                instruction_done_out <= 1'b1;
+                                if (destination_is_DDR) begin
+                                    state <= S_DRAIN;
+                                end else begin
+                                    state                <= S_IDLE;
+                                    instruction_done_out <= 1'b1;
+                                end
                             end
                             block_index <= block_index + 11'd1;
                         end else begin
@@ -191,6 +216,10 @@ module activate_engine #(
                     end else begin
                         word_index <= word_index + 8'd1;
                     end
+                end
+                S_DRAIN: if (DDR_idle_in) begin                // every word is on the bus
+                    state                <= S_IDLE;
+                    instruction_done_out <= 1'b1;
                 end
                 default: state <= S_IDLE;
             endcase

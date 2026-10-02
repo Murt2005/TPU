@@ -7,22 +7,29 @@ from . import isa
 ENGINES = (isa.LD, isa.WT, isa.MM, isa.ACT)
 
 
-def accesses(word, wbase, n):
-    """[(engine, reads, writes)] for one instruction, and WT's WBASE after it.
-    reads/writes are lists of (memory, lo, hi) half-open ranges"""
+def accesses(word, bases, n):
+    """[(engine, reads, writes)] for one instruction, and (WBASE, OBASE) after it.
+    bases is (WBASE, OBASE) before it. reads/writes are lists of (memory, lo, hi)
+    half-open ranges; DDR3 ranges are bytes"""
+    wbase, obase = bases
     name, f = isa.decode(word)
     if name in ("NOP", "WAIT", "SIGNAL"):
-        return [], wbase
+        return [], bases
     if name == "WR_WMEM":
-        return [(isa.LD, [], [("WMEM", f["wmem_row"], f["wmem_row"] + f["n_rows"])])], wbase
+        return [(isa.LD, [], [("WMEM", f["wmem_row"], f["wmem_row"] + f["n_rows"])])], bases
     if name == "WR_UB":
-        return [(isa.LD, [], [("UB", f["ub_addr"], f["ub_addr"] + f["n"])])], wbase
+        return [(isa.LD, [], [("UB", f["ub_addr"], f["ub_addr"] + f["n"])])], bases
     if name == "WR_BIAS":
-        return [(isa.LD, [], [("BIAS", f["param_idx"], f["param_idx"] + f["n"])])], wbase
+        return [(isa.LD, [], [("BIAS", f["param_idx"], f["param_idx"] + f["n"])])], bases
     if name == "WR_QUANT":
-        return [(isa.LD, [], [("QUANT", f["param_idx"], f["param_idx"] + f["n"])])], wbase
+        return [(isa.LD, [], [("QUANT", f["param_idx"], f["param_idx"] + f["n"])])], bases
     if name == "SET_WBASE":
-        return [(isa.WT, [], [])], f["wbase"]
+        return [(isa.WT, [], [])], (f["wbase"], obase)
+    if name == "SET_OBASE":
+        return [(isa.ACT, [], [])], (wbase, f["obase"])
+    if name == "RD_DDR_UB":
+        return [(isa.LD, [("DDR", f["ddr_addr"], f["ddr_addr"] + f["n"] * n)],
+                 [("UB", f["ub_addr"], f["ub_addr"] + f["n"])])], bases
     if name == "MATMUL":
         tiles = f["n_blocks"] * f["k_tiles"]
         acc = ("ACC", f["acc_addr"], f["acc_addr"] + f["n_blocks"] * f["m"])
@@ -31,7 +38,7 @@ def accesses(word, wbase, n):
         else:
             wt = (isa.WT, [("WMEM", wbase * n, (wbase + tiles) * n)], [])
         mm = (isa.MM, [("UB", f["ub_addr"], f["ub_addr"] + f["k_tiles"] * f["m"]), acc], [acc])
-        return [wt, mm], wbase + tiles
+        return [wt, mm], (wbase + tiles, obase)
     if name == "ACTIVATE":
         rows = f["n_blocks"] * f["m"]
         reads = [("ACC", f["acc_addr"], f["acc_addr"] + rows)]
@@ -39,10 +46,14 @@ def accesses(word, wbase, n):
             reads.append(("BIAS", f["param_idx"], f["param_idx"] + f["n_blocks"]))
         if f["rq"]:
             reads.append(("QUANT", f["param_idx"], f["param_idx"] + f["n_blocks"]))
-        writes = [("UB", f["ub_addr"], f["ub_addr"] + rows)] if f["dst"] == isa.DST_UB else []
-        return [(isa.ACT, reads, writes)], wbase
+        if f["dst"] == isa.DST_UB:
+            return [(isa.ACT, reads, [("UB", f["ub_addr"], f["ub_addr"] + rows)])], bases
+        if f["dst"] == isa.DST_DDR:
+            size = rows * (n if f["rq"] else 4 * n)
+            return [(isa.ACT, reads, [("DDR", obase, obase + size)])], (wbase, obase + size)
+        return [(isa.ACT, reads, [])], bases
     if name == "RD_UB":
-        return [(isa.ACT, [("UB", f["ub_addr"], f["ub_addr"] + f["n"])], [])], wbase
+        return [(isa.ACT, [("UB", f["ub_addr"], f["ub_addr"] + f["n"])], [])], bases
     raise ValueError(f"no access model for {name}")
 
 
@@ -59,7 +70,7 @@ def _conflict(a, b):
 class _Tracker:
     def __init__(self, n):
         self.n = n
-        self.wbase = 0
+        self.bases = (0, 0)                           # WBASE, OBASE
         self.parts = {e: [] for e in ENGINES}         # (instr index, reads, writes)
         self.cover = {e: {e2: -1 for e2 in ENGINES} for e in ENGINES}
 
@@ -99,7 +110,7 @@ def check_waits(program, n):
         if name == "SIGNAL":
             t.fence(i)
             continue
-        parts, t.wbase = accesses(word, t.wbase, n)
+        parts, t.bases = accesses(word, t.bases, n)
         for engine, reads, writes in parts:
             for e2, idx in t.needs(engine, reads, writes):
                 hazards.append((i, engine, idx))
@@ -118,7 +129,7 @@ def insert_waits(program, n):
             out.append(word)
             t.fence(len(out) - 1)
             continue
-        parts, new_wbase = accesses(word, t.wbase, n)
+        parts, new_bases = accesses(word, t.bases, n)
         for engine, reads, writes in parts:
             needed = 0
             for e2, _ in t.needs(engine, reads, writes):
@@ -127,7 +138,7 @@ def insert_waits(program, n):
                 out.append(isa.encode("WAIT", target=engine, mask=needed))
                 t.wait(engine, needed, len(out) - 1)
         out.append(word)
-        t.wbase = new_wbase
+        t.bases = new_bases
         for engine, reads, writes in parts:
             t.parts[engine].append((len(out) - 1, reads, writes))
     return out

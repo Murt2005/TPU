@@ -126,6 +126,14 @@ the model's:
   m = 1 and 8, the DDR3 range error, `CTRL.RESET` with reads in flight, and
   the tile rate on a port that answers at once (each extra tile max(m, N)
   cycles, no extra WSTALL);
+- `RD_DDR_UB` at every entry alignment, `ACTIVATE dst=DDR` read back from
+  DDR3 (int32 and requantized, `OBASE` advancing), MNIST's hidden layer
+  chained through DDR3, the new decode errors, and 40 random concurrent
+  programs that also use DDR3 (`RD_DDR_UB`, `ACTIVATE dst=DDR`, `MATMUL
+  wsrc=1` over one 4 KB region, so they collide), comparing outputs and the
+  region afterwards;
+- prefetch across `MATMUL`s on a port 40 cycles from command to data: a
+  second `MATMUL` from DDR3 adds no WSTALL (23 cycles at m = 1 without it);
 - MNIST layer 1, and the two-layer program chained through the UB, on 20
   images at m = 1 and 8;
 - the requantizer over every int16 input, the edges and random int32

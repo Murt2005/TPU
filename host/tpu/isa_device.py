@@ -61,10 +61,16 @@ class IsaSimLink:
         if len(self._buf) > 1 << 16:
             self.flush()
 
-    def ddr_timing(self, random_timing):
+    def ddr_read(self, address, count):
+        """bytes from DDR3, as the host's loads see them"""
+        self._buf += b"G" + struct.pack("<II", address, count)
+        self.flush()
+        return self._read(count)
+
+    def ddr_timing(self, random_timing, latency=10):
         """the DDR3 model's timing: random (the default), or every command answered
-        at once with back-to-back beats"""
-        self._buf += b"M" + bytes([int(random_timing)])
+        at once with back-to-back beats, `latency` cycles to the first"""
+        self._buf += b"M" + bytes([1 if random_timing else (0 if latency == 10 else latency)])
 
     def close(self):
         try:

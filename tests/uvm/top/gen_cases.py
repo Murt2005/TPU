@@ -22,7 +22,7 @@ sys.path[:0] = [str(ROOT / "tests" / "isa"), str(ROOT / "software" / "mnist")]
 
 from tpu import isa                                    # noqa: E402
 from tpu.isa_model import (ERR_COMBO, ERR_OPCODE, ERR_RANGE, ERR_RESERVED,  # noqa: E402
-                           ERR_UNIMPL, IsaModel)
+                           IsaModel)
 from tpu.isa_waits import insert_waits                 # noqa: E402
 import isa_progs                                       # noqa: E402
 from test_isa_rtl import layer_program                 # noqa: E402
@@ -70,10 +70,9 @@ def build(n):
         ("reserved bit", isa.nop() | 1, ERR_RESERVED),
         ("reserved FUNC", isa.encode("ACTIVATE", func=2, dst=1), ERR_RESERVED),
         ("reserved DST", isa.encode("ACTIVATE", dst=3), ERR_RESERVED),
-        ("RD_DDR_UB unimplemented", isa.encode("RD_DDR_UB"), ERR_UNIMPL),
-        ("SET_OBASE unimplemented", isa.encode("SET_OBASE"), ERR_UNIMPL),
-        ("ACTIVATE to DDR3", isa.activate(1, 1, 0, dst=isa.DST_DDR), ERR_UNIMPL),
         ("ACTIVATE int32 into UB", isa.activate(1, 1, 0, dst=isa.DST_UB), ERR_COMBO),
+        ("RD_DDR_UB misaligned", isa.rd_ddr_ub(0, 1, n // 2), ERR_RESERVED),
+        ("SET_OBASE misaligned", isa.set_obase(2), ERR_RESERVED),
         ("WR_UB past the end", isa.wr_ub(UB_DEPTH - 2, 5), ERR_RANGE),
         ("MATMUL ACC past the end", isa.matmul(8, 1, ACC_DEPTH // 8 + 1, 0, 0), ERR_RANGE),
         ("MATMUL weights past the end", isa.matmul(1, WMEM_ROWS // n + 1, 1, 0, 0), ERR_RANGE),

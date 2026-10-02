@@ -21,10 +21,13 @@ module tpu_top #(
     input  logic [31:0] avs_writedata,
     output logic        avs_waitrequest,
 
-    // DDR3 burst-read master: byte addresses, 128-bit beats
+    // DDR3 master: byte addresses, 128-bit beats; burst reads, single-beat writes
     output logic [31:0]  avm_address,
     output logic         avm_read,
+    output logic         avm_write,
     output logic [7:0]   avm_burstcount,
+    output logic [127:0] avm_writedata,
+    output logic [15:0]  avm_byteenable,
     input  logic         avm_waitrequest,
     input  logic [127:0] avm_readdata,
     input  logic         avm_readdatavalid
@@ -77,7 +80,8 @@ module tpu_top #(
         .instruction_free_out(instruction_free), .data_free_out(data_free), .output_count_out(output_count),
         .performance_cycles_out(performance_cycles), .performance_matmul_beats_out(performance_matmul_beats),
         .performance_matmul_weight_stalls_out(performance_matmul_weight_stalls), .performance_matmul_sync_stalls_out(performance_matmul_sync_stalls),
-        .memory_address_out(avm_address), .memory_read_out(avm_read), .memory_burstcount_out(avm_burstcount),
+        .memory_address_out(avm_address), .memory_read_out(avm_read), .memory_write_out(avm_write),
+        .memory_burstcount_out(avm_burstcount), .memory_writedata_out(avm_writedata), .memory_byteenable_out(avm_byteenable),
         .memory_waitrequest_in(avm_waitrequest), .memory_readdata_in(avm_readdata), .memory_readdatavalid_in(avm_readdatavalid));
 
 endmodule

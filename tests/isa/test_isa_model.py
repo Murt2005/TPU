@@ -33,7 +33,7 @@ def test_roundtrip(rng):
 
 
 def test_errors():
-    m = IsaModel(n=8, wmem_rows=64, ub_depth=64, acc_depth=32, param_depth=8, phase=1, ddr_weights=False)
+    m = IsaModel(n=8, wmem_rows=64, ub_depth=64, acc_depth=32, param_depth=8, phase=1, ddr=False)
     cases = [
         ("unknown opcode", 0x3F << 58, ERR_OPCODE),
         ("reserved bit", isa.nop() | 1, ERR_RESERVED),
@@ -137,22 +137,34 @@ def test_ddr_errors():
     """with wsrc=1 implemented: legal, range-checked against DDR3 rather than WMEM;
     the rest of phase 5 stays unimplemented"""
     m = IsaModel(n=8, wmem_rows=64, ub_depth=64, acc_depth=32, param_depth=8,
-                 ddr_weights=True, ddr_bytes=64 * 64)    # 64 tiles of DDR3, 8 of WMEM
+                 ddr=True, ddr_bytes=64 * 64)    # 64 tiles of DDR3, 8 of WMEM
     cases = [
         ("MATMUL from DDR3", [isa.set_wbase(60), isa.matmul(1, 2, 2, 0, 0, wsrc=1)], ERR_NONE),
         ("MATMUL from DDR3 past its end", [isa.set_wbase(61), isa.matmul(1, 2, 2, 0, 0, wsrc=1)], ERR_RANGE),
         ("MATMUL from WMEM still checks WMEM", [isa.set_wbase(6), isa.matmul(1, 2, 2, 0, 0)], ERR_RANGE),
-        ("RD_DDR_UB still unimplemented", [isa.encode("RD_DDR_UB")], ERR_UNIMPL),
-        ("ACTIVATE to DDR3 still unimplemented", [isa.activate(1, 1, 0, dst=isa.DST_DDR)], ERR_UNIMPL),
+        ("RD_DDR_UB, entry-aligned", [isa.rd_ddr_ub(0, 4, 64 * 64 - 32)], ERR_NONE),
+        ("RD_DDR_UB, misaligned", [isa.rd_ddr_ub(0, 1, 4)], ERR_RESERVED),
+        ("RD_DDR_UB past DDR3's end", [isa.rd_ddr_ub(0, 5, 64 * 64 - 32)], ERR_RANGE),
+        ("RD_DDR_UB past the UB's end", [isa.rd_ddr_ub(62, 3, 0)], ERR_RANGE),
+        ("SET_OBASE, misaligned", [isa.set_obase(6)], ERR_RESERVED),
+        ("ACTIVATE to DDR3 at its end", [isa.set_obase(64 * 64 - 32), isa.activate(1, 1, 0, dst=isa.DST_DDR)],
+         ERR_NONE),
+        ("ACTIVATE to DDR3 past its end", [isa.set_obase(64 * 64 - 28), isa.activate(1, 1, 0, dst=isa.DST_DDR)],
+         ERR_RANGE),
+        ("ACTIVATE to DDR3, OBASE advanced past its end",
+         [isa.set_obase(64 * 64 - 32), isa.activate(1, 1, 0, dst=isa.DST_DDR),
+          isa.activate(1, 1, 0, rq=True, dst=isa.DST_DDR)], ERR_RANGE),
     ]
     for name, words, code in cases:
         m.reset()
         m.run(words + [isa.signal(1)])
         got = m.err.code if m.err else ERR_NONE
-        check(f"decode, wsrc=1 enabled: {name}", got == code and m.done == (code == ERR_NONE), str(m.err))
-    m = IsaModel(n=8, ddr_weights=False)
-    m.run([isa.matmul(1, 1, 1, 0, 0, wsrc=1), isa.signal(1)])
-    check("decode: MATMUL wsrc=1 is ERR_UNIMPL until enabled", m.err is not None and m.err.code == ERR_UNIMPL)
+        check(f"decode, DDR3 enabled: {name}", got == code and m.done == (code == ERR_NONE), str(m.err))
+    for name, word in [("MATMUL wsrc=1", isa.matmul(1, 1, 1, 0, 0, wsrc=1)), ("RD_DDR_UB", isa.rd_ddr_ub(0, 1, 0)),
+                       ("SET_OBASE", isa.set_obase(0)), ("ACTIVATE dst=DDR", isa.activate(1, 1, 0, dst=isa.DST_DDR))]:
+        m = IsaModel(n=8, ddr=False)
+        m.run([word, isa.signal(1)])
+        check(f"decode: {name} is ERR_UNIMPL until enabled", m.err is not None and m.err.code == ERR_UNIMPL)
 
 
 def test_ddr_weights(rng):
@@ -171,7 +183,7 @@ def test_ddr_weights(rng):
         split = rng.randrange(1, kt) if kt > 1 and i % 3 == 0 else None
         base = rng.randrange(0, (1 << 30) // (n * n) - 1000) * n * n
         model = IsaModel(n=n, wmem_rows=4096, ub_depth=512, acc_depth=512, param_depth=64,
-                         ddr_weights=True)
+                         ddr=True)
         from_wmem = run_layer(model, x, w, b, relu, split, words=True)
         from_ddr = run_layer(model, x, w, b, relu, split, ddr_base=base, words=True)
         got = out_rows(from_ddr, mm, -(-nn // n), n)[:, :nn]
@@ -188,7 +200,7 @@ def test_ddr_mixed_sources():
     x = nrng.integers(-128, 128, (m, kt * n), dtype=np.int64)
     w = nrng.integers(-128, 128, (kt * n, n), dtype=np.int64)
     rows, _, _ = weight_rows(w, n)
-    model = IsaModel(n=n, ddr_weights=True)
+    model = IsaModel(n=n, ddr=True)
     base_tile = 1000
     model.ddr.write(base_tile * n * n, rows[2 * n:])        # K-tiles 2, 3
     ub = ub_entries(x, n)
@@ -203,6 +215,86 @@ def test_ddr_mixed_sources():
     ok = model.err is None and model.wbase == base_tile + 2
     ok &= np.array_equal(out_rows(out, m, 1, n), golden.wrap(x @ w, 32))
     check("one K-sum across WMEM and DDR3, WBASE advancing through both", ok)
+
+
+def test_rd_ddr_ub():
+    """RD_DDR_UB puts DDR3 bytes into the UB exactly as WR_UB puts the same rows,
+    from any entry-aligned address (mid-beat at N = 4 and 8 included)"""
+    nrng = np.random.default_rng(4)
+    ok = True
+    for n in (4, 8, 16):
+        for start in range(0, 32, n):
+            rows = nrng.integers(-128, 128, (7, n))
+            m = IsaModel(n=n)
+            address = 0x30000000 + start
+            m.ddr.write(address, rows)
+            out = m.run([isa.rd_ddr_ub(5, 7, address), isa.wait(isa.ACT, isa.LD), isa.rd_ub(5, 7), isa.signal(1)])
+            ok &= m.err is None and out == isa.pack_int8(rows)
+    check("RD_DDR_UB == WR_UB of the same rows, every entry alignment, N = 4, 8, 16", ok)
+
+
+def test_activate_ddr():
+    """ACTIVATE dst=DDR writes the words dst=HOST would send, little-endian, back
+    to back from OBASE; OBASE advances past each one, int32 and requantized alike"""
+    n, m_rows, nb = 8, 3, 2
+    nrng = np.random.default_rng(6)
+    ok = True
+    for rq in (False, True):
+        model = IsaModel(n=n)
+        acc = nrng.integers(-5000, 5000, (nb * m_rows, n))
+        model.acc[:nb * m_rows] = acc
+        model.quant[:nb] = isa.quant_word(1 << 23, 4)
+        act = dict(func=isa.FUNC_RELU, rq=rq, bias=False)
+        host = model.run([isa.activate(nb, m_rows, 0, dst=isa.DST_HOST, **act), isa.signal(1)])
+        model.reset()
+        base = 0x30000010 + 4
+        model.run([isa.set_obase(base), isa.activate(nb, m_rows, 0, dst=isa.DST_DDR, **act),
+                   isa.activate(1, 1, 0, dst=isa.DST_DDR, **act), isa.signal(2)])
+        size = 4 * len(host)
+        got = [int.from_bytes(model.ddr.read(base + 4 * i, 4), "little") for i in range(len(host))]
+        ok &= model.err is None and got == host
+        ok &= model.obase == base + size + (n if rq else 4 * n)
+        ok &= model.ddr.read(base + size, 4) == host[0].to_bytes(4, "little")   # the next one, right after
+    check("ACTIVATE dst=DDR: the host's words at OBASE, OBASE advancing (int32 and requantized)", ok)
+
+
+def test_chain_through_ddr():
+    """MNIST's hidden layer requantized into DDR3 and read back with RD_DDR_UB:
+    the same scores as chaining through the UB"""
+    from tpu.isa_compile import compile_mlp
+    x, layers, _ = mnist_layers()
+    m = 8
+    cm = compile_mlp(layers, m)
+    p0, p1 = cm.plan
+    model = IsaModel(n=8)
+    model.run(*cm.load_program())
+    ok = True
+    for i in range(0, 16, m):
+        xb = x[i:i + m]
+        model.reset()
+        want = model.run(*cm.infer_program(xb))
+        ub = ub_entries(xb, 8)
+        hidden = 0x30000000
+        prog = [isa.wr_ub(p0["ub_in"], len(ub)), isa.set_wbase(0), isa.set_obase(hidden),
+                isa.wait(isa.MM, isa.LD),
+                isa.matmul(m, p0["kt"], p0["nb"], p0["acc"], p0["ub_in"]), isa.wait(isa.ACT, isa.MM),
+                isa.activate(p0["nb"], m, p0["acc"], func=isa.FUNC_RELU, rq=True, dst=isa.DST_DDR,
+                             param_idx=p0["par"]),
+                isa.wait(isa.LD, isa.ACT),
+                isa.rd_ddr_ub(p1["ub_in"], p0["nb"] * m, hidden), isa.wait(isa.MM, isa.LD),
+                isa.matmul(m, p1["kt"], p1["nb"], p1["acc"], p1["ub_in"]), isa.wait(isa.ACT, isa.MM),
+                isa.activate(p1["nb"], m, p1["acc"], func=isa.FUNC_RELU, dst=isa.DST_HOST, param_idx=p1["par"]),
+                isa.signal(3)]
+        model.reset()
+        got = model.run(prog, isa.pack_int8(ub))
+        ok &= model.err is None and got == want
+        from tpu.isa_waits import check_waits
+        ok &= check_waits(prog, 8) == []
+        bare = [w for w in prog if isa.decode(w)[0] != "WAIT"]
+        ok &= any(i == bare.index(isa.rd_ddr_ub(p1["ub_in"], p0["nb"] * m, hidden)) and e == isa.LD
+                  for i, e, _ in check_waits(bare, 8))
+    check("MNIST's hidden layer through DDR3 (ACTIVATE dst=DDR, RD_DDR_UB) == through the UB; "
+          "isa_waits sees the DDR3 hazard", ok)
 
 
 def test_mnist_layer1():
@@ -239,7 +331,7 @@ def run_mnist(layers, x, m, ddr_base=None):
     """(argmax per image, every out word) for the compiled MNIST program"""
     from tpu.isa_compile import compile_mlp
     cm = compile_mlp(layers, m, ddr_base=ddr_base)
-    model = IsaModel(n=8, ddr_weights=ddr_base is not None)
+    model = IsaModel(n=8, ddr=ddr_base is not None)
     if ddr_base is not None:
         model.ddr.write(*cm.ddr_image())
     model.run(*cm.load_program())
@@ -306,7 +398,7 @@ def test_waits():
     prog, _ = cm.infer_program(x[:8])
     ok = check_waits(load, 8) == [] and check_waits(prog, 8) == []
     ok &= isa.wait(isa.WT, isa.LD) not in load
-    wt = [a for w in prog if isa.decode(w)[0] == "MATMUL" for a in accesses(w, 0x30000000 // 64, 8)[0]
+    wt = [a for w in prog if isa.decode(w)[0] == "MATMUL" for a in accesses(w, (0x30000000 // 64, 0), 8)[0]
           if a[0] == isa.WT]
     ok &= all(r[0][0] == "DDR" for _, r, _ in wt)
     check("isa_waits: DDR3-weight MNIST program hazard-free; WT reads DDR3, not WMEM", ok)
@@ -321,9 +413,12 @@ if __name__ == "__main__":
     test_ddr_errors()
     test_ddr_weights(rng)
     test_ddr_mixed_sources()
+    test_rd_ddr_ub()
+    test_activate_ddr()
     test_mnist_layer1()
     test_requant_vs_host_round()
     test_mnist_full()
+    test_chain_through_ddr()
     test_waits()
     print(f"{'ALL ISA MODEL TESTS PASSED' if not failures else f'{len(failures)} FAILED'}")
     sys.exit(1 if failures else 0)

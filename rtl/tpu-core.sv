@@ -6,7 +6,8 @@ import tpu_pkg::*;
 // TPUv1 datapath: unified buffer -> systolic data setup -> mmu -> accumulators ->
 // bias -> activation, with weights from WMEM or DDR3 through the weight FIFO.
 // board-neutral; a bridge in front of it speaks the host bus, and its DDR3 port is
-// an Avalon-MM burst-read master
+// an Avalon-MM master: burst reads for WT (MATMUL wsrc=1) and LD (RD_DDR_UB),
+// single-beat writes for ACT (ACTIVATE dst=DDR)
 module tpu_core #(
     parameter int ARRAY_SIZE             = 8,
     parameter int WMEM_ROWS              = 8192,
@@ -49,10 +50,13 @@ module tpu_core #(
     output logic [31:0] performance_matmul_weight_stalls_out,
     output logic [31:0] performance_matmul_sync_stalls_out,
 
-    // DDR3: weights for MATMUL wsrc=1, 128-bit burst reads, byte addresses
+    // DDR3: 128-bit beats, byte addresses
     output logic [31:0]  memory_address_out,
     output logic         memory_read_out,
+    output logic         memory_write_out,
     output logic [7:0]   memory_burstcount_out,
+    output logic [127:0] memory_writedata_out,
+    output logic [15:0]  memory_byteenable_out,
     input  logic         memory_waitrequest_in,
     input  logic [127:0] memory_readdata_in,
     input  logic         memory_readdatavalid_in
@@ -241,17 +245,64 @@ module tpu_core #(
         .row_in(biased_row), .relu_enable_in(relu_enable), .row_out(activation_row),
         .multiply_enable_in(multiply_enable), .multiply_row_in(multiply_row), .quantization_row_in(quantization_read_data), .quantized_row_out(quantized_row));
 
-    // -- weights from DDR3 ------------------------------------------------------------
-    logic                    DDR_request, DDR_row_valid, DDR_row_pop;
-    logic [31:0]             DDR_request_address, DDR_request_beats;
-    logic [ARRAY_SIZE*8-1:0] DDR_row_data;
+    // -- DDR3: WT's and LD's readers, ACT's writer, one master ------------------------
+    logic                    weight_request_ready, weight_request, weight_row_valid, weight_row_pop;
+    logic [31:0]             weight_request_address, weight_request_beats, weight_request_rows;
+    logic [ARRAY_SIZE*8-1:0] weight_row_data;
+    logic                    load_request_ready, load_request, load_row_valid, load_row_pop;
+    logic [31:0]             load_request_address, load_request_beats, load_request_rows;
+    logic [3:0]              load_request_skip;
+    logic [ARRAY_SIZE*8-1:0] load_DDR_row;
+    logic                    DDR_word_valid, DDR_writer_full, DDR_writer_idle;
+    logic [31:0]             DDR_word_address;
 
-    weight_reader #(.ARRAY_SIZE(ARRAY_SIZE)) u_weight_reader (
+    logic [31:0]  weight_memory_address, load_memory_address, activate_memory_address;
+    logic         weight_memory_read, load_memory_read, activate_memory_write;
+    logic [7:0]   weight_memory_burstcount, load_memory_burstcount;
+    logic         weight_memory_waitrequest, load_memory_waitrequest, activate_memory_waitrequest;
+    logic         weight_memory_readdatavalid, load_memory_readdatavalid;
+    logic [127:0] activate_memory_writedata;
+    logic [15:0]  activate_memory_byteenable;
+
+    ddr_reader #(.ARRAY_SIZE(ARRAY_SIZE)) u_weight_reader (
         .clk(clk), .reset(reset), .bus_reset(bus_reset),
-        .request_valid_in(DDR_request), .request_address_in(DDR_request_address), .request_beats_in(DDR_request_beats),
-        .row_valid_out(DDR_row_valid), .row_data_out(DDR_row_data), .row_pop_in(DDR_row_pop),
-        .memory_address_out(memory_address_out), .memory_read_out(memory_read_out), .memory_burstcount_out(memory_burstcount_out),
-        .memory_waitrequest_in(memory_waitrequest_in), .memory_readdata_in(memory_readdata_in), .memory_readdatavalid_in(memory_readdatavalid_in));
+        .request_ready_out(weight_request_ready), .request_valid_in(weight_request), .request_address_in(weight_request_address),
+        .request_beats_in(weight_request_beats), .request_skip_in(4'd0), .request_rows_in(weight_request_rows),
+        .row_valid_out(weight_row_valid), .row_data_out(weight_row_data), .row_pop_in(weight_row_pop),
+        .memory_address_out(weight_memory_address), .memory_read_out(weight_memory_read), .memory_burstcount_out(weight_memory_burstcount),
+        .memory_waitrequest_in(weight_memory_waitrequest), .memory_readdata_in(memory_readdata_in), .memory_readdatavalid_in(weight_memory_readdatavalid));
+
+    // RD_DDR_UB moves a row a cycle into the UB: a small FIFO is plenty
+    ddr_reader #(.ARRAY_SIZE(ARRAY_SIZE), .FIFO_DEPTH(64)) u_load_reader (
+        .clk(clk), .reset(reset), .bus_reset(bus_reset),
+        .request_ready_out(load_request_ready), .request_valid_in(load_request), .request_address_in(load_request_address),
+        .request_beats_in(load_request_beats), .request_skip_in(load_request_skip), .request_rows_in(load_request_rows),
+        .row_valid_out(load_row_valid), .row_data_out(load_DDR_row), .row_pop_in(load_row_pop),
+        .memory_address_out(load_memory_address), .memory_read_out(load_memory_read), .memory_burstcount_out(load_memory_burstcount),
+        .memory_waitrequest_in(load_memory_waitrequest), .memory_readdata_in(memory_readdata_in), .memory_readdatavalid_in(load_memory_readdatavalid));
+
+    // writes in progress outlive CTRL.RESET, like reads: only the power-on reset clears them
+    ddr_writer u_writer (
+        .clk(clk), .reset(bus_reset),
+        .word_valid_in(DDR_word_valid), .word_address_in(DDR_word_address[31:2]), .word_in(activate_output_word),
+        .full_out(DDR_writer_full), .idle_out(DDR_writer_idle),
+        .memory_address_out(activate_memory_address), .memory_write_out(activate_memory_write),
+        .memory_writedata_out(activate_memory_writedata), .memory_byteenable_out(activate_memory_byteenable),
+        .memory_waitrequest_in(activate_memory_waitrequest));
+
+    memory_arbiter u_memory_arbiter (
+        .clk(clk), .reset(bus_reset),
+        .weight_address_in(weight_memory_address), .weight_read_in(weight_memory_read), .weight_burstcount_in(weight_memory_burstcount),
+        .weight_waitrequest_out(weight_memory_waitrequest), .weight_readdatavalid_out(weight_memory_readdatavalid),
+        .load_address_in(load_memory_address), .load_read_in(load_memory_read), .load_burstcount_in(load_memory_burstcount),
+        .load_waitrequest_out(load_memory_waitrequest), .load_readdatavalid_out(load_memory_readdatavalid),
+        .activate_address_in(activate_memory_address), .activate_write_in(activate_memory_write),
+        .activate_writedata_in(activate_memory_writedata), .activate_byteenable_in(activate_memory_byteenable),
+        .activate_waitrequest_out(activate_memory_waitrequest),
+        .memory_address_out(memory_address_out), .memory_read_out(memory_read_out), .memory_write_out(memory_write_out),
+        .memory_burstcount_out(memory_burstcount_out), .memory_writedata_out(memory_writedata_out),
+        .memory_byteenable_out(memory_byteenable_out), .memory_waitrequest_in(memory_waitrequest_in),
+        .memory_readdatavalid_in(memory_readdatavalid_in));
 
     // -- engines -------------------------------------------------------------------
     logic [3:0] engine_idle;
@@ -262,6 +313,9 @@ module tpu_core #(
         .queue_valid_in(!queue_empty[ENGINE_LOAD]), .queue_entry_in(queue_head[ENGINE_LOAD]), .queue_pop_out(queue_pop[ENGINE_LOAD]),
         .completed_in(completed), .instruction_done_out(instruction_done[ENGINE_LOAD]),
         .data_valid_in(!data_empty), .UB_write_blocked_in(activate_UB_write_enable), .data_in(data_head), .data_pop_out(data_pop),
+        .DDR_request_ready_in(load_request_ready), .DDR_request_out(load_request), .DDR_request_address_out(load_request_address),
+        .DDR_request_beats_out(load_request_beats), .DDR_request_skip_out(load_request_skip), .DDR_request_rows_out(load_request_rows),
+        .DDR_row_valid_in(load_row_valid), .DDR_row_data_in(load_DDR_row), .DDR_row_pop_out(load_row_pop),
         .WMEM_write_enable_out(WMEM_write_enable), .WMEM_write_address_out(WMEM_write_address), .UB_write_enable_out(load_UB_write_enable), .UB_write_address_out(load_UB_write_address),
         .row_write_data_out(load_row_data), .bias_write_enable_out(bias_write_enable), .quantization_write_enable_out(quantization_write_enable),
         .parameter_write_address_out(parameter_write_address), .parameter_write_data_out(parameter_write_data), .idle_out(engine_idle[ENGINE_LOAD]));
@@ -271,8 +325,9 @@ module tpu_core #(
         .queue_valid_in(!queue_empty[ENGINE_WEIGHT]), .queue_entry_in(queue_head[ENGINE_WEIGHT]), .queue_pop_out(queue_pop[ENGINE_WEIGHT]),
         .completed_in(completed), .instruction_done_out(instruction_done[ENGINE_WEIGHT]),
         .WMEM_read_address_out(WMEM_read_address), .WMEM_read_data_in(WMEM_read_data),
-        .DDR_request_out(DDR_request), .DDR_request_address_out(DDR_request_address), .DDR_request_beats_out(DDR_request_beats),
-        .DDR_row_valid_in(DDR_row_valid), .DDR_row_data_in(DDR_row_data), .DDR_row_pop_out(DDR_row_pop),
+        .DDR_request_ready_in(weight_request_ready), .DDR_request_out(weight_request), .DDR_request_address_out(weight_request_address),
+        .DDR_request_beats_out(weight_request_beats), .DDR_request_rows_out(weight_request_rows),
+        .DDR_row_valid_in(weight_row_valid), .DDR_row_data_in(weight_row_data), .DDR_row_pop_out(weight_row_pop),
         .fill_ready_in(fill_ready), .fill_slot_next_in(fill_slot_next), .fill_advance_out(fill_advance),
         .fill_write_enable_out(fill_write_enable), .fill_slot_out(fill_slot), .fill_row_out(fill_row), .fill_data_out(fill_data),
         .idle_out(engine_idle[ENGINE_WEIGHT]));
@@ -297,7 +352,8 @@ module tpu_core #(
         .multiply_enable_out(multiply_enable), .multiply_row_out(multiply_row), .quantized_row_in(quantized_row),
         .UB_write_enable_out(activate_UB_write_enable), .UB_write_address_out(activate_UB_write_address), .UB_write_data_out(activate_UB_write_data),
         .UB_read_enable_out(activate_UB_read_enable), .UB_read_address_out(activate_UB_read_address), .UB_read_blocked_in(matmul_UB_read_enable), .UB_read_data_in(UB_read_data),
-        .output_push_out(output_push), .output_word_out(activate_output_word), .output_full_in(output_full), .idle_out(engine_idle[ENGINE_ACTIVATE]));
+        .output_push_out(output_push), .output_word_out(activate_output_word), .output_full_in(output_full),
+        .DDR_word_valid_out(DDR_word_valid), .DDR_word_address_out(DDR_word_address), .DDR_full_in(DDR_writer_full), .DDR_idle_in(DDR_writer_idle), .idle_out(engine_idle[ENGINE_ACTIVATE]));
 
     assign idle_out = instruction_empty && engine_idle == 4'hF && !fence_pending;
 

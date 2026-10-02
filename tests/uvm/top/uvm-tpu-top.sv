@@ -22,7 +22,10 @@ module uvm_tpu_top #(parameter int ARRAY_SIZE = 8);
         // no DDR3 model in this environment: tb_isa covers MATMUL wsrc=1
         .avm_address(),
         .avm_read(),
+        .avm_write(),
         .avm_burstcount(),
+        .avm_writedata(),
+        .avm_byteenable(),
         .avm_waitrequest(1'b0),
         .avm_readdata('0),
         .avm_readdatavalid(1'b0)

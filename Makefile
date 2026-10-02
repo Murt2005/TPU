@@ -21,7 +21,7 @@ CORE_RTL := $(COMMON_DIR)/tpu-pkg.sv $(COMMON_DIR)/fifo.sv $(COMMON_DIR)/block-f
             $(DATAPATH_DIR)/weight-fifo.sv $(DATAPATH_DIR)/unified-buffer.sv $(DATAPATH_DIR)/accumulator.sv \
             $(DATAPATH_DIR)/bias.sv $(DATAPATH_DIR)/activation.sv \
             $(CONTROL_DIR)/dispatch.sv $(CONTROL_DIR)/load-engine.sv $(CONTROL_DIR)/weight-engine.sv \
-            $(CONTROL_DIR)/matmul-engine.sv $(CONTROL_DIR)/activate-engine.sv $(CONTROL_DIR)/weight-reader.sv \
+            $(CONTROL_DIR)/matmul-engine.sv $(CONTROL_DIR)/activate-engine.sv $(CONTROL_DIR)/ddr-reader.sv $(CONTROL_DIR)/ddr-writer.sv $(CONTROL_DIR)/memory-arbiter.sv \
             $(RTL_DIR)/tpu-core.sv $(PERIPH_DIR)/host-bridge.sv $(HPS_DIR)/tpu-top.sv
 
 all: test

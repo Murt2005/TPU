@@ -13,7 +13,9 @@ set_global_assignment -name NUM_PARALLEL_PROCESSORS 1
 set_global_assignment -name SYSTEMVERILOG_FILE ../../../../rtl/common/tpu-pkg.sv
 set_global_assignment -name SYSTEMVERILOG_FILE ../../../../rtl/common/fifo.sv
 set_global_assignment -name SYSTEMVERILOG_FILE ../../../../rtl/common/block-fifo.sv
-set_global_assignment -name SYSTEMVERILOG_FILE ../../../../rtl/control/weight-reader.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../../../rtl/control/ddr-reader.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../../../rtl/control/ddr-writer.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../../../rtl/control/memory-arbiter.sv
 set_global_assignment -name SYSTEMVERILOG_FILE ../../../../rtl/datapath/systolic-data-setup.sv
 set_global_assignment -name SYSTEMVERILOG_FILE ../../../../rtl/datapath/pe.sv
 set_global_assignment -name SYSTEMVERILOG_FILE ../../../../rtl/datapath/mmu.sv

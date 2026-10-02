@@ -37,6 +37,7 @@ module dispatch #(
 
     logic [31:0] instruction_sequence;
     logic [31:0] weight_base;          // shadow of WT's WBASE, for weight range checks
+    logic [31:0] output_base;          // shadow of ACT's OBASE, for ACTIVATE dst=DDR range checks
     logic        fence_pending;
     logic [15:0] fence_tag;
 
@@ -71,6 +72,7 @@ module dispatch #(
     logic [63:0] field_WMEM_row, field_UB_address, field_parameter_index, field_ACC_address, field_matmul_UB_address, field_activate_ACC_address, field_activate_UB_address, field_activate_parameter_index;
     logic [1:0]  field_function, field_destination;
     logic        field_requantize, field_bias, field_weight_source;
+    logic [63:0] field_DDR_UB_address, field_DDR_UB_count, field_DDR_address;
     always_comb begin
         field_row_count                = 64'(instruction_in[15:0]) + 1;
         field_UB_count                 = 64'(instruction_in[11:0]) + 1;
@@ -93,16 +95,21 @@ module dispatch #(
         field_activate_ACC_address     = 64'(instruction_in[33:24]);
         field_activate_UB_address      = 64'(instruction_in[23:10]);
         field_activate_parameter_index = 64'(instruction_in[9:2]);
+        field_DDR_UB_address           = 64'(instruction_in[57:44]);
+        field_DDR_UB_count             = 64'(instruction_in[43:32]) + 1;
+        field_DDR_address              = 64'(instruction_in[31:0]);
     end
 
     // products at their real widths: 64-bit operands made Quartus build 64x64 DSP multipliers
     logic [23:0] product_block_count_k_tiles;
     logic [20:0] product_block_count_rows, product_activate_block_count_rows;
+    logic [63:0] activate_bytes;       // what an ACTIVATE sends: N int32 per row, or N int8 with rq
     logic [21:0] product_k_tiles_rows;
     assign product_block_count_k_tiles       = 24'(field_block_count) * 24'(field_k_tiles);
     assign product_block_count_rows          = 21'(field_block_count) * 21'(field_matmul_rows);
     assign product_k_tiles_rows              = 22'(field_k_tiles) * 22'(field_matmul_rows);
     assign product_activate_block_count_rows = 21'(field_activate_block_count[10:0]) * 21'(field_activate_rows);
+    assign activate_bytes = 64'(product_activate_block_count_rows) * (field_requantize ? 64'(ARRAY_SIZE) : 64'(4 * ARRAY_SIZE));
 
     logic [7:0] decode_error;
     always_comb begin
@@ -113,9 +120,10 @@ module dispatch #(
             decode_error = ERROR_RESERVED;
         else if (opcode == OPCODE_ACTIVATE && (field_function[1] || field_destination == 2'd3))
             decode_error = ERROR_RESERVED;
-        else if (opcode == OPCODE_RD_DDR_UB || opcode == OPCODE_SET_OBASE
-                 || (opcode == OPCODE_ACTIVATE && field_destination == DESTINATION_DDR))
-            decode_error = ERROR_UNIMPLEMENTED;   // the rest of DDR3 (phase 5)
+        // DDR3 addresses' alignment bits are reserved: an entry for RD_DDR_UB, a word for OBASE
+        else if ((opcode == OPCODE_RD_DDR_UB && field_DDR_address % 64'(ARRAY_SIZE) != 0)
+                 || (opcode == OPCODE_SET_OBASE && instruction_in[1:0] != 2'd0))
+            decode_error = ERROR_RESERVED;
         else if (opcode == OPCODE_ACTIVATE && field_destination == DESTINATION_UB && !field_requantize)
             decode_error = ERROR_COMBINATION;
         else case (opcode)
@@ -131,8 +139,11 @@ module dispatch #(
                              decode_error = ERROR_RANGE;
             OPCODE_ACTIVATE: if (field_activate_ACC_address + 64'(product_activate_block_count_rows) > 64'(ACC_DEPTH)
                              || ((field_bias || field_requantize) && field_activate_parameter_index + field_activate_block_count > 64'(PARAMETER_DEPTH))
-                             || (field_destination == DESTINATION_UB && field_activate_UB_address + 64'(product_activate_block_count_rows) > 64'(UB_DEPTH)))
+                             || (field_destination == DESTINATION_UB && field_activate_UB_address + 64'(product_activate_block_count_rows) > 64'(UB_DEPTH))
+                             || (field_destination == DESTINATION_DDR && 64'(output_base) + activate_bytes > 64'(DDR_BYTES)))
                              decode_error = ERROR_RANGE;
+            OPCODE_RD_DDR_UB: if (field_DDR_UB_address + field_DDR_UB_count > 64'(UB_DEPTH)
+                              || field_DDR_address + field_DDR_UB_count * ARRAY_SIZE > 64'(DDR_BYTES)) decode_error = ERROR_RANGE;
             default: ;
         endcase
     end
@@ -141,10 +152,11 @@ module dispatch #(
     logic [3:0] target_queues;
     always_comb begin
         case (opcode)
-            OPCODE_WR_WMEM, OPCODE_WR_UB, OPCODE_WR_BIAS, OPCODE_WR_QUANT: target_queues = 4'b0001;
+            OPCODE_WR_WMEM, OPCODE_WR_UB, OPCODE_WR_BIAS, OPCODE_WR_QUANT,
+            OPCODE_RD_DDR_UB:                                              target_queues = 4'b0001;
             OPCODE_SET_WBASE:                                              target_queues = 4'b0010;
             OPCODE_MATMUL:                                                 target_queues = 4'b0110;
-            OPCODE_ACTIVATE, OPCODE_RD_UB:                                 target_queues = 4'b1000;
+            OPCODE_ACTIVATE, OPCODE_RD_UB, OPCODE_SET_OBASE:               target_queues = 4'b1000;
             OPCODE_WAIT:                                                   target_queues = 4'b0001 << instruction_in[57:56];
             default:                                                       target_queues = 4'b0000;   // NOP, SIGNAL
         endcase
@@ -166,6 +178,7 @@ module dispatch #(
         if (reset) begin
             instruction_sequence <= '0;
             weight_base          <= '0;
+            output_base          <= '0;
             fence_pending        <= 1'b0;
             fence_tag            <= '0;
             dispatched_out       <= '0;
@@ -193,6 +206,10 @@ module dispatch #(
                     weight_base <= instruction_in[31:0];
                 else if (opcode == OPCODE_MATMUL)
                     weight_base <= weight_base + 32'(product_block_count_k_tiles);
+                if (opcode == OPCODE_SET_OBASE)
+                    output_base <= instruction_in[31:0];
+                else if (opcode == OPCODE_ACTIVATE && field_destination == DESTINATION_DDR)
+                    output_base <= output_base + 32'(activate_bytes);
                 if (opcode == OPCODE_SIGNAL) begin
                     fence_pending <= 1'b1;
                     fence_tag     <= instruction_in[15:0];

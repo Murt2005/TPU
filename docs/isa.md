@@ -15,7 +15,7 @@ is in [`architecture.md`](architecture.md).
 | Top levels | `boards/de1soc/top/tpu-top.sv` (bridge + core); in the board designs, `tpu-selftest.sv` and the GHRD component |
 | Reference model | `host/tpu/isa_model.py`: executes a program in order with the exact arithmetic; the RTL must match it word for word |
 | Design spec | the instruction-stream spec doc (claude.ai artifact `FP1ach14aGXhH2N1aCLCox`). This page describes what is built |
-| Status | Spec phases 1–3 built: the serial core, then the requantizer and on-core layer chaining, then overlapped tiles. **Hardware-validated on the DE1-SoC** ([`de1soc.md`](de1soc.md)). Phase 5 (DDR3) begun: FPGA-to-SDRAM bandwidth measured on the board (800 MB/s); `MATMUL wsrc=1` (weights from DDR3) built and matching the model in Verilator sim |
+| Status | Spec phases 1–3 built: the serial core, then the requantizer and on-core layer chaining, then overlapped tiles. **Hardware-validated on the DE1-SoC** ([`de1soc.md`](de1soc.md)). Phase 5's DDR3 instructions built: `MATMUL wsrc=1` (hardware-validated), `RD_DDR_UB`, `SET_OBASE`, `ACTIVATE dst=DDR`; FPGA-to-SDRAM bandwidth measured on the board (800 MB/s) |
 
 ## 1. Shape
 
@@ -38,10 +38,10 @@ depths are parameters of `tpu_core` (`WMEM_ROWS`, `UB_DEPTH`, `ACC_DEPTH`,
 
 | Engine | Executes | Reads | Writes |
 |---|---|---|---|
-| **LD** | `WR_WMEM`, `WR_UB`, `WR_BIAS`, `WR_QUANT` | data FIFO | WMEM, UB, bias table, quant table |
-| **WT** | `SET_WBASE`, the weight half of `MATMUL` | WMEM | the 2-slot tile buffer |
+| **LD** | `WR_WMEM`, `WR_UB`, `WR_BIAS`, `WR_QUANT`, `RD_DDR_UB` | data FIFO, DDR3 | WMEM, UB, bias table, quant table |
+| **WT** | `SET_WBASE`, the weight half of `MATMUL` | WMEM or DDR3 | the 2-slot tile buffer |
 | **MM** | the compute half of `MATMUL` | tile buffer, UB | ACC (read-modify-write) |
-| **ACT** | `ACTIVATE`, `RD_UB` | ACC, bias and quant tables, UB | UB, out FIFO |
+| **ACT** | `ACTIVATE`, `RD_UB`, `SET_OBASE` | ACC, bias and quant tables, UB | UB, out FIFO, DDR3 |
 
 The dispatcher decodes in order and pushes each instruction to its engine's
 queue. A `MATMUL` goes to both WT and MM. Engines run independently and
@@ -64,9 +64,9 @@ bit outside an opcode's fields must be zero.
 | `0x02` | `WR_UB` | `ub_addr` 45:32, `n` 11:0 | LD |
 | `0x03` | `WR_BIAS` | `param_idx` 39:32, `n` 7:0 | LD |
 | `0x04` | `WR_QUANT` | `param_idx` 39:32, `n` 7:0 | LD |
-| `0x05` | `RD_DDR_UB` | `ub_addr` 57:44, `n` 43:32, `ddr_addr` 31:0 | *phase 5: `ERR_UNIMPL`* |
+| `0x05` | `RD_DDR_UB` | `ub_addr` 57:44, `n` 43:32, `ddr_addr` 31:0 | LD |
 | `0x06` | `SET_WBASE` | `wbase` 31:0 (a tile index) | WT |
-| `0x07` | `SET_OBASE` | `obase` 31:0 | *phase 5: `ERR_UNIMPL`* |
+| `0x07` | `SET_OBASE` | `obase` 31:0 | ACT |
 | `0x10` | `MATMUL` | `acc` 57, `wsrc` 56, `m` 55:48, `k_tiles` 47:36, `n_blocks` 35:26, `acc_addr` 25:16, `ub_addr` 15:2 | WT + MM |
 | `0x18` | `ACTIVATE` | `func` 57:56, `rq` 55, `dst` 54:53, `bias` 52, `n_blocks` 51:42, `m` 41:34, `acc_addr` 33:24, `ub_addr` 23:10, `param_idx` 9:2 | ACT |
 | `0x19` | `RD_UB` | `ub_addr` 45:32, `n` 11:0 | ACT |
@@ -93,7 +93,18 @@ ARM's caches, before the program that reads them starts.
 applies `func`: 0 = identity, 1 = ReLU, 2–3 reserved. With `rq = 1` it
 requantizes to int8 (§5). `dst = 0` writes one UB entry per row, which
 requires `rq = 1`. `dst = 1` sends to the host: `N` int32 words per row, or
-`N/4` packed int8 words with `rq`. `dst = 2` is DDR3 (phase 5).
+`N/4` packed int8 words with `rq`. `dst = 2` writes those same words to DDR3,
+little-endian and back to back from OBASE, which then advances past them.
+Such an `ACTIVATE` completes only once every word has been accepted by the
+DDR3 port, so a `WAIT` on ACT orders later reads of those bytes (`RD_DDR_UB`,
+`MATMUL wsrc=1`) behind the writes.
+
+**`SET_OBASE obase`** sets the DDR3 byte address for the next `ACTIVATE
+dst=DDR`; it must be 4-byte aligned. **`RD_DDR_UB ub_addr, n, ddr_addr`**
+copies `n` UB entries (`N` bytes each) from DDR3 at `ddr_addr`, which must
+be `N`-byte aligned. An int8 `ACTIVATE` to DDR3 writes rows in the UB's
+layout (block-major, which is K-chunk-major for the next layer), so
+`RD_DDR_UB` reads a layer's output straight back as the next layer's input.
 
 **`RD_UB`** sends `n` UB entries to the host, `N/4` words each.
 
@@ -127,10 +138,10 @@ since reset). `CTRL.RESET` clears it.
 | Code | Name | Raised for |
 |---|---|---|
 | 1 | `OPCODE` | unknown opcode |
-| 2 | `RESERVED` | a set bit outside the opcode's fields; `ACTIVATE` `func` 2–3 or `dst` 3 |
-| 5 | `UNIMPL` | `RD_DDR_UB`, `SET_OBASE`, `ACTIVATE dst=DDR` |
+| 2 | `RESERVED` | a set bit outside the opcode's fields; `ACTIVATE` `func` 2–3 or `dst` 3; an `RD_DDR_UB` address not a multiple of `N`, or an `OBASE` not a multiple of 4 |
+| 5 | `UNIMPL` | nothing in the current core (the DDR3 instructions in builds without them) |
 | 4 | `COMBO` | `ACTIVATE dst=UB` with `rq=0` (int32 can't go into an int8 UB entry) |
-| 3 | `RANGE` | any memory range past the end: WMEM rows, UB entries, params, ACC rows, `(WBASE + n_blocks·k_tiles)·N` past WMEM, or with `wsrc = 1`, `(WBASE + n_blocks·k_tiles)·N·N` past the DDR3 size |
+| 3 | `RANGE` | any memory range past the end: WMEM rows, UB entries, params, ACC rows, `(WBASE + n_blocks·k_tiles)·N` past WMEM, or with `wsrc = 1`, `(WBASE + n_blocks·k_tiles)·N·N` past the DDR3 size, `RD_DDR_UB` past the UB or DDR3, or `ACTIVATE dst=DDR` past DDR3 from OBASE |
 
 ## 3. Data layouts
 

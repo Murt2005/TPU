@@ -184,7 +184,8 @@ package tpu_top_pkg;
             coverage.add("opcode RD_UB");
             coverage.add("opcode WAIT");
             coverage.add("opcode SIGNAL");
-            for (int code = 1; code <= 5; code++) coverage.add($sformatf("error code %0d", code));
+            // 1-4; 5 (UNIMPL) has nothing left to raise it since the DDR3 instructions
+            for (int code = 1; code <= 4; code++) coverage.add($sformatf("error code %0d", code));
             coverage.add("write stalled by waitrequest");
             coverage.add("data pushed between instruction halves");
             coverage.add("OUT read while the core runs");

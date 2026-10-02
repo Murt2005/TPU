@@ -1,11 +1,14 @@
 // tpu_top as a register-level transport for host/tpu/isa_device.py.
 // stdin carries 'W' addr u32 (write, no reply), 'R' addr (read, 4-byte reply),
-// 'D' addr u32 len u32 bytes (DDR3 write, no reply), 'M' mode (DDR3 timing, no
-// reply) and 'Q' (quit); on start it writes its build parameters as 5 u32 words.
+// 'D' addr u32 len u32 bytes (DDR3 write, no reply), 'G' addr u32 len u32 (DDR3
+// read, len bytes back), 'M' mode (DDR3 timing, no reply) and 'Q' (quit); on start
+// it writes its build parameters as 5 u32 words.
 // the DDR3 model behind tpu_top's master is the FPGA-to-SDRAM port as the core
-// sees it: at most 14 bursts pending, no read backpressure. mode 1 (the default)
-// gives random waitrequest, latency and gaps between beats; mode 0 answers every
-// command at once with a fixed latency and back-to-back beats
+// sees it: one in-order port, at most 14 bursts pending, no read backpressure,
+// single-beat writes with byteenables. a read's data is what DDR3 held when the
+// read was accepted. mode 1 (the default) gives random waitrequest, latency and
+// gaps between beats; mode 0 answers every command at once, 10 cycles to the
+// first beat, beats back to back; mode k >= 2 is the same with k cycles
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -21,10 +24,11 @@ static std::unique_ptr<Vtpu_top> dut;
 
 namespace ddr {
     std::unordered_map<uint32_t, std::vector<uint8_t>> pages;   // 4 KB pages, zero until written
-    struct Burst { uint32_t address; int beats; uint64_t ready; };
+    struct Burst { std::vector<uint8_t> data; int beats; uint64_t ready; };
     std::deque<Burst> pending;
     int sent = 0;
     bool random_timing = true;
+    int latency = 10;
     std::mt19937 rng(1);
     uint64_t now = 0;
     bool held = false;
@@ -53,26 +57,41 @@ namespace ddr {
         bool beat = !pending.empty() && pending.front().ready <= now && !(random_timing && rng() % 5 == 0);
         dut->avm_readdatavalid = beat;
         if (beat) {
-            uint32_t a = pending.front().address + 16 * sent;
+            const uint8_t* d = pending.front().data.data() + 16 * sent;
             for (int lane = 0; lane < 4; lane++) {
                 uint32_t w = 0;
-                for (int b = 3; b >= 0; b--) w = w << 8 | byte(a + 4 * lane + b);
+                for (int b = 3; b >= 0; b--) w = w << 8 | d[4 * lane + b];
                 dut->avm_readdata[lane] = w;
             }
         }
     }
     // the master's command, sampled before the edge; then the beat retires
     void sample() {
-        if (dut->avm_read && held && (dut->avm_address != held_address || dut->avm_burstcount != held_count))
+        bool command = dut->avm_read || dut->avm_write;
+        if (dut->avm_read && dut->avm_write) fail("read and write together");
+        if (held && !command) fail("command dropped under waitrequest");
+        if (command && held && (dut->avm_address != held_address || dut->avm_burstcount != held_count))
             fail("command changed under waitrequest");
-        held = dut->avm_read && dut->avm_waitrequest;
+        held = command && dut->avm_waitrequest;
         held_address = dut->avm_address;
         held_count = dut->avm_burstcount;
-        if (dut->avm_read && !dut->avm_waitrequest) {
-            if (dut->avm_address % 16 || dut->avm_burstcount == 0 || dut->avm_burstcount > 128)
+        if (command && !dut->avm_waitrequest) {
+            if (dut->avm_address % 16 || dut->avm_burstcount == 0 || dut->avm_burstcount > 128
+                || (dut->avm_write && dut->avm_burstcount != 1))
                 fail("misaligned address or bad burstcount");
-            pending.push_back({dut->avm_address, dut->avm_burstcount,
-                               now + (random_timing ? 4 + rng() % 30 : 10)});
+            if (dut->avm_read) {
+                Burst b{std::vector<uint8_t>(16 * dut->avm_burstcount), dut->avm_burstcount,
+                        now + (random_timing ? 4 + rng() % 30 : latency)};
+                for (size_t i = 0; i < b.data.size(); i++) b.data[i] = byte(dut->avm_address + i);
+                pending.push_back(std::move(b));
+            } else {
+                std::vector<uint8_t> one(1);
+                for (int i = 0; i < 16; i++)
+                    if (dut->avm_byteenable >> i & 1) {
+                        one[0] = dut->avm_writedata[i / 4] >> (8 * (i % 4));
+                        write(dut->avm_address + i, one);
+                    }
+            }
         }
         if (dut->avm_readdatavalid && ++sent == pending.front().beats) {
             pending.pop_front();
@@ -105,6 +124,7 @@ int main(int argc, char** argv) {
     dut->avs_write = 0;
     dut->avm_waitrequest = 1;
     dut->avm_readdatavalid = 0;
+    dut->avm_readdatavalid = 0;
     for (int i = 0; i < 4; i++) tick();
     dut->reset_n = 1;
     for (int i = 0; i < 300; i++) tick();   // past the 256-cycle power-on reset
@@ -124,10 +144,20 @@ int main(int argc, char** argv) {
             ddr::write(address, data);
             continue;
         }
+        if (cmd == 'G') {
+            uint32_t address, length;
+            if (!get(&address, 4) || !get(&length, 4)) break;
+            std::vector<uint8_t> data(length);
+            for (uint32_t i = 0; i < length; i++) data[i] = ddr::byte(address + i);
+            fwrite(data.data(), 1, length, stdout);
+            fflush(stdout);
+            continue;
+        }
         if (cmd == 'M') {
             uint8_t mode;
             if (!get(&mode, 1)) break;
-            ddr::random_timing = mode != 0;
+            ddr::random_timing = mode == 1;
+            ddr::latency = mode >= 2 ? mode : 10;
             continue;
         }
         uint8_t addr;

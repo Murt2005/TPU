@@ -1,12 +1,13 @@
 /* register server for tpu_top on the HPS lightweight bridge. speaks the
  * tb_isa protocol on stdin/stdout (header of 5 u32, then 'W' reg u32,
- * 'R' reg -> u32, 'D' addr u32 len u32 bytes, 'M' mode, 'Q'), so
+ * 'R' reg -> u32, 'D' addr u32 len u32 bytes, 'G' addr u32 len u32 -> bytes,
+ * 'M' mode, 'Q'), so
  * host/tpu/isa_device.py drives the board exactly as it drives Verilator. when
  * stdin is a tty (the serial console) it goes raw for the session. runs as root:
  * /dev/mem.
- * 'D' writes DDR3 for MATMUL wsrc=1, uncached (O_SYNC), only inside the window
- * Linux was booted without (mem=768M) and below the console framebuffer at
- * 0x3F000000; anything else ends the session. 'M' (the simulator's DDR3 timing)
+ * 'D' writes DDR3 and 'G' reads it back, uncached (O_SYNC), only inside the
+ * window Linux was booted without (mem=768M) and below the console framebuffer
+ * at 0x3F000000; anything else ends the session. 'M' (the simulator's DDR3 timing)
  * is read and ignored */
 #include <fcntl.h>
 #include <stdint.h>
@@ -71,7 +72,7 @@ int main(int argc, char **argv) {
             if (!get(&reg, 1)) break;
             continue;
         }
-        if (cmd == 'D') {
+        if (cmd == 'D' || cmd == 'G') {
             uint32_t address, length;
             if (!get(&address, 4) || !get(&length, 4)) break;
             if (address < DDR_LOW || address > DDR_HIGH || length > DDR_HIGH - address) break;
@@ -81,6 +82,16 @@ int main(int argc, char **argv) {
                 ddr = p;
             }
             uint8_t chunk[4096];
+            if (cmd == 'G') {
+                while (length) {
+                    uint32_t k = length < sizeof chunk ? length : sizeof chunk;
+                    for (uint32_t i = 0; i < k; i++) chunk[i] = ddr[address - DDR_LOW + i];
+                    put(chunk, k);
+                    address += k;
+                    length -= k;
+                }
+                continue;
+            }
             while (length) {
                 uint32_t k = length < sizeof chunk ? length : sizeof chunk;
                 if (!get(chunk, k)) goto done;

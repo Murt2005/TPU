@@ -5,6 +5,7 @@ import numpy as np
 from tpu import isa
 
 WTILES, UB, ACC, PAR = 16, 64, 32, 8
+DDR_REGION = 4096          # bytes of DDR3 the DDR3 ops share, so they collide often
 
 
 def init_program(n, rng):
@@ -22,12 +23,16 @@ def init_program(n, rng):
     return prog, data
 
 
-def random_program(n, rng, length=30, max_data=700):
-    """(program without WAITs, data). every op is legal and in range"""
+def random_program(n, rng, length=30, max_data=700, ddr_base=None):
+    """(program without WAITs, data). every op is legal and in range. with
+    ddr_base, the program also uses DDR3_REGION bytes of DDR3 there: RD_DDR_UB,
+    ACTIVATE dst=DDR, and MATMULs from DDR3 (the host fills the region first)"""
     prog, data = [], []
+    kinds = ["wmem", "ub", "bias", "quant", "matmul", "matmul", "matmul", "act_host", "act_ub", "rd_ub"]
+    if ddr_base is not None:
+        kinds += ["rd_ddr", "act_ddr", "matmul_ddr", "matmul_ddr"]
     for _ in range(length):
-        kind = rng.choice(["wmem", "ub", "bias", "quant", "matmul", "matmul", "matmul",
-                           "act_host", "act_ub", "rd_ub"])
+        kind = rng.choice(kinds)
         if kind == "wmem":
             t = int(rng.integers(0, WTILES))
             cnt = int(rng.integers(1, min(3, WTILES - t) + 1))
@@ -76,6 +81,28 @@ def random_program(n, rng, length=30, max_data=700):
                                      bias=bool(rng.integers(0, 2)),
                                      ub_addr=int(rng.integers(0, UB - nb * m + 1)) if to_ub else 0,
                                      param_idx=int(rng.integers(0, PAR - nb + 1))))
+        elif kind == "rd_ddr":
+            cnt = int(rng.integers(1, 17))
+            a = int(rng.integers(0, UB - cnt + 1))
+            entry = int(rng.integers(0, DDR_REGION // n - cnt + 1))
+            prog.append(isa.rd_ddr_ub(a, cnt, ddr_base + entry * n))
+        elif kind == "act_ddr":
+            m = int(rng.integers(1, 5))
+            nb = int(rng.integers(1, 3))
+            rq = bool(rng.integers(0, 2))
+            size = nb * m * (n if rq else 4 * n)
+            word = int(rng.integers(0, (DDR_REGION - size) // 4 + 1))
+            prog += [isa.set_obase(ddr_base + 4 * word),
+                     isa.activate(nb, m, int(rng.integers(0, ACC - nb * m + 1)), func=int(rng.integers(0, 2)),
+                                  rq=rq, dst=isa.DST_DDR, bias=bool(rng.integers(0, 2)),
+                                  param_idx=int(rng.integers(0, PAR - nb + 1)))]
+        elif kind == "matmul_ddr":
+            tiles_in_region = DDR_REGION // (n * n)
+            m = int(rng.choice([1, 2, n, n + 3]))
+            nb, kt = int(rng.integers(1, 3)), int(rng.integers(1, 4))
+            prog += [isa.set_wbase(ddr_base // (n * n) + int(rng.integers(0, tiles_in_region - nb * kt + 1))),
+                     isa.matmul(m, kt, nb, int(rng.integers(0, ACC - nb * m + 1)),
+                                int(rng.integers(0, UB - kt * m + 1)), accumulate=bool(rng.integers(0, 2)), wsrc=1)]
         else:
             a = int(rng.integers(0, UB))
             prog.append(isa.rd_ub(a, int(rng.integers(1, min(8, UB - a) + 1))))

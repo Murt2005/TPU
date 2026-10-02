@@ -66,8 +66,10 @@ holds what both use (`tpu-pkg.sv`, `fifo.sv`).
 | `tpu-pkg.sv` | opcodes, engine numbers, error codes, per-opcode legal-bit masks, `wait_counts_reached` (mirrors `host/tpu/isa.py`) |
 | `dispatch.sv` | decodes one instruction per cycle in order: legal bits, range checks (with a shadow WBASE), routing to the engine queues, `WAIT` snapshots of the per-engine dispatch counts, the `SIGNAL` fence, `ERR`/`ERR_SEQ` |
 | `load-engine.sv` | `WR_WMEM`/`WR_UB`/`WR_BIAS`/`WR_QUANT`: gathers 32-bit data words into rows (N int8) or entries (N int32) and writes them. Holds a UB entry's last word while ACT owns the UB write port |
-| `weight-engine.sv` | `SET_WBASE`, and the weight half of `MATMUL`: one WMEM row read per cycle into the weight FIFO's free slot, back to back across tiles. With `wsrc = 1` it requests the `MATMUL`'s whole tile range from `weight_reader` and takes its rows from there instead, through the same one-cycle pipeline |
-| `weight-reader.sv` | weights from DDR3: a 128-bit Avalon-MM burst-read master (bursts of up to 16 beats) in front of a 256-beat prefetch FIFO, unpacked into rows (`128 / 8N` per beat, so N = 4, 8 or 16). A burst issues only when the FIFO has room for it and everything in flight, since the bus can't hold read data back. Reads in flight outlive `CTRL.RESET`: only the power-on reset clears their count, and their beats are dropped |
+| `weight-engine.sv` | `SET_WBASE`, and the weight half of `MATMUL`, in two stages. Fetch pops the queue, settles `WAIT`s and WBASE, and hands a `wsrc = 1` `MATMUL`'s whole tile range to its `ddr_reader` as soon as the reader has issued the previous one's reads, so DDR3's latency hides behind the `MATMUL` before. Fill moves one row per cycle (WMEM, or the reader's rows) into the weight FIFO's free slot, back to back across tiles. Every instruction passes a 4-entry job FIFO between them and completes in fill, in order |
+| `ddr-reader.sv` | DDR3 rows for WT (weights) and LD (`RD_DDR_UB`), one each: burst reads of up to 16 beats into a prefetch FIFO (256 beats for WT, 64 for LD), unpacked into rows (`128 / 8N` per beat, so N = 4, 8 or 16). A request names whole beats, rows to skip in the first and rows to deliver. A burst issues only when the FIFO has room for it and everything in flight, since the bus can't hold read data back. Reads in flight outlive `CTRL.RESET`: only the power-on reset clears their count; a burst the bus is still holding off stays up until taken, and every abandoned beat is dropped |
+| `ddr-writer.sv` | `ACTIVATE dst=DDR`'s words: a 16-entry FIFO of {address, word}, each written as one 128-bit beat with its lane's byteenables. Cleared only by the power-on reset |
+| `memory-arbiter.sv` | the core's one DDR3 master: WT's reads, then LD's, then ACT's writes; a grant holds while the bus holds a command off. Read data returns in order, so a FIFO of {client, burst length} routes it |
 | `matmul-engine.sv` | the compute half of `MATMUL`: the overlap schedule (§4). Issues UB row reads with the flip bit, the next tile's weight rows onto the mmu's bus, and a `{overwrite, ACC row}` tag per row |
 | `activate-engine.sv` | `ACTIVATE` and `RD_UB`: reads ACC rows (when MM isn't), sequences bias → activation, writes the UB or emits words to the out FIFO |
 | `tpu-core.sv` | the host FIFOs with LEVELS counts, the dispatcher and queues, WMEM and the parameter tables, the datapath wiring, completion counters, perf counters |
@@ -88,7 +90,7 @@ until the masked engines' completion counts reach the snapshot.
 | `bias.sv` | (normalize) | per-column 32-bit add, wraps | combinational |
 | `activation.sv` | Activation | ReLU or identity, then the requantizer's multiply and round stages (§5) | 2 registered stages |
 | `fifo.sv` | — | generic show-ahead FIFO (host FIFOs, queues, column FIFOs, tags) | — |
-| `block-fifo.sv` | — | show-ahead FIFO on block RAM, for `weight_reader`'s prefetch: a registered read, so an entry shows two cycles after its write | — |
+| `block-fifo.sv` | — | show-ahead FIFO on block RAM, for `ddr_reader`'s prefetch: a registered read, so an entry shows two cycles after its write | — |
 
 ### One activation row, cycle by cycle
 
@@ -104,8 +106,8 @@ Rows follow one per cycle.
 | Memory | Size (board build) | Written by | Read by | Conflicts |
 |---|---|---|---|---|
 | WMEM | 8192 × N int8 | LD | WT | none |
-| DDR3 (off chip) | the host's; 1 GB | the host, before the program | WT (`wsrc = 1`), through `weight_reader` | none in a program |
-| prefetch FIFO | 256 × 128 bits | the DDR3 bus | WT | none |
+| DDR3 (off chip) | the host's; 1 GB | the host; ACT (`ACTIVATE dst=DDR`) | WT (`wsrc = 1`), LD (`RD_DDR_UB`), through `ddr_reader`s | one in-order port; ordering between engines is the program's, with `WAIT` |
+| prefetch FIFOs | 256 and 64 × 128 bits | the DDR3 bus | WT, LD | none |
 | UB | 16384 × N int8 | LD, ACT | MM, ACT (`RD_UB`) | write: ACT first (LD holds its word); read: MM first (ACT waits) |
 | ACC | 1024 × N int32 | accumulator | accumulator (RMW), ACT | read: MM's RMW first (ACT waits) |
 | bias table | 256 × N int32 | LD | ACT, via `bias` | none |

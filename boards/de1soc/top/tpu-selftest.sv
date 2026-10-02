@@ -48,7 +48,7 @@ module tpu_selftest #(
         .avs_address(avs_address), .avs_read(avs_read), .avs_readdata(avs_readdata),
         .avs_write(avs_write), .avs_writedata(avs_writedata), .avs_waitrequest(avs_waitrequest),
         // no DDR3 here: the self-test never runs MATMUL wsrc=1
-        .avm_address(), .avm_read(), .avm_burstcount(),
+        .avm_address(), .avm_read(), .avm_write(), .avm_burstcount(), .avm_writedata(), .avm_byteenable(),
         .avm_waitrequest(1'b0), .avm_readdata('0), .avm_readdatavalid(1'b0));
 
     logic        finished, timed_out, core_err;
