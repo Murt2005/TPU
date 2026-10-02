@@ -176,5 +176,7 @@ against Verilator first.
 - self-test PASS, with the perf captures equal to Verilator;
 - all 30 checks of the suite from the ARM;
 - MNIST: 10,000/10,000 equal to the model, preprocessing byte-identical.
+- after the renames, the `rtl/` reorganization and the move to Verilator 5.052:
+  self-test PASS again, with the perf captures equal to Verilator.
 
 Gates are local `make` targets. There's no hosted CI, by choice.

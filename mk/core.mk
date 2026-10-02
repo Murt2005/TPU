@@ -38,12 +38,14 @@ sim-test: model-test
 # ST_SLOTS=21 also reads the perf-counter captures back off the HEX displays
 ST_DIR   := boards/de1soc/fpga/selftest
 ST_ROM   := $(ST_DIR)/isa_selftest.hex
-ST_HEX   ?= $(ST_ROM)
+# the board's ROM is the N = 8 one; other sizes get their own file so they can't overwrite it
+ST_HEX   ?= $(if $(filter 8,$(N)),$(ST_ROM),$(SIM_DIR)/verilator/selftest_n$(N)/isa_selftest.hex)
 ST_SIM   := $(SIM_DIR)/verilator/selftest_n$(N)/tb_isa_selftest
 ST_SLOTS ?= 0
 
 selftest-rom:
-	@python3 $(ST_DIR)/gen_selftest.py $(ST_ROM) --n $(N)
+	@mkdir -p $(dir $(ST_HEX))
+	@python3 $(ST_DIR)/gen_selftest.py $(ST_HEX) --n $(N)
 
 selftest-sim: selftest-rom | $(SIM_DIR)
 	@mkdir -p $(dir $(ST_SIM))
