@@ -34,25 +34,22 @@ make CD_ZIP=<path>/DE1-SoC_v.6.0.0_HWrevH_SystemCD.zip   # -> build/soc_system.r
 U-Boot 2013.01 leaves every FPGA-to-SDRAM port in reset (`fpgaportrst`,
 `0xFFC25080`, = 0) and never sets `applycfg`, so the SDRAM controller doesn't
 take the port settings from a new bitstream. **Releasing the port from Linux
-without `applycfg` hangs the whole HPS on the first read through it.** Do both
-in U-Boot instead, before Linux runs. Without touching the SD card:
+without `applycfg` hangs the whole HPS on the first read through it.** Both
+have to happen in U-Boot, before Linux runs, and `applycfg` only while the
+controller is idle: U-Boot runs from SDRAM, and a plain `mw` to it hung the
+HPS once in three tries. It runs from ten instructions in on-chip RAM instead,
+as later U-Boots do.
 
-1. Stop U-Boot's autoboot over the console (`reboot`, then a key during the countdown).
-2. Load `build/soc_system.rbf` over JTAG while U-Boot waits.
-3. In U-Boot, skipping `fpgaload` (it would reload the card's bitstream):
-   ```
-   run mmcload
-   mw ffc2505c a                   # staticcfg.applycfg, self-clearing
-   run bridge_enable_handoff
-   mw ffc25080 133                 # f2h_sdram0's command, read and write ports out of reset
-   setenv bootargs console=ttyS0,115200 root=/dev/mmcblk0p2 rw rootwait mem=768M
-   bootz ${loadaddr} - ${fdtaddr}  # not mmcboot: it would reset bootargs
-   ```
-   `mem=768M` keeps Linux out of `0x30000000` and up, so the host can write
-   weights there for `MATMUL wsrc=1`. Terasic's console framebuffer sits at
-   `0x3F000000` regardless, so `isa_mmio` writes DDR3 only in
-   `[0x30000000, 0x3F000000)`. None of this is saved: a power cycle boots as
-   before.
+`boards/de1soc/sw/ddr-boot.py <console port> <rbf>` does all of it without
+touching the SD card: reboot into U-Boot, load the bitstream over JTAG, `run
+mmcload`, apply the configuration from on-chip RAM, `run
+bridge_enable_handoff`, release `f2h_sdram0` (`mw ffc25080 133`), and boot
+with `mem=768M` (`bootz`, not `mmcboot`, which would reset `bootargs`).
+`mem=768M` keeps Linux out of `0x30000000` and up, so the host can put
+weights and activations there. Terasic's console framebuffer sits at
+`0x3F000000` regardless, so `isa_mmio` reads and writes DDR3 only in
+`[0x30000000, 0x3F000000)`. None of this is saved: a power cycle boots as
+before.
 
 Then, from the Mac, `python boards/de1soc/sw/ddr-probe.py <console port>`.
 It checks the probe's checksum against the ARM's over the same physical range,

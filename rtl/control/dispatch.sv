@@ -109,7 +109,10 @@ module dispatch #(
     assign product_block_count_rows          = 21'(field_block_count) * 21'(field_matmul_rows);
     assign product_k_tiles_rows              = 22'(field_k_tiles) * 22'(field_matmul_rows);
     assign product_activate_block_count_rows = 21'(field_activate_block_count[10:0]) * 21'(field_activate_rows);
-    assign activate_bytes = 64'(product_activate_block_count_rows) * (field_requantize ? 64'(ARRAY_SIZE) : 64'(4 * ARRAY_SIZE));
+    // constant products, then the choice: a product with a muxed factor became a DSP
+    // multiplier on the decode path
+    assign activate_bytes = field_requantize ? 64'(product_activate_block_count_rows) * ARRAY_SIZE
+                                             : 64'(product_activate_block_count_rows) * (4 * ARRAY_SIZE);
 
     logic [7:0] decode_error;
     always_comb begin

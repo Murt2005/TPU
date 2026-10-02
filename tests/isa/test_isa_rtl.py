@@ -487,15 +487,21 @@ def main(binary):
     # prefetch across MATMULs: a second MATMUL from DDR3 straight after the first
     # finds its weights already on the way, so it adds no weight stall. the
     # simulated port answers in 40 cycles here: past the weight FIFO's two-tile
-    # lead, so without prefetch the second MATMUL would stall
+    # lead, so without prefetch the second MATMUL would stall. WT and MM wait on
+    # a WR_UB whose data comes last, so both MATMULs are queued before either
+    # starts: over the board's link, instructions trickle in slower than a MATMUL runs
     link.ddr_timing(False, latency=40)
+
+    def queued_first(matmuls):
+        prog = [isa.wr_ub(0, 1), isa.wait(isa.WT, isa.LD), isa.wait(isa.MM, isa.LD),
+                isa.set_wbase(link.ddr_window[0] // (n * n))] + matmuls + [isa.signal(2)]
+        return prog, [0] * (n // 4)
     for m in (1, n):
         if link.cycle_exact:
             runs = []
             for count_matmuls in (1, 2):
                 dev.reset()
-                dev.run([isa.set_wbase(link.ddr_window[0] // (n * n))]
-                        + [isa.matmul(m, tiles, 1, 0, 0, wsrc=1)] * count_matmuls + [isa.signal(2)])
+                dev.run(*queued_first([isa.matmul(m, tiles, 1, 0, 0, wsrc=1)] * count_matmuls))
                 runs.append(dev.perf())
             check(f"prefetch across MATMULs, m={m}: the second adds {runs[1]['mm_wstall'] - runs[0]['mm_wstall']} "
                   f"WSTALL cycles", runs[1]["mm_wstall"] == runs[0]["mm_wstall"], f"{runs}")
@@ -504,8 +510,7 @@ def main(binary):
             for _ in range(5):
                 for count_matmuls in (1, 2):
                     dev.reset()
-                    dev.run([isa.set_wbase(link.ddr_window[0] // (n * n))]
-                            + [isa.matmul(m, tiles, 1, 0, 0, wsrc=1)] * count_matmuls + [isa.signal(2)])
+                    dev.run(*queued_first([isa.matmul(m, tiles, 1, 0, 0, wsrc=1)] * count_matmuls))
                     stalls[count_matmuls].append(dev.perf()["mm_wstall"])
             extra = max(stalls[2]) - min(stalls[1])
             check(f"prefetch across MATMULs, m={m}: the second adds {extra} WSTALL cycles at most "
