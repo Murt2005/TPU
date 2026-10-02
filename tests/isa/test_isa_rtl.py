@@ -172,7 +172,8 @@ def main(binary):
             bad += 1
             if bad == 1:
                 print(f"    first mismatch: m={mm} k={k} n={nn} split={split} base={base:#x}")
-    check(f"{count} random layers with weights in DDR3 (random bus timing), RTL == model == tpu.golden",
+    timing = "the simulator's random bus timing" if link.cycle_exact else "the FPGA-to-SDRAM port"
+    check(f"{count} random layers with weights in DDR3 ({timing}), RTL == model == tpu.golden",
           bad == 0, f"{bad} bad")
 
     # CTRL.RESET while a DDR3 stream is in flight: late beats must not leak into the next MATMUL
@@ -344,23 +345,39 @@ def main(binary):
     link.ddr_timing(False)
     link.ddr_write(link.ddr_window[0], bytes(2 * tiles * n * n))
     for m in (1, n):
-        runs = []
-        for kt in (tiles, 2 * tiles):
-            dev.reset()
-            dev.run([isa.set_wbase(link.ddr_window[0] // (n * n)), isa.matmul(m, kt, 1, 0, 0, wsrc=1),
-                     isa.signal(2)])
-            runs.append(dev.perf())
-        period = max(m, n)
-        dc = runs[1]["cycles"] - runs[0]["cycles"]
-        counts_ok = (runs[1]["mm_wstall"] == runs[0]["mm_wstall"]
-                     and runs[1]["mm_beats"] == 2 * tiles * m)
         if link.cycle_exact:
+            runs = []
+            for kt in (tiles, 2 * tiles):
+                dev.reset()
+                dev.run([isa.set_wbase(link.ddr_window[0] // (n * n)), isa.matmul(m, kt, 1, 0, 0, wsrc=1),
+                         isa.signal(2)])
+                runs.append(dev.perf())
+            period = max(m, n)
+            dc = runs[1]["cycles"] - runs[0]["cycles"]
+            counts_ok = (runs[1]["mm_wstall"] == runs[0]["mm_wstall"]
+                         and runs[1]["mm_beats"] == 2 * tiles * m)
             check(f"weights from DDR3: one tile per max(m, N) = {period} cycles, m={m}: "
                   f"{tiles} more tiles take {dc} cycles, no extra WSTALL",
                   abs(dc - tiles * period) <= 8 and counts_ok, f"{runs}")
         else:
-            check(f"weights from DDR3, m={m}: {tiles} more tiles add exactly {tiles * m} MM beats "
-                  f"and no WSTALL", counts_ok, f"{runs}")
+            # real DDR3's latency to the first beat varies run to run, and so does the
+            # MATMUL's startup WSTALL. a shortfall in bandwidth would cost every extra
+            # tile at least a cycle; so: repeat, and the extra tiles together must stall
+            # less than one cycle each
+            stalls, beats_ok = {tiles: [], 2 * tiles: []}, True
+            for _ in range(5):
+                for kt in (tiles, 2 * tiles):
+                    dev.reset()
+                    dev.run([isa.set_wbase(link.ddr_window[0] // (n * n)),
+                             isa.matmul(m, kt, 1, 0, 0, wsrc=1), isa.signal(2)])
+                    p = dev.perf()
+                    stalls[kt].append(p["mm_wstall"])
+                    beats_ok &= p["mm_beats"] == kt * m
+            extra = max(stalls[2 * tiles]) - min(stalls[tiles])
+            check(f"weights from DDR3, m={m}: {tiles} more tiles add {tiles * m} MM beats each run and "
+                  f"stall {extra} cycles at most (WSTALL {min(stalls[tiles])}..{max(stalls[tiles])} at "
+                  f"{tiles} tiles, {min(stalls[2 * tiles])}..{max(stalls[2 * tiles])} at {2 * tiles})",
+                  beats_ok and extra < tiles, f"{stalls}")
     link.ddr_timing(True)
 
     # -- status ---------------------------------------------------------------

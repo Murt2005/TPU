@@ -17,7 +17,7 @@ the model is itself checked against independent references.
 | lint | `make lint` | width, unused and latch issues at both sizes and in the self-test top | behaviour |
 | self-test, sim | `make selftest-sim` | the exact transcript the FPGA will replay, with its perf captures | the netlist |
 | self-test, board | the self-test bitstream | **the netlist**, with no host at all: the tests and the tile rate, checked on chip | the HPS path |
-| suite, board | `tests/isa/test_isa_rtl.py serial:<port>` | the GHRD build from the ARM: every functional test | exact cycle counts (the link's latency is in them) |
+| suite, board | `tests/isa/test_isa_rtl.py serial:<port>` | the GHRD build from the ARM: every functional test, weights from DDR3 through the real FPGA-to-SDRAM port included | exact cycle counts (the link's latency is in them); real DDR3's startup latency varies, so the DDR3 tile check there repeats each run and allows less than one stall cycle per extra tile |
 | application, board | `mnist_tpu bench` | 10,000 MNIST images end to end, preprocessing included | — |
 
 `make check` runs the first six. The last three need the board
