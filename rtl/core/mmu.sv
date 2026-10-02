@@ -11,9 +11,9 @@ module mmu #(
     input  logic [ARRAY_SIZE-1:0]               activation_valid_in,
     input  logic [ARRAY_SIZE-1:0]               weight_flip_in,
 
+    input  logic signed [ARRAY_SIZE-1:0][7:0]   weight_in,
     input  logic                                weight_valid_in,
     input  logic [$clog2(ARRAY_SIZE)-1:0]       weight_row_select_in,
-    input  logic signed [ARRAY_SIZE-1:0][7:0]   weight_in,
 
     output logic signed [ARRAY_SIZE-1:0][31:0]  partial_sum_out,
     output logic [ARRAY_SIZE-1:0]               partial_sum_valid_out
@@ -77,13 +77,20 @@ module mmu #(
                     assign cell_partial_sum_valid_in = g_row[row-1].g_column[column].cell_partial_sum_valid_out;
                 end
                 pe u_pe (
-                    .clk(clk), .reset(reset),
-                    .activation_in(row_activation[column]), .activation_valid_in(row_activation_valid[column]), .weight_flip_in(row_weight_flip[column]),
-                    .partial_sum_in(cell_partial_sum_in), .partial_sum_valid_in(cell_partial_sum_valid_in),
+                    .clk(clk),
+                    .reset(reset),
+                    .activation_in(row_activation[column]),
+                    .activation_valid_in(row_activation_valid[column]),
+                    .weight_flip_in(row_weight_flip[column]),
+                    .partial_sum_in(cell_partial_sum_in),
+                    .partial_sum_valid_in(cell_partial_sum_valid_in),
                     .weight_in(column_weight_data[column]),
                     .weight_valid_in(column_weight_valid[column] && column_weight_row_select[column] == ROW_SELECT_WIDTH'(row)),
-                    .activation_out(row_activation[column+1]), .activation_valid_out(row_activation_valid[column+1]), .weight_flip_out(row_weight_flip[column+1]),
-                    .partial_sum_out(cell_partial_sum_out), .partial_sum_valid_out(cell_partial_sum_valid_out));
+                    .activation_out(row_activation[column+1]),
+                    .activation_valid_out(row_activation_valid[column+1]),
+                    .weight_flip_out(row_weight_flip[column+1]),
+                    .partial_sum_out(cell_partial_sum_out),
+                    .partial_sum_valid_out(cell_partial_sum_valid_out));
                 if (row == ARRAY_SIZE - 1) begin : g_output
                     assign partial_sum_out[column]       = cell_partial_sum_out;
                     assign partial_sum_valid_out[column] = cell_partial_sum_valid_out;

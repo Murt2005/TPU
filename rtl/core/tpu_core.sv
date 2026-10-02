@@ -186,10 +186,10 @@ module tpu_core #(
         for (int row = 0; row < ARRAY_SIZE; row++)
             skew_in[row] = {activation_weight_flip, UB_read_data[8*row +: 8]};
 
-    systolic_data_setup #(.ARRAY_ROWS(ARRAY_SIZE), .DATA_WIDTH(9)) u_systolic_data_setup (
+    systolic_data_setup #(.ARRAY_SIZE(ARRAY_SIZE), .DATA_WIDTH(9)) u_systolic_data_setup (
         .clk(clk), .reset(reset),
-        .UB_read_data(skew_in), .UB_read_valid(activation_valid),
-        .MMU_in_row(skewed), .MMU_in_valid(skewed_valid));
+        .row_in(skew_in), .row_valid_in(activation_valid),
+        .skewed_row_out(skewed), .skewed_valid_out(skewed_valid));
 
     logic signed [ARRAY_SIZE-1:0] [7:0]  array_activation;
     logic        [ARRAY_SIZE-1:0]        array_weight_flip;

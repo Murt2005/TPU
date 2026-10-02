@@ -20,9 +20,9 @@ module mmu_tb;
     logic signed [N-1:0][31:0] partial_sum;
     logic        [N-1:0]       partial_sum_valid;
 
-    systolic_data_setup #(.ARRAY_ROWS(N), .DATA_WIDTH(9)) u_sds (
-        .clk(clk), .reset(reset), .UB_read_data(sds_in), .UB_read_valid(sds_valid),
-        .MMU_in_row(skewed), .MMU_in_valid(skewed_valid));
+    systolic_data_setup #(.ARRAY_SIZE(N), .DATA_WIDTH(9)) u_sds (
+        .clk(clk), .reset(reset), .row_in(sds_in), .row_valid_in(sds_valid),
+        .skewed_row_out(skewed), .skewed_valid_out(skewed_valid));
     always_comb
         for (int r = 0; r < N; r++) begin
             activation[r]       = skewed[r][7:0];
