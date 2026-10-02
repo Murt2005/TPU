@@ -52,9 +52,9 @@ class Ddr:
 
 class IsaModel:
     def __init__(self, n=8, wmem_rows=8192, ub_depth=16384, acc_depth=1024,
-                 param_depth=256, phase=3, ddr_weights=False, ddr_bytes=1 << 30):
-        """ddr_weights: MATMUL wsrc=1 (weights from DDR3) is implemented; without it,
-        ERR_UNIMPL like the rest of phase 5. tile t of a wsrc=1 MATMUL is the
+                 param_depth=256, phase=3, ddr_weights=True, ddr_bytes=1 << 30):
+        """ddr_weights: MATMUL wsrc=1 (weights from DDR3) is implemented, as in the
+        RTL; without it, ERR_UNIMPL like the rest of phase 5. tile t of a wsrc=1 MATMUL is the
         n*n bytes at DDR3 byte address t*n*n, rows in WMEM order"""
         assert n % 4 == 0, "R = C must be a multiple of 4 (rows pack into whole words)"
         self.n, self.phase, self.ddr_weights = n, phase, ddr_weights

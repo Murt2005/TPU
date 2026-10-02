@@ -33,7 +33,7 @@ def test_roundtrip(rng):
 
 
 def test_errors():
-    m = IsaModel(n=8, wmem_rows=64, ub_depth=64, acc_depth=32, param_depth=8, phase=1)
+    m = IsaModel(n=8, wmem_rows=64, ub_depth=64, acc_depth=32, param_depth=8, phase=1, ddr_weights=False)
     cases = [
         ("unknown opcode", 0x3F << 58, ERR_OPCODE),
         ("reserved bit", isa.nop() | 1, ERR_RESERVED),
@@ -150,7 +150,7 @@ def test_ddr_errors():
         m.run(words + [isa.signal(1)])
         got = m.err.code if m.err else ERR_NONE
         check(f"decode, wsrc=1 enabled: {name}", got == code and m.done == (code == ERR_NONE), str(m.err))
-    m = IsaModel(n=8)
+    m = IsaModel(n=8, ddr_weights=False)
     m.run([isa.matmul(1, 1, 1, 0, 0, wsrc=1), isa.signal(1)])
     check("decode: MATMUL wsrc=1 is ERR_UNIMPL until enabled", m.err is not None and m.err.code == ERR_UNIMPL)
 

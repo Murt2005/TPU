@@ -1,8 +1,13 @@
 /* register server for tpu_top on the HPS lightweight bridge. speaks the
  * tb_isa protocol on stdin/stdout (header of 5 u32, then 'W' reg u32,
- * 'R' reg -> u32, 'Q'), so host/tpu/isa_device.py drives the board exactly as
- * it drives Verilator. when stdin is a tty (the serial console) it goes raw for
- * the session. runs as root: /dev/mem */
+ * 'R' reg -> u32, 'D' addr u32 len u32 bytes, 'M' mode, 'Q'), so
+ * host/tpu/isa_device.py drives the board exactly as it drives Verilator. when
+ * stdin is a tty (the serial console) it goes raw for the session. runs as root:
+ * /dev/mem.
+ * 'D' writes DDR3 for MATMUL wsrc=1, uncached (O_SYNC), only inside the window
+ * Linux was booted without (mem=768M) and below the console framebuffer at
+ * 0x3F000000; anything else ends the session. 'M' (the simulator's DDR3 timing)
+ * is read and ignored */
 #include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -13,6 +18,8 @@
 
 #define LWH2F_BASE 0xFF200000u
 #define SPAN       0x1000u
+#define DDR_LOW    0x30000000u
+#define DDR_HIGH   0x3F000000u
 
 static int get(void *p, size_t n) {
     uint8_t *b = p;
@@ -54,10 +61,36 @@ int main(int argc, char **argv) {
         tcsetattr(0, TCSANOW, &raw);
     }
 
+    volatile uint8_t *ddr = 0;
+
     put(params, sizeof params);
     for (;;) {
         uint8_t cmd, reg;
         if (!get(&cmd, 1) || cmd == 'Q') break;
+        if (cmd == 'M') {
+            if (!get(&reg, 1)) break;
+            continue;
+        }
+        if (cmd == 'D') {
+            uint32_t address, length;
+            if (!get(&address, 4) || !get(&length, 4)) break;
+            if (address < DDR_LOW || address > DDR_HIGH || length > DDR_HIGH - address) break;
+            if (!ddr) {
+                void *p = mmap(0, DDR_HIGH - DDR_LOW, PROT_READ | PROT_WRITE, MAP_SHARED, fd, DDR_LOW);
+                if (p == MAP_FAILED) break;
+                ddr = p;
+            }
+            uint8_t chunk[4096];
+            while (length) {
+                uint32_t k = length < sizeof chunk ? length : sizeof chunk;
+                if (!get(chunk, k)) goto done;
+                for (uint32_t i = 0; i < k; i++) ddr[address - DDR_LOW + i] = chunk[i];
+                address += k;
+                length -= k;
+            }
+            __asm__ volatile("dsb" ::: "memory");   /* in DDR3 before the program that reads it */
+            continue;
+        }
         if (!get(&reg, 1) || reg > 15) break;
         if (cmd == 'W') {
             uint32_t v;
@@ -70,6 +103,7 @@ int main(int argc, char **argv) {
             break;
         }
     }
+done:
     if (tty) tcsetattr(0, TCSANOW, &saved);
     return 0;
 }

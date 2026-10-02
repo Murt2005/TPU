@@ -15,7 +15,7 @@ is in [`architecture.md`](architecture.md).
 | Top levels | `boards/de1soc/top/tpu-top.sv` (bridge + core); in the board designs, `tpu-selftest.sv` and the GHRD component |
 | Reference model | `host/tpu/isa_model.py`: executes a program in order with the exact arithmetic; the RTL must match it word for word |
 | Design spec | the instruction-stream spec doc (claude.ai artifact `FP1ach14aGXhH2N1aCLCox`). This page describes what is built |
-| Status | Spec phases 1–3 built: the serial core, then the requantizer and on-core layer chaining, then overlapped tiles. **Hardware-validated on the DE1-SoC** ([`de1soc.md`](de1soc.md)). Phase 5 (DDR3) begun: FPGA-to-SDRAM bandwidth measured on the board (800 MB/s), `MATMUL wsrc=1` in the reference model; the RTL still rejects it |
+| Status | Spec phases 1–3 built: the serial core, then the requantizer and on-core layer chaining, then overlapped tiles. **Hardware-validated on the DE1-SoC** ([`de1soc.md`](de1soc.md)). Phase 5 (DDR3) begun: FPGA-to-SDRAM bandwidth measured on the board (800 MB/s); `MATMUL wsrc=1` (weights from DDR3) built and matching the model in Verilator sim |
 
 ## 1. Shape
 
@@ -79,8 +79,7 @@ Weights are read starting at tile `WBASE`, and WBASE then advances by
 `SET_WBASE` in between. `acc = 1` adds to ACC instead of overwriting, which
 is how a K-sum splits across several `MATMUL`s.
 
-`wsrc = 1` streams the weights from DDR3 instead of WMEM (phase 5; in the
-reference model, not yet in the RTL). WBASE stays a tile index: tile *t* is
+`wsrc = 1` streams the weights from DDR3 instead of WMEM (phase 5). WBASE stays a tile index: tile *t* is
 the `N·N` bytes at DDR3 byte address `t·N·N` (64 B at `N = 8`, four 16-byte
 beats), rows in WMEM's order. There is one WBASE for both sources, and every
 `MATMUL` advances it, whichever source it reads. The range check is against
@@ -129,9 +128,9 @@ since reset). `CTRL.RESET` clears it.
 |---|---|---|
 | 1 | `OPCODE` | unknown opcode |
 | 2 | `RESERVED` | a set bit outside the opcode's fields; `ACTIVATE` `func` 2–3 or `dst` 3 |
-| 5 | `UNIMPL` | `RD_DDR_UB`, `SET_OBASE`, `MATMUL wsrc=1`, `ACTIVATE dst=DDR` |
+| 5 | `UNIMPL` | `RD_DDR_UB`, `SET_OBASE`, `ACTIVATE dst=DDR` |
 | 4 | `COMBO` | `ACTIVATE dst=UB` with `rq=0` (int32 can't go into an int8 UB entry) |
-| 3 | `RANGE` | any memory range past the end: WMEM rows, UB entries, params, ACC rows, or `(WBASE + n_blocks·k_tiles)·N` past WMEM |
+| 3 | `RANGE` | any memory range past the end: WMEM rows, UB entries, params, ACC rows, `(WBASE + n_blocks·k_tiles)·N` past WMEM, or with `wsrc = 1`, `(WBASE + n_blocks·k_tiles)·N·N` past the DDR3 size |
 
 ## 3. Data layouts
 

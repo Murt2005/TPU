@@ -12,6 +12,8 @@ set_global_assignment -name NUM_PARALLEL_PROCESSORS 1
 # tpu_pkg first: everything below imports it
 set_global_assignment -name SYSTEMVERILOG_FILE ../../../../rtl/common/tpu-pkg.sv
 set_global_assignment -name SYSTEMVERILOG_FILE ../../../../rtl/common/fifo.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../../../rtl/common/block-fifo.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../../../rtl/control/weight-reader.sv
 set_global_assignment -name SYSTEMVERILOG_FILE ../../../../rtl/datapath/systolic-data-setup.sv
 set_global_assignment -name SYSTEMVERILOG_FILE ../../../../rtl/datapath/pe.sv
 set_global_assignment -name SYSTEMVERILOG_FILE ../../../../rtl/datapath/mmu.sv

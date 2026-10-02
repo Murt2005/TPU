@@ -72,7 +72,6 @@ def build(n):
         ("reserved DST", isa.encode("ACTIVATE", dst=3), ERR_RESERVED),
         ("RD_DDR_UB unimplemented", isa.encode("RD_DDR_UB"), ERR_UNIMPL),
         ("SET_OBASE unimplemented", isa.encode("SET_OBASE"), ERR_UNIMPL),
-        ("MATMUL from DDR3", isa.matmul(1, 1, 1, 0, 0, wsrc=1), ERR_UNIMPL),
         ("ACTIVATE to DDR3", isa.activate(1, 1, 0, dst=isa.DST_DDR), ERR_UNIMPL),
         ("ACTIVATE int32 into UB", isa.activate(1, 1, 0, dst=isa.DST_UB), ERR_COMBO),
         ("WR_UB past the end", isa.wr_ub(UB_DEPTH - 2, 5), ERR_RANGE),

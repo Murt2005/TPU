@@ -109,7 +109,7 @@ it faults on 5.032 and fails on 5.052.
 - the requantizer against host rounding, with exactly one difference, at the
   tie v = 10,450;
 - the compiled MNIST program is hazard-free with every `WAIT` necessary;
-- weights from DDR3 (`MATMUL wsrc=1`, model only so far): 60 random layers
+- weights from DDR3 (`MATMUL wsrc=1`): 60 random layers
   at N = 8 and 4 give the same out words as from WMEM and match `tpu.golden`;
   one K-sum split across WMEM and DDR3; MNIST with its weights in DDR3 gives
   the same out words as the WMEM build; the DDR3 range check; and the
@@ -120,6 +120,12 @@ through `tests/verilator/tb-isa.cpp` and requires every output word to equal
 the model's:
 - every decode error, `CTRL.RESET`, `UNDERFLOW`, `IDLE`;
 - 40 random single layers, including K split across `MATMUL`s;
+- weights from DDR3 (`MATMUL wsrc=1`), behind `tb-isa.cpp`'s model of the
+  FPGA-to-SDRAM port (at most 14 bursts pending, random waitrequest, latency
+  and gaps between beats, protocol checks): 30 random layers, MNIST chained at
+  m = 1 and 8, the DDR3 range error, `CTRL.RESET` with reads in flight, and
+  the tile rate on a port that answers at once (each extra tile max(m, N)
+  cycles, no extra WSTALL);
 - MNIST layer 1, and the two-layer program chained through the UB, on 20
   images at m = 1 and 8;
 - the requantizer over every int16 input, the edges and random int32

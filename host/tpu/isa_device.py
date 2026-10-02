@@ -17,6 +17,8 @@ class IsaSimLink:
     # the model's clock only advances on register accesses, so PERF_CYCLES
     # differences between runs are exact; on hardware the link's latency is in them
     cycle_exact = True
+    # DDR3 bytes the host may write for MATMUL wsrc=1: all of it in simulation
+    ddr_window = (0, 1 << 30)
 
     def __init__(self, binary):
         if not os.path.exists(binary):
@@ -51,6 +53,18 @@ class IsaSimLink:
         self._buf += b"R" + bytes([reg])
         self.flush()
         return struct.unpack("<I", self._read(4))[0]
+
+    def ddr_write(self, address, data):
+        """put bytes into DDR3 behind the core's master, as the host's stores do"""
+        data = bytes(data)
+        self._buf += b"D" + struct.pack("<II", address, len(data)) + data
+        if len(self._buf) > 1 << 16:
+            self.flush()
+
+    def ddr_timing(self, random_timing):
+        """the DDR3 model's timing: random (the default), or every command answered
+        at once with back-to-back beats"""
+        self._buf += b"M" + bytes([int(random_timing)])
 
     def close(self):
         try:
@@ -233,6 +247,9 @@ class IsaSerialLink(IsaSimLink):
     HPS over its serial console, speaking the same protocol as the Verilator model"""
 
     cycle_exact = False
+    # what Linux leaves alone when booted with mem=768M, below the console
+    # framebuffer at 0x3F000000 (isa_mmio refuses anything else)
+    ddr_window = (0x30000000, 0x3F000000)
 
     def __init__(self, port, server="/mnt/boot/isa_mmio", baud=115200, timeout=10.0):
         self._con = BoardConsole(port, baud)

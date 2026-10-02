@@ -4,8 +4,9 @@ import tpu_pkg::*;
 
 // the TPU core: host FIFOs, the dispatcher and four engines (control), around the
 // TPUv1 datapath: unified buffer -> systolic data setup -> mmu -> accumulators ->
-// bias -> activation, with weights from WMEM through the weight FIFO.
-// board-neutral; a bridge in front of it speaks the host bus
+// bias -> activation, with weights from WMEM or DDR3 through the weight FIFO.
+// board-neutral; a bridge in front of it speaks the host bus, and its DDR3 port is
+// an Avalon-MM burst-read master
 module tpu_core #(
     parameter int ARRAY_SIZE             = 8,
     parameter int WMEM_ROWS              = 8192,
@@ -15,10 +16,12 @@ module tpu_core #(
     parameter int INSTRUCTION_FIFO_DEPTH = 512,
     parameter int DATA_FIFO_DEPTH        = 1024,
     parameter int OUTPUT_FIFO_DEPTH      = 1024,
-    parameter int QUEUE_DEPTH            = 8
+    parameter int QUEUE_DEPTH            = 8,
+    parameter longint DDR_BYTES          = 64'h4000_0000
 ) (
     input  logic        clk,
-    input  logic        reset,
+    input  logic        reset,              // power-on or CTRL.RESET
+    input  logic        bus_reset,          // power-on only: reads in flight on the DDR3 bus outlive CTRL.RESET
 
     input  logic        instruction_push_in,
     input  logic [63:0] instruction_word_in,
@@ -44,7 +47,15 @@ module tpu_core #(
     output logic [31:0] performance_cycles_out,
     output logic [31:0] performance_matmul_beats_out,
     output logic [31:0] performance_matmul_weight_stalls_out,
-    output logic [31:0] performance_matmul_sync_stalls_out
+    output logic [31:0] performance_matmul_sync_stalls_out,
+
+    // DDR3: weights for MATMUL wsrc=1, 128-bit burst reads, byte addresses
+    output logic [31:0]  memory_address_out,
+    output logic         memory_read_out,
+    output logic [7:0]   memory_burstcount_out,
+    input  logic         memory_waitrequest_in,
+    input  logic [127:0] memory_readdata_in,
+    input  logic         memory_readdatavalid_in
 );
 
     initial begin
@@ -99,7 +110,7 @@ module tpu_core #(
     logic        fence_pending;
 
     dispatch #(.ARRAY_SIZE(ARRAY_SIZE), .WMEM_ROWS(WMEM_ROWS), .UB_DEPTH(UB_DEPTH), .ACC_DEPTH(ACC_DEPTH),
-               .PARAMETER_DEPTH(PARAMETER_DEPTH)) u_dispatch (
+               .PARAMETER_DEPTH(PARAMETER_DEPTH), .DDR_BYTES(DDR_BYTES)) u_dispatch (
         .clk(clk), .reset(reset),
         .instruction_valid_in(!instruction_empty), .instruction_in(instruction_head), .instruction_pop_out(instruction_pop),
         .queue_push_out(queue_push), .queue_entry_out(queue_entry), .queue_full_in(queue_full),
@@ -230,6 +241,18 @@ module tpu_core #(
         .row_in(biased_row), .relu_enable_in(relu_enable), .row_out(activation_row),
         .multiply_enable_in(multiply_enable), .multiply_row_in(multiply_row), .quantization_row_in(quantization_read_data), .quantized_row_out(quantized_row));
 
+    // -- weights from DDR3 ------------------------------------------------------------
+    logic                    DDR_request, DDR_row_valid, DDR_row_pop;
+    logic [31:0]             DDR_request_address, DDR_request_beats;
+    logic [ARRAY_SIZE*8-1:0] DDR_row_data;
+
+    weight_reader #(.ARRAY_SIZE(ARRAY_SIZE)) u_weight_reader (
+        .clk(clk), .reset(reset), .bus_reset(bus_reset),
+        .request_valid_in(DDR_request), .request_address_in(DDR_request_address), .request_beats_in(DDR_request_beats),
+        .row_valid_out(DDR_row_valid), .row_data_out(DDR_row_data), .row_pop_in(DDR_row_pop),
+        .memory_address_out(memory_address_out), .memory_read_out(memory_read_out), .memory_burstcount_out(memory_burstcount_out),
+        .memory_waitrequest_in(memory_waitrequest_in), .memory_readdata_in(memory_readdata_in), .memory_readdatavalid_in(memory_readdatavalid_in));
+
     // -- engines -------------------------------------------------------------------
     logic [3:0] engine_idle;
     logic       performance_beat, performance_weight_stall, performance_sync_stall;
@@ -248,6 +271,8 @@ module tpu_core #(
         .queue_valid_in(!queue_empty[ENGINE_WEIGHT]), .queue_entry_in(queue_head[ENGINE_WEIGHT]), .queue_pop_out(queue_pop[ENGINE_WEIGHT]),
         .completed_in(completed), .instruction_done_out(instruction_done[ENGINE_WEIGHT]),
         .WMEM_read_address_out(WMEM_read_address), .WMEM_read_data_in(WMEM_read_data),
+        .DDR_request_out(DDR_request), .DDR_request_address_out(DDR_request_address), .DDR_request_beats_out(DDR_request_beats),
+        .DDR_row_valid_in(DDR_row_valid), .DDR_row_data_in(DDR_row_data), .DDR_row_pop_out(DDR_row_pop),
         .fill_ready_in(fill_ready), .fill_slot_next_in(fill_slot_next), .fill_advance_out(fill_advance),
         .fill_write_enable_out(fill_write_enable), .fill_slot_out(fill_slot), .fill_row_out(fill_row), .fill_data_out(fill_data),
         .idle_out(engine_idle[ENGINE_WEIGHT]));

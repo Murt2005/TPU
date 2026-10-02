@@ -8,7 +8,8 @@ module dispatch #(
     parameter int WMEM_ROWS       = 8192,
     parameter int UB_DEPTH        = 16384,
     parameter int ACC_DEPTH       = 1024,
-    parameter int PARAMETER_DEPTH = 256
+    parameter int PARAMETER_DEPTH = 256,
+    parameter longint DDR_BYTES   = 64'h4000_0000   // MATMUL wsrc=1 range check
 ) (
     input  logic                         clk,
     input  logic                         reset,
@@ -113,9 +114,8 @@ module dispatch #(
         else if (opcode == OPCODE_ACTIVATE && (field_function[1] || field_destination == 2'd3))
             decode_error = ERROR_RESERVED;
         else if (opcode == OPCODE_RD_DDR_UB || opcode == OPCODE_SET_OBASE
-                 || (opcode == OPCODE_MATMUL && field_weight_source)
                  || (opcode == OPCODE_ACTIVATE && field_destination == DESTINATION_DDR))
-            decode_error = ERROR_UNIMPLEMENTED;   // DDR3 is phase 5
+            decode_error = ERROR_UNIMPLEMENTED;   // the rest of DDR3 (phase 5)
         else if (opcode == OPCODE_ACTIVATE && field_destination == DESTINATION_UB && !field_requantize)
             decode_error = ERROR_COMBINATION;
         else case (opcode)
@@ -126,7 +126,9 @@ module dispatch #(
             OPCODE_WR_QUANT: if (field_parameter_index + field_parameter_count > 64'(PARAMETER_DEPTH)) decode_error = ERROR_RANGE;
             OPCODE_MATMUL:   if (field_ACC_address + 64'(product_block_count_rows) > 64'(ACC_DEPTH)
                              || field_matmul_UB_address + 64'(product_k_tiles_rows) > 64'(UB_DEPTH)
-                             || (64'(weight_base) + 64'(product_block_count_k_tiles)) * ARRAY_SIZE > 64'(WMEM_ROWS)) decode_error = ERROR_RANGE;
+                             || (!field_weight_source && (64'(weight_base) + 64'(product_block_count_k_tiles)) * ARRAY_SIZE > 64'(WMEM_ROWS))
+                             || (field_weight_source && (64'(weight_base) + 64'(product_block_count_k_tiles)) * (ARRAY_SIZE * ARRAY_SIZE) > 64'(DDR_BYTES)))
+                             decode_error = ERROR_RANGE;
             OPCODE_ACTIVATE: if (field_activate_ACC_address + 64'(product_activate_block_count_rows) > 64'(ACC_DEPTH)
                              || ((field_bias || field_requantize) && field_activate_parameter_index + field_activate_block_count > 64'(PARAMETER_DEPTH))
                              || (field_destination == DESTINATION_UB && field_activate_UB_address + 64'(product_activate_block_count_rows) > 64'(UB_DEPTH)))

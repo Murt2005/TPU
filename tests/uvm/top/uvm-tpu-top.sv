@@ -18,7 +18,14 @@ module uvm_tpu_top #(parameter int ARRAY_SIZE = 8);
         .avs_readdata(bus.avs_readdata),
         .avs_write(bus.avs_write),
         .avs_writedata(bus.avs_writedata),
-        .avs_waitrequest(bus.avs_waitrequest)
+        .avs_waitrequest(bus.avs_waitrequest),
+        // no DDR3 model in this environment: tb_isa covers MATMUL wsrc=1
+        .avm_address(),
+        .avm_read(),
+        .avm_burstcount(),
+        .avm_waitrequest(1'b0),
+        .avm_readdata('0),
+        .avm_readdatavalid(1'b0)
     );
 
     initial begin

@@ -45,8 +45,14 @@ in U-Boot instead, before Linux runs. Without touching the SD card:
    mw ffc2505c a                   # staticcfg.applycfg, self-clearing
    run bridge_enable_handoff
    mw ffc25080 133                 # f2h_sdram0's command, read and write ports out of reset
-   run mmcboot
+   setenv bootargs console=ttyS0,115200 root=/dev/mmcblk0p2 rw rootwait mem=768M
+   bootz ${loadaddr} - ${fdtaddr}  # not mmcboot: it would reset bootargs
    ```
+   `mem=768M` keeps Linux out of `0x30000000` and up, so the host can write
+   weights there for `MATMUL wsrc=1`. Terasic's console framebuffer sits at
+   `0x3F000000` regardless, so `isa_mmio` writes DDR3 only in
+   `[0x30000000, 0x3F000000)`. None of this is saved: a power cycle boots as
+   before.
 
 Then, from the Mac, `python boards/de1soc/sw/ddr-probe.py <console port>`.
 It checks the probe's checksum against the ARM's over the same physical range,

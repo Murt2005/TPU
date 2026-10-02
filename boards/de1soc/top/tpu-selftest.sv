@@ -46,7 +46,10 @@ module tpu_selftest #(
     tpu_top #(.ARRAY_SIZE(ARRAY_SIZE)) u_tpu (
         .clk(clk), .reset_n(!run_reset),
         .avs_address(avs_address), .avs_read(avs_read), .avs_readdata(avs_readdata),
-        .avs_write(avs_write), .avs_writedata(avs_writedata), .avs_waitrequest(avs_waitrequest));
+        .avs_write(avs_write), .avs_writedata(avs_writedata), .avs_waitrequest(avs_waitrequest),
+        // no DDR3 here: the self-test never runs MATMUL wsrc=1
+        .avm_address(), .avm_read(), .avm_burstcount(),
+        .avm_waitrequest(1'b0), .avm_readdata('0), .avm_readdatavalid(1'b0));
 
     logic        finished, timed_out, core_err;
     logic [31:0] cap_value;

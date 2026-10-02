@@ -33,3 +33,5 @@ lint_off -rule UNUSEDSIGNAL -file "*boards/de1soc/top/tpu-selftest.sv" -match "*
 // power-on reset: the declared initial values are the FPGA's power-up state, the only reset there is
 lint_off -rule PROCASSINIT -file "*boards/de1soc/top/tpu-top.sv" -match "*'por_*"
 lint_off -rule PROCASSINIT -file "*boards/de1soc/top/tpu-selftest.sv"
+// the self-test has no DDR3: tpu_top's master outputs go nowhere
+lint_off -rule PINCONNECTEMPTY -file "*boards/de1soc/top/tpu-selftest.sv"
