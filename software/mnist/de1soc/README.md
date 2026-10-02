@@ -8,7 +8,7 @@ the core's UB), and takes the argmax.
 | File | Role |
 |---|---|
 | `make_data.py` | `model.bin` (compiled load + infer programs) and `testset.bin` (pixels, label, host quantized input, reference-model and host predictions) |
-| `mnist_tpu.c` | `bench` over the test set; `serve` for `../draw_demo.py --de1soc`, digit on HEX0 |
+| `mnist-tpu.c` | `bench` over the test set; `serve` for `../draw_demo.py --de1soc`, digit on HEX0 |
 | `Makefile` | `data`, `arm` (in the Quartus VM), `sim-bench` (the same C against Verilator via `-DSIM`) |
 
 Deploy `mnist_tpu`, `model.bin` and `testset.bin` to the SD card's FAT

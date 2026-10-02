@@ -1,6 +1,6 @@
 # adds the tpu component to Terasic's rev H GHRD on the lightweight bridge at offset 0
 # (0xFF200000), and hex_pio at 0x10100 (0xFF210100) for the HEX displays
-# (decoded by top/hex_display.sv); both on clk_0 like everything else
+# (decoded by top/hex-display.sv); both on clk_0 like everything else
 package require -exact qsys 16.1
 load_system soc_system.qsys
 add_instance tpu_0 tpu 1.0

@@ -1,6 +1,6 @@
 # Platform Designer component: tpu_top as an Avalon-MM slave for the HPS
 # lightweight bridge. word-addressed, 12 registers, fixed read latency 1,
-# waitrequest only on writes into a full FIFO (see rtl/peripherals/host_bridge.sv)
+# waitrequest only on writes into a full FIFO (see rtl/peripherals/host-bridge.sv)
 package require -exact qsys 16.1
 
 set_module_property NAME tpu
@@ -11,8 +11,8 @@ set_module_property EDITABLE false
 
 set rtl ../../../../rtl
 set files [list \
-    $rtl/core/tpu_pkg.sv $rtl/core/fifo.sv $rtl/core/systolic_data_setup.sv $rtl/core/pe.sv $rtl/core/mmu.sv $rtl/core/weight_fifo.sv $rtl/core/unified_buffer.sv $rtl/core/accumulator.sv $rtl/core/bias.sv $rtl/core/activation.sv $rtl/core/dispatch.sv $rtl/core/load_engine.sv $rtl/core/weight_engine.sv $rtl/core/matmul_engine.sv $rtl/core/activate_engine.sv $rtl/core/tpu_core.sv $rtl/peripherals/host_bridge.sv \
-    ../../top/tpu_top.sv]
+    $rtl/core/tpu-pkg.sv $rtl/core/fifo.sv $rtl/core/systolic-data-setup.sv $rtl/core/pe.sv $rtl/core/mmu.sv $rtl/core/weight-fifo.sv $rtl/core/unified-buffer.sv $rtl/core/accumulator.sv $rtl/core/bias.sv $rtl/core/activation.sv $rtl/core/dispatch.sv $rtl/core/load-engine.sv $rtl/core/weight-engine.sv $rtl/core/matmul-engine.sv $rtl/core/activate-engine.sv $rtl/core/tpu-core.sv $rtl/peripherals/host-bridge.sv \
+    ../../top/tpu-top.sv]
 
 add_fileset QUARTUS_SYNTH QUARTUS_SYNTH "" ""
 set_fileset_property QUARTUS_SYNTH TOP_LEVEL tpu_top

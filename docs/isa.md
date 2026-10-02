@@ -11,8 +11,8 @@ is in [`architecture.md`](architecture.md).
 
 | | |
 |---|---|
-| RTL | `rtl/core/` (`tpu_pkg.sv` holds the constants) and `rtl/peripherals/host_bridge.sv` |
-| Top levels | `boards/de1soc/top/tpu_top.sv` (bridge + core); in the board designs, `tpu_selftest.sv` and the GHRD component |
+| RTL | `rtl/core/` (`tpu-pkg.sv` holds the constants) and `rtl/peripherals/host-bridge.sv` |
+| Top levels | `boards/de1soc/top/tpu-top.sv` (bridge + core); in the board designs, `tpu-selftest.sv` and the GHRD component |
 | Reference model | `host/tpu/isa_model.py`: executes a program in order with the exact arithmetic; the RTL must match it word for word |
 | Design spec | the instruction-stream spec doc (claude.ai artifact `FP1ach14aGXhH2N1aCLCox`). This page describes what is built |
 | Status | Spec phases 1–3 built: the serial core, then the requantizer and on-core layer chaining, then overlapped tiles. **Hardware-validated on the DE1-SoC** ([`de1soc.md`](de1soc.md)). Phase 5 (DDR3) not started |

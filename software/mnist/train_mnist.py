@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """train and quantize the 144 -> 64 -> 10 int8 MLP (see docs/mnist.md for why it
-is shaped around the hardware's numerics). writes model/mnist_2x2_int8.npz"""
+is shaped around the hardware's numerics). writes model/mnist-2x2-int8.npz"""
 import gzip
 import os
 import subprocess
@@ -257,7 +257,7 @@ def main():
               file=sys.stderr)
 
     os.makedirs(MODEL_DIR, exist_ok=True)
-    out_path = os.path.join(MODEL_DIR, "mnist_2x2_int8.npz")
+    out_path = os.path.join(MODEL_DIR, "mnist-2x2-int8.npz")
     np.savez(out_path, **qmodel)
     print(f"\nSaved quantized model to {out_path}")
 

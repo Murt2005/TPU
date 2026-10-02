@@ -6,7 +6,7 @@ import numpy as np
 
 from train_mnist import IN_SIDE, downsample, hw_layer
 
-DEFAULT_MODEL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model", "mnist_2x2_int8.npz")
+DEFAULT_MODEL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model", "mnist-2x2-int8.npz")
 
 
 def load_model(path=DEFAULT_MODEL):

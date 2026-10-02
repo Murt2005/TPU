@@ -27,32 +27,32 @@ has the directory-level version.
 
 | File | What |
 |---|---|
-| `tpu_pkg.sv` | opcodes, engines, error codes, legal-bit masks, `wait_counts_reached` (mirrors `host/tpu/isa.py`) |
-| `tpu_core.sv` | host FIFOs, dispatcher, engine queues, WMEM and the parameter tables, the datapath wiring, status and perf counters |
+| `tpu-pkg.sv` | opcodes, engines, error codes, legal-bit masks, `wait_counts_reached` (mirrors `host/tpu/isa.py`) |
+| `tpu-core.sv` | host FIFOs, dispatcher, engine queues, WMEM and the parameter tables, the datapath wiring, status and perf counters |
 | `dispatch.sv` | in-order decode, range checks, routing, `WAIT` snapshots, the `SIGNAL` fence |
-| `load_engine.sv`, `weight_engine.sv`, `matmul_engine.sv`, `activate_engine.sv` | the four engines (control only) |
-| `unified_buffer.sv` | the UB memory and its port priorities |
-| `systolic_data_setup.sv` | the row skew (element *i* delayed *i* cycles) |
+| `load-engine.sv`, `weight-engine.sv`, `matmul-engine.sv`, `activate-engine.sv` | the four engines (control only) |
+| `unified-buffer.sv` | the UB memory and its port priorities |
+| `systolic-data-setup.sv` | the row skew (element *i* delayed *i* cycles) |
 | `pe.sv`, `mmu.sv` | the PE (`weight_current`/`weight_next`, flip) and the N × N array with the skewed weight bus |
-| `weight_fifo.sv` | the two-slot tile buffer between WMEM and the array |
+| `weight-fifo.sv` | the two-slot tile buffer between WMEM and the array |
 | `accumulator.sv` | column de-skew, row tags, the ACC memory, read-modify-write |
 | `bias.sv`, `activation.sv` | bias add; ReLU and the requantizer |
 | `fifo.sv` | the generic show-ahead FIFO |
 
-`rtl/peripherals/host_bridge.sv`: the 12-register Avalon-MM slave the host
+`rtl/peripherals/host-bridge.sv`: the 12-register Avalon-MM slave the host
 drives ([`isa.md`](isa.md) §4).
 
 ## `boards/de1soc/` — the board
 
 | Path | What |
 |---|---|
-| `top/tpu_top.sv` | `host_bridge` + `tpu_core` + power-on reset |
-| `top/tpu_selftest.sv`, `top/replay.sv` | the FPGA-only self-test: a ROM-fed Avalon master, results on LEDs/HEX, perf captures on SW9 + SW4..0 |
-| `top/hex_display.sv` | six seven-segment digits from 5-bit codes, behind the GHRD design's `hex_pio` |
+| `top/tpu-top.sv` | `host_bridge` + `tpu_core` + power-on reset |
+| `top/tpu-selftest.sv`, `top/replay.sv` | the FPGA-only self-test: a ROM-fed Avalon master, results on LEDs/HEX, perf captures on SW9 + SW4..0 |
+| `top/hex-display.sv` | six seven-segment digits from 5-bit codes, behind the GHRD design's `hex_pio` |
 | `fpga/README.md` | index of the FPGA builds |
-| `fpga/selftest/` | the self-test's Quartus project (`tpu_selftest.qpf/.qsf/.sdc`), `Makefile`, `gen_selftest.py` (the ROM transcript, expected words from the model), `README.md` |
-| `fpga/hps/` | the GHRD integration: `tpu_hw.tcl` (Platform Designer component), `add_tpu.tcl` (adds `tpu` + `hex_pio`), `patch_top.py` (wires the HEX decoder), `Makefile` (extract the GHRD from the rev H CD → generate → compile → `.rbf`; ARM tools), `README.md` |
-| `sw/isa_mmio.c` | ARM `/dev/mem` register server speaking `tb_isa`'s protocol |
+| `fpga/selftest/` | the self-test's Quartus project (`tpu-selftest.qpf/.qsf/.sdc`), `Makefile`, `gen_selftest.py` (the ROM transcript, expected words from the model), `README.md` |
+| `fpga/hps/` | the GHRD integration: `tpu_hw.tcl` (Platform Designer component), `add-tpu.tcl` (adds `tpu` + `hex_pio`), `patch_top.py` (wires the HEX decoder), `Makefile` (extract the GHRD from the rev H CD → generate → compile → `.rbf`; ARM tools), `README.md` |
+| `sw/isa-mmio.c` | ARM `/dev/mem` register server speaking `tb_isa`'s protocol |
 | `sw/setbaud.c` | 636-byte libc-free console baud setter (`termios2`) |
 
 ## `host/` — the Python package
@@ -72,13 +72,13 @@ drives ([`isa.md`](isa.md) §4).
 
 | Path | What |
 |---|---|
-| `unit/*_tb.sv`, `unit/check.svh` | the unit benches and their shared check header |
+| `unit/*-tb.sv`, `unit/check.svh` | the unit benches and their shared check header |
 | `unit/gen_requant.py` | requantizer vectors from `tpu.golden` for `activation_tb` |
 | `isa/test_isa_model.py` | the model against independent references (`make model-test`) |
 | `isa/test_isa_rtl.py` | the RTL against the model, word for word (`make rtl-test`), or the board with `serial:<port>` |
 | `isa/isa_progs.py` | random legal programs for the concurrency tests |
-| `verilator/tb_isa.cpp` | `tpu_top` as a register-level transport for `isa_device.py` |
-| `verilator/tb_isa_selftest.cpp` | runs the self-test top and reads its LEDs, HEX and capture slots back |
+| `verilator/tb-isa.cpp` | `tpu_top` as a register-level transport for `isa_device.py` |
+| `verilator/tb-isa-selftest.cpp` | runs the self-test top and reads its LEDs, HEX and capture slots back |
 
 See [`verification.md`](verification.md).
 
@@ -89,8 +89,8 @@ See [`verification.md`](verification.md).
 | `train_mnist.py` | train and quantize the 144 → 64 → 10 model |
 | `mnist_model.py` | the host reference: `load_model`, `quantize`, `predict_batch_offline`, `OfflineModel` |
 | `draw_demo.py` | the drawing demo: `--de1soc PORT [--baud]` or `--offline` |
-| `model/mnist_2x2_int8.npz` | the committed weights |
-| `de1soc/` | MNIST on the board's ARM: `make_data.py`, `mnist_tpu.c`, `Makefile`, `README.md` |
+| `model/mnist-2x2-int8.npz` | the committed weights |
+| `de1soc/` | MNIST on the board's ARM: `make_data.py`, `mnist-tpu.c`, `Makefile`, `README.md` |
 
 See [`mnist.md`](mnist.md).
 

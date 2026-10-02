@@ -22,7 +22,7 @@ rtl-sim: | $(SIM_DIR)
 		-CFLAGS "-std=c++17 -DTB_N=$(N) -DTB_WMEM_ROWS=$(WMEM_ROWS) \
 		         -DTB_UB_DEPTH=$(UB_DEPTH) -DTB_ACC_DEPTH=$(ACC_DEPTH) \
 		         -DTB_PARAM_DEPTH=$(PARAM_DEPTH)" \
-		$(CORE_RTL) $(TEST_DIR)/verilator/tb_isa.cpp -o tb_isa > /dev/null
+		$(CORE_RTL) $(TEST_DIR)/verilator/tb-isa.cpp -o tb_isa > /dev/null
 	@echo "rtl-sim: $(RTL_SIM) (N=$(N))"
 
 # the RTL against the model, word for word
@@ -49,8 +49,8 @@ selftest-sim: selftest-rom | $(SIM_DIR)
 	@mkdir -p $(dir $(ST_SIM))
 	@$(VERILATOR) --cc --exe --build -j 0 -Wall --Mdir $(dir $(ST_SIM)) verilator.vlt \
 		--top-module tpu_selftest -GARRAY_SIZE=$(N) -GROM_FILE='"$(abspath $(ST_HEX))"' \
-		-CFLAGS -std=c++17 $(CORE_RTL) $(HPS_DIR)/replay.sv $(HPS_DIR)/tpu_selftest.sv \
-		$(TEST_DIR)/verilator/tb_isa_selftest.cpp -o tb_isa_selftest > /dev/null
+		-CFLAGS -std=c++17 $(CORE_RTL) $(HPS_DIR)/replay.sv $(HPS_DIR)/tpu-selftest.sv \
+		$(TEST_DIR)/verilator/tb-isa-selftest.cpp -o tb_isa_selftest > /dev/null
 	@$(ST_SIM) $(ST_SLOTS)
 
 .PHONY: model-test rtl-sim rtl-test sim-test selftest-rom selftest-sim

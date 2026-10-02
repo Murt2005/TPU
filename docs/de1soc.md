@@ -92,8 +92,8 @@ not the RTL.
 
 ```sh
 make selftest-sim                          # Mac: build the ROM, run it in Verilator (must PASS)
-make -C boards/de1soc/fpga/selftest        # VM: compile -> output_files/tpu_selftest.rbf
-openFPGALoader -b de1Soc --probe-firmware … boards/de1soc/fpga/selftest/output_files/tpu_selftest.rbf
+make -C boards/de1soc/fpga/selftest        # VM: compile -> output_files/tpu-selftest.rbf
+openFPGALoader -b de1Soc --probe-firmware … boards/de1soc/fpga/selftest/output_files/tpu-selftest.rbf
 ```
 
 HEX3–0 show **`PASS`**, or else the failing test's mark and the mismatch

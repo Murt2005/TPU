@@ -9,12 +9,12 @@ TEST_DIR   := tests
 SIM_DIR    := sim
 
 # the core, in compile order: tpu_pkg first (everything imports it)
-CORE_RTL := $(CORE_DIR)/tpu_pkg.sv $(CORE_DIR)/fifo.sv $(CORE_DIR)/systolic_data_setup.sv \
-            $(CORE_DIR)/pe.sv $(CORE_DIR)/mmu.sv $(CORE_DIR)/weight_fifo.sv \
-            $(CORE_DIR)/unified_buffer.sv $(CORE_DIR)/accumulator.sv $(CORE_DIR)/bias.sv \
-            $(CORE_DIR)/activation.sv $(CORE_DIR)/dispatch.sv $(CORE_DIR)/load_engine.sv \
-            $(CORE_DIR)/weight_engine.sv $(CORE_DIR)/matmul_engine.sv $(CORE_DIR)/activate_engine.sv \
-            $(CORE_DIR)/tpu_core.sv $(PERIPH_DIR)/host_bridge.sv $(HPS_DIR)/tpu_top.sv
+CORE_RTL := $(CORE_DIR)/tpu-pkg.sv $(CORE_DIR)/fifo.sv $(CORE_DIR)/systolic-data-setup.sv \
+            $(CORE_DIR)/pe.sv $(CORE_DIR)/mmu.sv $(CORE_DIR)/weight-fifo.sv \
+            $(CORE_DIR)/unified-buffer.sv $(CORE_DIR)/accumulator.sv $(CORE_DIR)/bias.sv \
+            $(CORE_DIR)/activation.sv $(CORE_DIR)/dispatch.sv $(CORE_DIR)/load-engine.sv \
+            $(CORE_DIR)/weight-engine.sv $(CORE_DIR)/matmul-engine.sv $(CORE_DIR)/activate-engine.sv \
+            $(CORE_DIR)/tpu-core.sv $(PERIPH_DIR)/host-bridge.sv $(HPS_DIR)/tpu-top.sv
 
 all: test
 

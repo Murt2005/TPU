@@ -10,9 +10,9 @@ CD into `build/` at build time.
 | File | Role |
 |---|---|
 | `tpu_hw.tcl` | Platform Designer component: Avalon-MM slave, word addressing, read latency 1, waitrequest on writes |
-| `add_tpu.tcl`, `patch_top.py` | `qsys-script` edit: add `tpu` at offset 0 of `h2f_lw` and `hex_pio` at `0x10100`, both on `clk_0`; then wire `hex_pio` to `hex_display` in Terasic's `ghrd_top.v` |
+| `add-tpu.tcl`, `patch_top.py` | `qsys-script` edit: add `tpu` at offset 0 of `h2f_lw` and `hex_pio` at `0x10100`, both on `clk_0`; then wire `hex_pio` to `hex_display` in Terasic's `ghrd_top.v` |
 | `Makefile` | extract the GHRD → add the TPU and `hex_pio` → `qsys-generate` → compile → uncompressed `.rbf`; also builds `isa_mmio` and `setbaud` |
-| `../../sw/isa_mmio.c` | ARM register server speaking `tb_isa`'s protocol, so `IsaDevice` drives the board as it drives Verilator |
+| `../../sw/isa-mmio.c` | ARM register server speaking `tb_isa`'s protocol, so `IsaDevice` drives the board as it drives Verilator |
 
 ## Build (in the OrbStack `quartus` VM)
 

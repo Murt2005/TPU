@@ -54,7 +54,7 @@ and fails on 5.052.
 - the compiled MNIST program is hazard-free with every `WAIT` necessary.
 
 Then `make rtl-test` (run at N = 8 and 4 by `sim-test`) drives `tpu_top`
-through `tests/verilator/tb_isa.cpp` and requires every output word to equal
+through `tests/verilator/tb-isa.cpp` and requires every output word to equal
 the model's:
 - every decode error, `CTRL.RESET`, `UNDERFLOW`, `IDLE`;
 - 40 random single layers, including K split across `MATMUL`s;

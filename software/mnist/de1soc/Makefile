@@ -14,11 +14,11 @@ build/model.bin: make_data.py
 
 # -ffp-contract=off: no fused multiply-adds, so preprocessing rounds like numpy
 arm: build/mnist_tpu
-build/mnist_tpu: mnist_tpu.c
+build/mnist_tpu: mnist-tpu.c
 	arm-linux-gnueabihf-gcc $(CFLAGS) -static -s -o $@ $< -lm
 
 sim: build/mnist_tpu_sim
-build/mnist_tpu_sim: mnist_tpu.c
+build/mnist_tpu_sim: mnist-tpu.c
 	$(CC) -DSIM $(CFLAGS) -o $@ $< -lm
 
 # the whole flow against Verilator (make rtl-sim first): bit-exact, not timing

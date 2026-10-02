@@ -1,7 +1,7 @@
 # DE1-SoC FPGA-only self-test. `make rom` runs on the Mac (needs the repo venv and
 # the MNIST model); `make` runs where Quartus is (the x86 Linux VM)
 REPO    := ../../../..
-PROJECT := tpu_selftest
+PROJECT := tpu-selftest
 OUT     := output_files
 SOF     := $(OUT)/$(PROJECT).sof
 RBF     := $(OUT)/$(PROJECT).rbf
@@ -14,7 +14,7 @@ rom:
 	cd $(REPO) && $(MAKE) --no-print-directory selftest-rom N=8
 
 $(SOF): isa_selftest.hex $(PROJECT).qsf $(PROJECT).sdc $(wildcard $(REPO)/rtl/core/*.sv) \
-        $(wildcard ../../top/*.sv) $(REPO)/rtl/peripherals/host_bridge.sv
+        $(wildcard ../../top/*.sv) $(REPO)/rtl/peripherals/host-bridge.sv
 	quartus_sh --flow compile $(PROJECT) -c $(PROJECT)
 
 sof: $(SOF)

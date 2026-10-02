@@ -33,7 +33,7 @@ make -C ../../../.. selftest-sim         # the same ROM through Verilator: must 
 # in the x86 Linux VM, same path (OrbStack mounts /Users)
 make                                     # quartus_sh --flow compile + .rbf
 # on the Mac
-openFPGALoader -b de1Soc --probe-firmware <path>/blaster_6810.hex output_files/tpu_selftest.rbf
+openFPGALoader -b de1Soc --probe-firmware <path>/blaster_6810.hex output_files/tpu-selftest.rbf
 ```
 
 `--index-chain 1`: the DE1-SoC's JTAG chain has the HPS's debug port first and

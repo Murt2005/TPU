@@ -42,7 +42,7 @@ host bus, the power-on reset, pins, the self-test harness) lives in
 ## 2. Inside `tpu_core`
 
 Control and datapath are separate files. The four engines are state machines
-that sequence the TPUv1 datapath blocks; `tpu_core.sv` wires the blocks
+that sequence the TPUv1 datapath blocks; `tpu-core.sv` wires the blocks
 between them.
 
 ```
@@ -62,13 +62,13 @@ between them.
 
 | File | Does |
 |---|---|
-| `tpu_pkg.sv` | opcodes, engine numbers, error codes, per-opcode legal-bit masks, `wait_counts_reached` (mirrors `host/tpu/isa.py`) |
+| `tpu-pkg.sv` | opcodes, engine numbers, error codes, per-opcode legal-bit masks, `wait_counts_reached` (mirrors `host/tpu/isa.py`) |
 | `dispatch.sv` | decodes one instruction per cycle in order: legal bits, range checks (with a shadow WBASE), routing to the engine queues, `WAIT` snapshots of the per-engine dispatch counts, the `SIGNAL` fence, `ERR`/`ERR_SEQ` |
-| `load_engine.sv` | `WR_WMEM`/`WR_UB`/`WR_BIAS`/`WR_QUANT`: gathers 32-bit data words into rows (N int8) or entries (N int32) and writes them. Holds a UB entry's last word while ACT owns the UB write port |
-| `weight_engine.sv` | `SET_WBASE`, and the weight half of `MATMUL`: one WMEM row read per cycle into the weight FIFO's free slot, back to back across tiles |
-| `matmul_engine.sv` | the compute half of `MATMUL`: the overlap schedule (§4). Issues UB row reads with the flip bit, the next tile's weight rows onto the mmu's bus, and a `{overwrite, ACC row}` tag per row |
-| `activate_engine.sv` | `ACTIVATE` and `RD_UB`: reads ACC rows (when MM isn't), sequences bias → activation, writes the UB or emits words to the out FIFO |
-| `tpu_core.sv` | the host FIFOs with LEVELS counts, the dispatcher and queues, WMEM and the parameter tables, the datapath wiring, completion counters, perf counters |
+| `load-engine.sv` | `WR_WMEM`/`WR_UB`/`WR_BIAS`/`WR_QUANT`: gathers 32-bit data words into rows (N int8) or entries (N int32) and writes them. Holds a UB entry's last word while ACT owns the UB write port |
+| `weight-engine.sv` | `SET_WBASE`, and the weight half of `MATMUL`: one WMEM row read per cycle into the weight FIFO's free slot, back to back across tiles |
+| `matmul-engine.sv` | the compute half of `MATMUL`: the overlap schedule (§4). Issues UB row reads with the flip bit, the next tile's weight rows onto the mmu's bus, and a `{overwrite, ACC row}` tag per row |
+| `activate-engine.sv` | `ACTIVATE` and `RD_UB`: reads ACC rows (when MM isn't), sequences bias → activation, writes the UB or emits words to the out FIFO |
+| `tpu-core.sv` | the host FIFOs with LEVELS counts, the dispatcher and queues, WMEM and the parameter tables, the datapath wiring, completion counters, perf counters |
 
 Every engine pops its queue only when idle. A `WAIT` at the head blocks it
 until the masked engines' completion counts reach the snapshot.
@@ -77,11 +77,11 @@ until the masked engines' completion counts reach the snapshot.
 
 | File | TPUv1 block | Does | Latency |
 |---|---|---|---|
-| `unified_buffer.sv` | Unified Buffer | 16384 × N int8 activations; ACT's write beats LD's, MM's read beats ACT's | read 1 cycle |
-| `systolic_data_setup.sv` | Systolic data setup | delays element *i* of a row by *i* cycles; carries the flip bit as a 9th bit | lane *i*: *i* cycles |
+| `unified-buffer.sv` | Unified Buffer | 16384 × N int8 activations; ACT's write beats LD's, MM's read beats ACT's | read 1 cycle |
+| `systolic-data-setup.sv` | Systolic data setup | delays element *i* of a row by *i* cycles; carries the flip bit as a 9th bit | lane *i*: *i* cycles |
 | `pe.sv` | MAC cell | `weight_current` computing, `weight_next` loading; partial sum = weight·activation + the partial sum from above | 1 cycle |
 | `mmu.sv` | Matrix multiply unit | N × N PEs; a row-select weight bus per column, skewed by the column index | row *r*, column *c*: *r* + *c* + 1 |
-| `weight_fifo.sv` | Weight FIFO | two tile slots (ping-pong): WT fills one while MM drains the other; a slot released this cycle refills this cycle | — |
+| `weight-fifo.sv` | Weight FIFO | two tile slots (ping-pong): WT fills one while MM drains the other; a slot released this cycle refills this cycle | — |
 | `accumulator.sv` | Accumulators | per-column FIFOs re-align the skewed outputs into rows; the row tag picks the ACC row; overwrite, or read-modify-write (32-bit wrap) | RMW: read at pop, write next cycle |
 | `bias.sv` | (normalize) | per-column 32-bit add, wraps | combinational |
 | `activation.sv` | Activation | ReLU or identity, then the requantizer's multiply and round stages (§5) | 2 registered stages |
@@ -180,10 +180,10 @@ packing ([`backlog.md`](backlog.md)).
 
 | File | Does |
 |---|---|
-| `rtl/peripherals/host_bridge.sv` | the 12-register Avalon-MM slave ([`isa.md`](isa.md) §4): fixed read latency 1, `waitrequest` only on writes into a full FIFO, single clock domain |
-| `boards/de1soc/top/tpu_top.sv` | `host_bridge` + `tpu_core` + a 256-cycle power-on reset, so the core doesn't depend on `reset_n` pulsing |
-| `boards/de1soc/top/tpu_selftest.sv`, `replay.sv` | the FPGA-only self-test: a ROM-fed Avalon master replays a register transcript into `tpu_top` and reports on LEDs/HEX |
-| `boards/de1soc/top/hex_display.sv` | the HEX decoder behind the GHRD's `hex_pio` (5-bit code per digit) |
+| `rtl/peripherals/host-bridge.sv` | the 12-register Avalon-MM slave ([`isa.md`](isa.md) §4): fixed read latency 1, `waitrequest` only on writes into a full FIFO, single clock domain |
+| `boards/de1soc/top/tpu-top.sv` | `host_bridge` + `tpu_core` + a 256-cycle power-on reset, so the core doesn't depend on `reset_n` pulsing |
+| `boards/de1soc/top/tpu-selftest.sv`, `replay.sv` | the FPGA-only self-test: a ROM-fed Avalon master replays a register transcript into `tpu_top` and reports on LEDs/HEX |
+| `boards/de1soc/top/hex-display.sv` | the HEX decoder behind the GHRD's `hex_pio` (5-bit code per digit) |
 | `boards/de1soc/fpga/hps/tpu_hw.tcl` | `tpu_top` as a Platform Designer component on the HPS lightweight bridge |
 
 ## 8. The software around it

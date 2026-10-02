@@ -1,6 +1,9 @@
 `verilator_config
 // lint waivers: each one is an audited don't-care, add new ones with a reason
 
+// file names use dashes, module names can't: load-engine.sv holds load_engine
+lint_off -rule DECLFILENAME
+
 // $unit-scope import of tpu_pkg is the only form yosys accepts
 lint_off -rule IMPORTSTAR -file "*rtl/core/*.sv"
 
@@ -8,20 +11,20 @@ lint_off -rule IMPORTSTAR -file "*rtl/core/*.sv"
 lint_off -rule PINCONNECTEMPTY -file "*rtl/core/accumulator.sv"
 
 // each engine decodes only the instruction fields it executes
-lint_off -rule UNUSEDSIGNAL -file "*rtl/core/*_engine.sv" -match "*'instruction'*"
+lint_off -rule UNUSEDSIGNAL -file "*rtl/core/*-engine.sv" -match "*'instruction'*"
 lint_off -rule UNUSEDSIGNAL -file "*rtl/core/dispatch.sv" -match "*'field_function'*"
 
 // the read grants are implied by MM's priority; dispatched is exported for debug
-lint_off -rule UNUSEDSIGNAL -file "*rtl/core/tpu_core.sv"
+lint_off -rule UNUSEDSIGNAL -file "*rtl/core/tpu-core.sv"
 
 // mirrors host/tpu/isa.py, not every constant is used by the RTL yet
-lint_off -rule UNUSEDPARAM -file "*rtl/core/tpu_pkg.sv"
+lint_off -rule UNUSEDPARAM -file "*rtl/core/tpu-pkg.sv"
 
 // mmu: inner rows' valids and the last column's pass-through outputs end at the edge
 lint_off -rule UNUSEDSIGNAL -file "*rtl/core/mmu.sv"
 
 // DE1-SoC self-test top: KEY3..1 are board pins it doesn't use
-lint_off -rule UNUSEDSIGNAL -file "*boards/de1soc/top/tpu_selftest.sv" -match "*'KEY'*"
+lint_off -rule UNUSEDSIGNAL -file "*boards/de1soc/top/tpu-selftest.sv" -match "*'KEY'*"
 // SW8..5 are unused pins; the display shows a capture's low 24 bits
-lint_off -rule UNUSEDSIGNAL -file "*boards/de1soc/top/tpu_selftest.sv" -match "*'sw_q'*"
-lint_off -rule UNUSEDSIGNAL -file "*boards/de1soc/top/tpu_selftest.sv" -match "*'cap_value'*"
+lint_off -rule UNUSEDSIGNAL -file "*boards/de1soc/top/tpu-selftest.sv" -match "*'sw_q'*"
+lint_off -rule UNUSEDSIGNAL -file "*boards/de1soc/top/tpu-selftest.sv" -match "*'cap_value'*"

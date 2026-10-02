@@ -13,7 +13,7 @@ proof that the array computes something real.
 - int8 weights and activations, int16 bias.
 
 `software/mnist/train_mnist.py` trains and quantizes it into
-`software/mnist/model/mnist_2x2_int8.npz` (~5 KB, committed, so nothing needs
+`software/mnist/model/mnist-2x2-int8.npz` (~5 KB, committed, so nothing needs
 training). Retraining downloads MNIST (~11 MB, cached in
 `software/mnist/data/`, gitignored).
 
@@ -101,8 +101,8 @@ python3 software/mnist/train_mnist.py                # retrain (overwrites the c
 | `software/mnist/train_mnist.py` | train and quantize, around §2–3; `downsample`, `hw_layer` |
 | `software/mnist/mnist_model.py` | `load_model`, `quantize`, `predict_batch_offline` (the host reference), `OfflineModel` for the demo |
 | `software/mnist/draw_demo.py` | the Tkinter drawing demo: `--de1soc PORT [--baud]` or `--offline` |
-| `software/mnist/de1soc/` | `make_data.py`, `mnist_tpu.c` (`bench`, `serve`), `Makefile`, and its own README |
-| `software/mnist/model/mnist_2x2_int8.npz` | the committed weights |
+| `software/mnist/de1soc/` | `make_data.py`, `mnist-tpu.c` (`bench`, `serve`), `Makefile`, and its own README |
+| `software/mnist/model/mnist-2x2-int8.npz` | the committed weights |
 
 ## 8. Open work
 

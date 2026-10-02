@@ -7,7 +7,7 @@ for anything touching synthesis or timing, the board tiers in
 ## High value
 
 **ARM preprocessing.** 48.9 µs of the 109.5 µs MNIST image is
-`mnist_tpu.c`'s float downsample and quantize. It's bit-exact with numpy,
+`mnist-tpu.c`'s float downsample and quantize. It's bit-exact with numpy,
 which constrains how it can change. An integer or table-driven version has
 to stay byte-identical on all 10,000 test images (the bench checks this).
 

@@ -99,9 +99,9 @@ checks every result against the reference model:
 
 ```bash
 make selftest-sim                             # Mac: generate the ROM, run it in Verilator — must PASS
-make -C boards/de1soc/fpga/selftest           # VM: ~10 min -> output_files/tpu_selftest.rbf
+make -C boards/de1soc/fpga/selftest           # VM: ~10 min -> output_files/tpu-selftest.rbf
 openFPGALoader -b de1Soc --probe-firmware blaster_6810.hex \
-    boards/de1soc/fpga/selftest/output_files/tpu_selftest.rbf
+    boards/de1soc/fpga/selftest/output_files/tpu-selftest.rbf
 ```
 
 HEX3–0 should read **`PASS`**, with LEDR0 lit. A failure shows the failing test's
@@ -281,7 +281,7 @@ TPU/
 | `make -C software/mnist/de1soc data` / `arm` / `sim-bench` | Mac / VM / Mac | MNIST model + test data / the ARM program / the ARM program against Verilator |
 
 The array size is `ARRAY_SIZE` on `tpu_top` (8 in both board builds; set in
-`tpu_selftest.sv` and `boards/de1soc/fpga/hps/tpu_hw.tcl`), with the memory depths
+`tpu-selftest.sv` and `boards/de1soc/fpga/hps/tpu_hw.tcl`), with the memory depths
 beside it. 8×8 uses 78 of the Cyclone V's 87 DSP blocks, so a bigger array needs
 DSP packing ([`docs/backlog.md`](docs/backlog.md)). Measured fit and timing are in
 [`docs/de1soc.md`](docs/de1soc.md) §1.

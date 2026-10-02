@@ -39,11 +39,11 @@ Quartus designs and run the board tiers: the self-test **PASS**, then
 
 ## Adding a unit bench
 
-1. Write `tests/unit/<name>_tb.sv` as a module `<name>_tb`. `` `include
+1. Write `tests/unit/<name>-tb.sv` as a module `<name>_tb`. `` `include
    "check.svh" `` inside it, then use `` `TEST("…") ``, `` `CHECK(cond, msg) ``
    and `` `CHECK_EQ(got, want, msg) ``, and end with `tb_done();`, which prints
    the summary and fails the run if any check did.
-2. That's all. `mk/unit.mk` picks up every `tests/unit/*_tb.sv` and compiles it
+2. That's all. `mk/unit.mk` picks up every `tests/unit/*-tb.sv` and compiles it
    against the core's files.
 
 Before trusting a new bench, break the module it tests on purpose and make sure
@@ -65,12 +65,16 @@ the bench fails.
   **UB** (unified buffer), **WMEM** (weight memory), **ACC** (accumulator
   memory) and **MMU** (the array), e.g. `activate_UB_write_address`. Opcode
   mnemonics stay as the ISA spells them (`OPCODE_WR_WMEM`).
+- File names use dashes between words (`load-engine.sv`, `tb-isa.cpp`); the
+  module inside keeps underscores (`load_engine`), since identifiers can't
+  contain `-`. Python files stay snake_case so they can be imported, and
+  Platform Designer's `tpu_hw.tcl` keeps the `_hw.tcl` suffix it requires.
 - Ports, declarations and runs of assignments are aligned in columns.
 - Synchronous, active-high `reset` inside modules (only the top exposes
   active-low `reset_n`); every sequential block is `if (reset) ... else ...`.
 - Tunables are `parameter int`; derived values are `localparam`.
 - The instruction encoding lives in one table, `host/tpu/isa.py`, mirrored by
-  `rtl/core/tpu_pkg.sv`. Change both together, and reuse the constants rather
+  `rtl/core/tpu-pkg.sv`. Change both together, and reuse the constants rather
   than re-declaring literals.
 - Each module opens with a short comment naming what it is. Beyond that,
   comments are sparse: short, lowercase (unless the first word is all caps),

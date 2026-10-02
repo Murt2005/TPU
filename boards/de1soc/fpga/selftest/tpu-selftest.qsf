@@ -5,31 +5,31 @@ set_global_assignment -name TOP_LEVEL_ENTITY tpu_selftest
 set_global_assignment -name PROJECT_OUTPUT_DIRECTORY output_files
 set_global_assignment -name ERROR_CHECK_FREQUENCY_DIVISOR 256
 set_global_assignment -name VERILOG_MACRO "SYNTHESIS=1"
-set_global_assignment -name SDC_FILE tpu_selftest.sdc
+set_global_assignment -name SDC_FILE tpu-selftest.sdc
 # parallel synthesis helpers deadlock on their IPC pipes under Rosetta (OrbStack VM)
 set_global_assignment -name NUM_PARALLEL_PROCESSORS 1
 
 # tpu_pkg first: everything below imports it
-set_global_assignment -name SYSTEMVERILOG_FILE ../../../../rtl/core/tpu_pkg.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../../../rtl/core/tpu-pkg.sv
 set_global_assignment -name SYSTEMVERILOG_FILE ../../../../rtl/core/fifo.sv
-set_global_assignment -name SYSTEMVERILOG_FILE ../../../../rtl/core/systolic_data_setup.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../../../rtl/core/systolic-data-setup.sv
 set_global_assignment -name SYSTEMVERILOG_FILE ../../../../rtl/core/pe.sv
 set_global_assignment -name SYSTEMVERILOG_FILE ../../../../rtl/core/mmu.sv
-set_global_assignment -name SYSTEMVERILOG_FILE ../../../../rtl/core/weight_fifo.sv
-set_global_assignment -name SYSTEMVERILOG_FILE ../../../../rtl/core/unified_buffer.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../../../rtl/core/weight-fifo.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../../../rtl/core/unified-buffer.sv
 set_global_assignment -name SYSTEMVERILOG_FILE ../../../../rtl/core/accumulator.sv
 set_global_assignment -name SYSTEMVERILOG_FILE ../../../../rtl/core/bias.sv
 set_global_assignment -name SYSTEMVERILOG_FILE ../../../../rtl/core/activation.sv
 set_global_assignment -name SYSTEMVERILOG_FILE ../../../../rtl/core/dispatch.sv
-set_global_assignment -name SYSTEMVERILOG_FILE ../../../../rtl/core/load_engine.sv
-set_global_assignment -name SYSTEMVERILOG_FILE ../../../../rtl/core/weight_engine.sv
-set_global_assignment -name SYSTEMVERILOG_FILE ../../../../rtl/core/matmul_engine.sv
-set_global_assignment -name SYSTEMVERILOG_FILE ../../../../rtl/core/activate_engine.sv
-set_global_assignment -name SYSTEMVERILOG_FILE ../../../../rtl/core/tpu_core.sv
-set_global_assignment -name SYSTEMVERILOG_FILE ../../../../rtl/peripherals/host_bridge.sv
-set_global_assignment -name SYSTEMVERILOG_FILE ../../top/tpu_top.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../../../rtl/core/load-engine.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../../../rtl/core/weight-engine.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../../../rtl/core/matmul-engine.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../../../rtl/core/activate-engine.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../../../rtl/core/tpu-core.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../../../rtl/peripherals/host-bridge.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../top/tpu-top.sv
 set_global_assignment -name SYSTEMVERILOG_FILE ../../top/replay.sv
-set_global_assignment -name SYSTEMVERILOG_FILE ../../top/tpu_selftest.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../top/tpu-selftest.sv
 
 # pins: DE1-SoC user manual tables 3-5..3-8, cross-checked against a published DE1-SoC.qsf
 set_location_assignment PIN_AF14 -to CLOCK_50

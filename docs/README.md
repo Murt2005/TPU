@@ -45,6 +45,6 @@ Working on the code:
   are history: their code is at the git tag `pico2-ice-final`, and
   `performance.md` and `utilization.md` keep their numbers, marked as such.
 - **One source for the encoding.** The instruction fields live in one table,
-  `host/tpu/isa.py`, mirrored by `rtl/core/tpu_pkg.sv`.
+  `host/tpu/isa.py`, mirrored by `rtl/core/tpu-pkg.sv`.
 - **Code comments are sparse on purpose.** They mark decisions and low-level
   traps; the explanations live here.
