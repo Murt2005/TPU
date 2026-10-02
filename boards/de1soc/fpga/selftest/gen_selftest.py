@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""isa_replay's ROM: the instruction-stream tests as a register transcript, every
+"""replay's ROM: the core's tests as a register transcript, every
 expected word from the reference model. usage: gen_selftest.py [out.hex] [--n 8]"""
 import argparse
 import sys

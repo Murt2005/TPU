@@ -1,25 +1,26 @@
-# The instruction-stream core
+# The instruction set
 
-The DE1-SoC runs a different core from the pico2-ice. Instead of the
-byte-framed command protocol ([`protocol.md`](protocol.md)), it executes a
-stream of **64-bit instructions** that four independent engines carry out
-concurrently. Weights, activations, layer outputs and requantization
-parameters all stay in on-chip memories between instructions. A whole
-multi-layer network runs on the core; only the input goes in and only the
-final scores come out.
+The programmer's view of the core: the 64-bit instructions, the four engines
+that execute them concurrently, `WAIT`/`SIGNAL`, decode errors, how data is
+laid out in the on-chip memories, the host register interface, the
+requantizer's arithmetic, and how a network compiles. Weights, activations,
+layer outputs and requantization parameters stay on chip between
+instructions, so a whole multi-layer network runs on the core: only the input
+goes in and only the final scores come out. The hardware that implements it
+is in [`architecture.md`](architecture.md).
 
 | | |
 |---|---|
-| RTL | `rtl/isa/` (+ `rtl/core/fifo.sv`, `systolic_data_setup.sv`) and `rtl/peripherals/isa_bridge.sv` |
-| Top levels | `boards/de1soc/top/tpu_isa_top.sv` (bridge + core); in the board designs, `tpu_isa_selftest.sv` and the GHRD component |
+| RTL | `rtl/core/` (`tpu_pkg.sv` holds the constants) and `rtl/peripherals/host_bridge.sv` |
+| Top levels | `boards/de1soc/top/tpu_top.sv` (bridge + core); in the board designs, `tpu_selftest.sv` and the GHRD component |
 | Reference model | `host/tpu/isa_model.py`: executes a program in order with the exact arithmetic; the RTL must match it word for word |
 | Design spec | the instruction-stream spec doc (claude.ai artifact `FP1ach14aGXhH2N1aCLCox`). This page describes what is built |
-| Status | Phases 1–3 built: serial core, then requantizer and on-core layer chaining, then overlapped tiles. **Hardware-validated on the DE1-SoC** ([`de1soc.md`](de1soc.md)). Phase 5 (DDR3) not started |
+| Status | Spec phases 1–3 built: the serial core, then the requantizer and on-core layer chaining, then overlapped tiles. **Hardware-validated on the DE1-SoC** ([`de1soc.md`](de1soc.md)). Phase 5 (DDR3) not started |
 
 ## 1. Shape
 
 ```
- host ── Avalon-MM ──► isa_bridge
+ host ── Avalon-MM ──► host_bridge
                          ├─► instruction FIFO (512 × 64) ──► dispatcher ──► LD │ WT │ MM │ ACT queues (8 deep)
                          ├─► data FIFO (1024 × 32) ──► LD ──► WMEM, UB, bias table, quant table
                          └─◄ out FIFO  (1024 × 32) ◄──────────────────────────────────────────── ACT
@@ -30,7 +31,7 @@ final scores come out.
 ```
 
 `N` is the array size (`N = 8` in every board build, so 64 PEs). The memory
-depths are parameters of `isa_core` (`WMEM_ROWS`, `UB_DEPTH`, `ACC_DEPTH`,
+depths are parameters of `tpu_core` (`WMEM_ROWS`, `UB_DEPTH`, `ACC_DEPTH`,
 `PARAM_DEPTH`). The figures above are the defaults the board builds use.
 
 ### The four engines
@@ -138,7 +139,7 @@ by the instruction fields:
 Data words are 32-bit. int8 groups pack 4 per word, little-endian, and each
 row is padded to whole words.
 
-## 4. Host interface (`isa_bridge`)
+## 4. Host interface (`host_bridge`)
 
 An Avalon-MM slave with 12 word registers, a fixed read latency of 1, and
 `waitrequest` only on writes into a full FIFO. On the DE1-SoC it sits at
@@ -167,7 +168,7 @@ exactly this. The links behind it:
 
 | Link | Reaches | Use |
 |---|---|---|
-| `IsaSimLink` | `tb_isa`, a Verilator build of `tpu_isa_top` (`make isa-sim`) | `make isa-test` |
+| `IsaSimLink` | `tb_isa`, a Verilator build of `tpu_top` (`make rtl-sim`) | `make sim-test` |
 | `IsaSerialLink` | the board: runs `isa_mmio` (an ARM `/dev/mem` register server) over the HPS console | `test_isa_rtl.py serial:<port>` |
 | (C, on the ARM) | `/dev/mem` directly | `software/mnist/de1soc/mnist_tpu` |
 
@@ -197,35 +198,11 @@ since a single-cycle version missed 50 MHz by 4 ns.
 
 ## 6. Overlapped tiles
 
-The pico2-ice core loads, computes and drains each tile serially, and its
-array feeds new rows only 9–16% of the time ([`utilization.md`](utilization.md)).
-This core overlaps tile `j+1`'s weight load with tile `j`'s compute:
-
-- **PE** (`isa_pe.sv`): two weights, `w_cur` (computing) and `w_next`
-  (loading). The first activation row of each tile carries a **flip** bit
-  that rides through the array with the data, and at each PE it promotes
-  `w_next` to `w_cur` on exactly the cycle that tile's data arrives.
-- **Weight bus** (`isa_array.sv`): one row-select bus per column, skewed
-  column `c` by `c` cycles, so a weight row lands in each column the same
-  distance ahead of its flip.
-- **Schedule** (`isa_mm.sv`): a window of `max(m, N)` cycles per tile. It
-  streams tile `j`'s `m` activation rows and, in its last `N` cycles, loads
-  tile `j+1`'s rows into `w_next`. A missing tile freezes the whole window
-  (counted in `PERF_MM_WSTALL`). That only ever widens the gaps the PEs rely
-  on.
-- **WT** (`isa_wt.sv`): two tile slots, and a slot MM releases is refilled
-  the same cycle. Without that, `m <= N` stalled about half a cycle per tile.
-- **Accumulator**: ACC read-modify-write after a per-column de-skew. The same
-  ACC row comes round at most once per window (≥ `N` ≥ 2 cycles), so the
-  write always lands before the next read.
-
-**Measured**, both in Verilator and on the board's self-test: each extra
-tile costs exactly `max(m, N)` cycles, with no extra WSTALL, at
-`m = 1, N, 2N+3`. At `m >= N` the array is fed every cycle.
-
-Simulation-only checks in every PE (`ifndef SYNTHESIS`, `$fatal`) assert
-that no weight is overwritten before its flip and no flip happens without a
-pending weight.
+`MATMUL` runs one tile per max(m, N) cycles: while tile *j*'s m rows stream
+through the array, tile *j*+1's weights load into the PEs' second weight
+register, and the next tile's first row swaps them in. A program sees this
+only as throughput. The schedule and the PE are described in
+[`architecture.md`](architecture.md) §4.
 
 ## 7. Compiling a network
 
@@ -245,8 +222,8 @@ words out. See [`mnist.md`](mnist.md) §8 for the board numbers.
 
 | What | How | Result |
 |---|---|---|
-| Model vs independent references | `make isa-model-test`: random layers vs `tpu.golden`, MNIST layer 1 vs `hw_layer`, requant vs host rounding, `isa_waits` on the compiled program | pass |
-| RTL vs model, word for word | `make isa-test`: every decode error, 40 random layers (incl. split K), MNIST, requantizer (every int16 + edges + random int32, three tables), 40 random concurrent programs with inserted `WAIT`s (most diverge without them), cycle-exact tile rate, at N = 8 and N = 4 | pass |
+| Model vs independent references | `make model-test`: random layers vs `tpu.golden`, MNIST layer 1 vs `hw_layer`, requant vs host rounding, `isa_waits` on the compiled program | pass |
+| RTL vs model, word for word | `make sim-test`: every decode error, 40 random layers (incl. split K), MNIST, requantizer (every int16 + edges + random int32, three tables), 40 random concurrent programs with inserted `WAIT`s (most diverge without them), cycle-exact tile rate, at N = 8 and N = 4 | pass |
 | Netlist, no host | `boards/de1soc/fpga/selftest`: the tests as a ROM transcript replayed into the bridge on the FPGA, plus on-chip tile-rate checks | **PASS on the board** |
 | Netlist, from the ARM | `test_isa_rtl.py serial:<port>`: the whole suite over the console | **all functional tests pass on the board** |
 | Whole application | `mnist_tpu bench`: 10,000 MNIST images | **10,000/10,000 equal to the model on the board** |

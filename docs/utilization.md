@@ -4,9 +4,12 @@ How much of the array actually does work, how much of the wire actually
 carries operands, and what a command interface designed around those answers
 would look like.
 
-> **Since this was written:** the overlap (§2) and the instruction stream
-> (§5) were both built, as a new core rather than as changes to this one.
-> That core, [`isa.md`](isa.md), runs on the DE1-SoC. Measured there: each
+> **History.** This measured the first core, on the retired pico2-ice; its
+> code is at the git tag `pico2-ice-final`, and file paths and docs named
+> below refer to that tag. Since this was written, the overlap (§2) and the
+> instruction stream (§5) were both built, as a new core rather than as
+> changes to this one. That core ([`architecture.md`](architecture.md),
+> [`isa.md`](isa.md)) runs on the DE1-SoC. Measured there: each
 > tile costs exactly `max(m, N)` cycles, so at m ≥ N the array is fed **every
 > cycle**, against 9–16% here. A legacy 8×8/M_TILE=8 pass is 49 cycles; the
 > same tile is 8 cycles there (6.1×). The numbers below are the legacy
@@ -59,7 +62,7 @@ drains to completion before the next begins.
 The second-order cost is the one that matters. Because the sequencer
 serializes *receive → compute → receive*, it stops consuming RX between
 tiles — and that is the **sole** reason the SPI write clock is capped at
-`CLK/6` ([`protocol.md`](protocol.md) §3). One change lifts both ceilings:
+`CLK/6` (`docs/protocol.md` §3, at the tag). One change lifts both ceilings:
 
 - per-tile cost falls from 45–49 cycles toward the `M_TILE`-cycle streaming
   limit (**3–6×**, projected)

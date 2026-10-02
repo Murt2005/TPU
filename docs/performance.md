@@ -3,11 +3,14 @@
 Where the time and the LUTs actually go. Every number here was measured on
 this repo's hardware and toolchain — nothing is estimated unless it says so.
 
-## 0. The DE1-SoC (current)
+## 0. The DE1-SoC
 
-The instruction-stream core ([`isa.md`](isa.md)) on the DE1-SoC, 8×8 array
-at 50 MHz, driven by the board's own ARM. All numbers are measured on the
-board on 2026-10-01:
+The TPU core ([`architecture.md`](architecture.md)) on the DE1-SoC, 8×8
+array at 50 MHz, driven by the board's own ARM. All numbers were measured on
+the board on 2026-10-01, on the core before it moved from `rtl/isa/` into
+`rtl/core/`. The moved core is cycle-identical. Its rerun measured 113.3 and
+80.4 µs, with the ARM-only preprocessing slower by the same ~4%, so the
+difference is ARM-side run-to-run variance.
 
 | | m = 1 (one image per run) | m = 8 (batches of 8) |
 |---|---|---|
@@ -48,7 +51,15 @@ board; the rest is the 785-byte image crossing the serial link.
 
 Resources and timing are in [`de1soc.md`](de1soc.md) §1.
 
-## 1. The pico2-ice (legacy core)
+## History: the pico2-ice and the first core
+
+> Sections 1–4 below are the first core's measurements, on the retired
+> pico2-ice (iCE40UP5K + RP2350). Its RTL, firmware, docs and tests are at
+> the git tag `pico2-ice-final`; file paths and docs named here refer to that
+> tag (`git show pico2-ice-final:<path>`). They're kept because they're
+> measured, and because they're what the current core was designed against.
+
+## 1. The pico2-ice: where it ended
 
 MNIST end-to-end, 144→64→10 int8 model, one image, SPI link with firmware
 offload:
@@ -192,7 +203,7 @@ per-transaction tax M3 targeted *is* genuinely gone — the `--no-offload`
 A/B on identical firmware measures 96.6 ms host-tiled vs. 64.1 offloaded.
 
 **Two firmware bugs surfaced only under speed**, both described in
-[`pico2-ice.md`](pico2-ice.md) §7: silent byte drops past the 32-deep UART TX
+`docs/pico2-ice.md` §7 (at the tag): silent byte drops past the 32-deep UART TX
 FIFO (triggered by any frame > 32 bytes, i.e. by the batching work itself),
 and a TinyUSB ISR race that was rare at 115200 and fatal at 1 Mbaud. Faster
 transports don't just move numbers; they change which bugs are reachable.
@@ -256,8 +267,8 @@ See [`backlog.md`](backlog.md).
 - **On the DE1-SoC:** the next levers are ARM preprocessing (about half of
   the 109.5 µs) and bridge register traffic. The array is already fed every
   cycle at m ≥ N.
-- **On the pico2-ice (legacy, no longer developed):** the structural levers
-  this section used to list were resident weights and shadow-bank overlap.
+- **On the pico2-ice (retired):** the structural levers this section used to
+  list were resident weights and shadow-bank overlap.
   [`utilization.md`](utilization.md) has the traced numbers behind them,
   showing the array fed new rows only 9–16% of each pass. Both were built
   into the instruction-stream core instead.

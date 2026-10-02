@@ -1,7 +1,7 @@
 # DE1-SoC (Cyclone V) target
 
-**Status: hardware-validated.** The instruction-stream core
-([`isa.md`](isa.md)), with an 8×8 array at 50 MHz, runs on a DE1-SoC two ways:
+**Status: hardware-validated.** The TPU core ([`architecture.md`](architecture.md),
+[`isa.md`](isa.md)), with an 8×8 array at 50 MHz, runs on a DE1-SoC two ways:
 - **On its own:** a self-checking bitstream, with results on the LEDs and HEX
   displays.
 - **Behind the ARM:** the board's ARM drives it over the lightweight HPS→FPGA
@@ -9,26 +9,34 @@
   **109.5 µs/image**, with a drawing demo that shows the digit on the HEX
   displays.
 
-The DE1-SoC is the active target. The pico2-ice ([`pico2-ice.md`](pico2-ice.md))
-is no longer developed, though everything for it still builds and works.
+The DE1-SoC is the repo's only target. The first core's pico2-ice (iCE40UP5K)
+target was retired; it is preserved at the git tag `pico2-ice-final`.
 
 ## 1. What runs on the board
 
 | Piece | Where | Measured on the board |
 |---|---|---|
-| FPGA-only self-test | `boards/de1soc/fpga/selftest/` | **PASS.** The instruction-stream tests as a ROM transcript replayed into the core; tile rate checked on chip, every perf counter equal to Verilator |
-| TPU behind the HPS | `boards/de1soc/fpga/hps/` | Terasic's rev H reference design (GHRD) plus `tpu_isa_top` at `0xFF200000`, plus a HEX display register at `0xFF210100`. U-Boot loads it from the SD card |
+| FPGA-only self-test | `boards/de1soc/fpga/selftest/` | **PASS.** The core's tests as a ROM transcript replayed into it; tile rate checked on chip, every perf counter equal to Verilator |
+| TPU behind the HPS | `boards/de1soc/fpga/hps/` | Terasic's rev H reference design (GHRD) plus `tpu_top` at `0xFF200000`, plus a HEX display register at `0xFF210100`. U-Boot loads it from the SD card |
 | Full test suite from the ARM | `tests/isa/test_isa_rtl.py serial:<port>` | **Every functional test passes**: decode errors, 40 random layers, MNIST, requantizer sweeps, 40 random concurrent programs |
 | MNIST on the ARM | `software/mnist/de1soc/` | 10,000 test images: **97.50%**, 10,000/10,000 equal to the reference model; **109.5 µs/image** end to end (m=1), 77.6 µs (m=8) |
 | Drawing demo | `software/mnist/draw_demo.py --de1soc` | The digit appears on HEX0; 117 µs on the board, 7.5 ms round trip at 1.5625 Mbaud |
 
 | Build | ALMs | RAM blocks | DSPs | Timing at 50 MHz |
 |---|---|---|---|---|
-| self-test (core + ROM) | 6,635 (21%) | 351 / 397 | 78 / 87 | met, Fmax 57.9 MHz (slow corner) |
-| GHRD + core + HEX | 9,644 (30%) | 339 / 397 | 78 / 87 | met, 3.4 ns slack |
+| self-test (core + ROM) | 7,587 (24%) | 351 / 397 | 78 / 87 | met, 3.1 ns slack |
+| GHRD + core + HEX | 9,637 (30%) | 339 / 397 | 78 / 87 | met, 3.4 ns slack |
 
 78 of the 87 DSPs are used: 64 PE multipliers, 8 requantizer lanes, and the
 tile-count products. That is what stands between 8×8 and 16×16 (§7).
+
+These are the builds of the current `rtl/core/` (2026-10-01). The same core
+before it moved out of `rtl/isa/` measured 6,635 ALMs for the self-test, with
+identical synthesis (78 DSPs, the same memory bits and registers), and was
+cycle-for-cycle the same on the board. The fitter packs the new module
+boundaries a little differently. MNIST on that earlier build ran at 109.5
+µs/image, and at 113.3 µs on the current one; the ARM's preprocessing alone,
+which the RTL doesn't touch, moved by the same ~4%.
 
 ## 2. The board
 
@@ -77,15 +85,15 @@ This only configures the FPGA's SRAM; a power cycle clears it.
 
 ## 4. Flow A: the FPGA-only self-test
 
-No SD card, no Linux, no host link. `isa_replay` (a ROM-fed Avalon master)
-plays a register transcript of the instruction-stream tests into the bridge
+No SD card, no Linux, no host link. `replay` (a ROM-fed Avalon master)
+plays a register transcript of the core's tests into the bridge
 and checks every read. Every expected word comes from the reference model,
 not the RTL.
 
 ```sh
-make isa-selftest-sim                      # Mac: build the ROM, run it in Verilator (must PASS)
-make -C boards/de1soc/fpga/selftest        # VM: compile -> output_files/tpu_isa_selftest.rbf
-openFPGALoader -b de1Soc --probe-firmware … boards/de1soc/fpga/selftest/output_files/tpu_isa_selftest.rbf
+make selftest-sim                          # Mac: build the ROM, run it in Verilator (must PASS)
+make -C boards/de1soc/fpga/selftest        # VM: compile -> output_files/tpu_selftest.rbf
+openFPGALoader -b de1Soc --probe-firmware … boards/de1soc/fpga/selftest/output_files/tpu_selftest.rbf
 ```
 
 HEX3–0 show **`PASS`**, or else the failing test's mark and the mismatch
@@ -98,7 +106,7 @@ in [`../boards/de1soc/fpga/selftest/README.md`](../boards/de1soc/fpga/selftest/R
 `boards/de1soc/fpga/hps/` adds the TPU to Terasic's rev H GHRD. Only our
 pieces are tracked. The Makefile extracts the GHRD from the System CD zip
 and then:
-- runs `qsys-script` to add `tpu_isa` at offset 0 and `hex_pio` at
+- runs `qsys-script` to add the `tpu` component at offset 0 and `hex_pio` at
   `0x10100`;
 - patches `ghrd_top.v` to wire the HEX decoder;
 - generates, compiles and converts to an uncompressed `.rbf`.
@@ -107,14 +115,15 @@ and then:
 make -C boards/de1soc/fpga/hps CD_ZIP=<…>/DE1-SoC_v.6.0.0_HWrevH_SystemCD.zip   # VM
 ```
 
-**Deploy.** Put `build/soc_system.rbf` on the SD card's FAT partition, set
-MSEL to `00000` and boot; U-Boot loads it. On a running board, small files
-(programs, data) can be pushed over the console instead of moving the card:
-`tpu.isa_device.BoardConsole.upload()` puts the tty in raw mode, receives
-with `dd bs=1`, and checks MD5. A 379 KB program verified correctly at
-1.5625 Mbaud. Its transfer time computes to about 2.4 s; the whole upload,
-including baud switches and the MD5 check, hasn't been re-timed since the
-prompt-wait fix.
+**Deploy.** Put `build/soc_system.rbf` on the SD card's FAT partition (from
+the Mac, through a card reader), set MSEL to `00000` and boot; U-Boot loads it.
+
+On a running board, small files (programs, data) can be pushed over the
+console instead of moving the card. `tpu.isa_device.BoardConsole.upload()`
+puts the tty in raw mode, receives with `dd bs=1`, and checks MD5. There's no
+flow control, and `dd bs=1` onto FAT writes only about 6 KB/s, so the upload
+paces itself at 4 KB/s: 371 KB took 95 s. A 7 MB bitstream sent unpaced lost
+bytes and never finished, so bitstreams go on the card.
 
 **Driving it.** There's no Python on the board's image. The ARM side is
 static C:
@@ -137,11 +146,12 @@ program, and syncs on its echo. After that, the line carries raw binary.
 | 120 DSPs requested on an 87-DSP part | multiplies declared wider than their values: a 64×64 requantizer, 32/64-bit tile-count products | Give every product its real width (now 78 DSPs) |
 | 4 ns short of 50 MHz, all in ACT | bias + ReLU + saturate + multiply + round + clamp in one cycle | Three ACT states for the requantizer |
 | "Error reading Quartus Prime Settings File" | an appended line glued onto a `.qsf` that doesn't end with a newline (Terasic's and Quartus's both don't) | Start every append with `\n` |
-| `isa_pe`'s `$fatal` checks in synthesis | Quartus doesn't define `SYNTHESIS` | `VERILOG_MACRO "SYNTHESIS=1"` |
+| `pe.sv`'s `$fatal` checks in synthesis | Quartus doesn't define `SYNTHESIS` | `VERILOG_MACRO "SYNTHESIS=1"` |
 | Ethernet links up but receives nothing, at 1 Gbit or 100 Mbit | the 2014 image on a rev H board (PHY found, TX works, RX gets 0 packets) | **Unsolved**; everything goes over the console instead |
 | Binary protocol desyncs after launching a program | `\r\n` leaves a `\n` queued as the program's first byte; leftover shell output gets read as data | Launch with `\r`; Ctrl-C, wait for quiet, sync on the echoed command line |
 | Echo sync fails on long commands | the console wraps lines past 80 columns | Compare with `\r`/spaces removed |
 | `head -c` doesn't count bytes | this busybox's `head` has no `-c` (it errors) | `dd bs=1 count=N` |
+| A big console upload never finishes | no flow control; `dd bs=1` onto FAT writes ~6 KB/s, so unpaced bytes overflow and are dropped | `upload()` paces at 4 KB/s; bitstreams go on the SD card |
 | Console above 921,600 doesn't work | busybox `stty` doesn't know those rates; the HPS UART is 6.25 MHz / n | `setbaud`. 1,562,500 (÷4) links; 2,083,333 (÷3) doesn't |
 | The FPGA CP2105 port can't do 2 Mbaud | the CP2105's Standard interface tops out at 921,600 | Use the HPS console port for speed |
 
@@ -162,8 +172,3 @@ See [`backlog.md`](backlog.md). Board-specific items:
   8×8.
 - **DDR3 (spec phase 5).** `RD_DDR_UB`, `SET_OBASE`, `MATMUL wsrc=1`,
   `ACTIVATE dst=DDR` are decoded and rejected as `UNIMPL`.
-
-The legacy byte-protocol core also has a DE1-SoC top (`tpu_top_hps.sv` +
-`hps_bridge.sv`, with `boards/de1soc/fpga/{Makefile,*.qsf,*.sdc}`). It is
-lint- and sim-tested but has never been built; the instruction-stream core
-replaced it as the DE1-SoC design.

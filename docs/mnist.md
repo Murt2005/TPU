@@ -1,167 +1,113 @@
 # MNIST demo
 
-The end-to-end proof that the array computes something real: a digit
-classifier whose forward pass runs on actual silicon.
+A digit classifier whose whole forward pass runs on the TPU: the end-to-end
+proof that the array computes something real.
 
 ## 1. The model
 
 **144 → 64 → 10**, two layers, ReLU on both.
 
-- Input: MNIST digit downsampled 28×28 → **12×12** = 144 features.
+- Input: an MNIST digit downsampled 28×28 → **12×12** = 144 features.
 - Hidden: 64 units.
 - Output: 10 class scores.
-- int8 weights and activations, int16 bias — matching the wire format in
-  `rtl/core/tpu_sequencer.sv`.
+- int8 weights and activations, int16 bias.
 
-Both K values (144, 64) and both N values (64, 10) are even, so every layer
-tiles cleanly into 2×2 blocks with no padding. Larger shapes pad on the
-axes that don't divide.
+`software/mnist/train_mnist.py` trains and quantizes it into
+`software/mnist/model/mnist_2x2_int8.npz` (~5 KB, committed, so nothing needs
+training). Retraining downloads MNIST (~11 MB, cached in
+`software/mnist/data/`, gitignored).
 
-Trained and quantized by `software/mnist/train_mnist.py`, which writes
-`software/mnist/model/mnist_2x2_int8.npz` (~5 KB, committed — the demo works out of
-the box). Retraining downloads MNIST (~11 MB, cached in `software/mnist/data/`,
-gitignored).
+## 2. Why it's this small
 
-## 2. Why the model is this small
+The model was designed for the first core, whose accumulator was a 16-bit
+register that **wrapped silently** on overflow. So a layer's K had to stay
+small enough that realistic int8 weights and activations never pushed the
+true sum past ±32,767. K = 144 and K = 64 were chosen against that ceiling
+and then **verified: zero overflow across the whole 10,000-image test set,
+with a 5% calibration margin**.
 
-**It is deliberately tiny, and the constraint is hardware, not accuracy.**
+The current core accumulates in 32 bits, so that limit is gone. A bigger
+model is in [`backlog.md`](backlog.md).
 
-`rtl/core/accumulator.sv`'s PSUM register is `PSUM_WIDTH=16` and **does not
-saturate — it silently wraps**, exactly like `tests/hw/hw_regression.py`'s
-golden model. That holds regardless of K-dim tiling: the persistent
-`psum_reg` is 16 bits whether one `RUN` or seventy-two passes feed it.
+## 3. Quantization details
 
-So a layer's K (its input width) cannot be large enough that realistic
-int8-range weights and activations push the true sum past ±32,767. K=144 and
-K=64 were chosen against that ceiling and then **empirically verified: zero
-overflow across the full 10,000-image test set, with a 5% calibration safety
-margin.**
+These are why `train_mnist.py` doesn't look like an ordinary quantization
+script.
 
-Growing the model means either proving the wider sum still fits, or raising
-`PSUM_WIDTH`. That is now a build knob rather than an RTL edit — it widens
-the wire format with it, and `tpu_host.py --psum-width` must agree — but no
-bitstream has been built or hardware-validated with it. The committed MNIST
-model is sized for `PSUM_WIDTH=16` and is unaffected.
+**ReLU on every layer, including the output.** The first core's activation
+unit had no bypass when the model was trained, so it learned with ReLU on
+its logits; argmax over ReLU'd scores is what it was optimised for. The
+current core has `func = identity`, but the committed model keeps ReLU.
 
-## 3. Three quantization details the RTL forces
+**The requantization between layers.** `train_mnist.py` calibrates a hidden
+scale (`hidden_scale = 20900 / 127`) that maps layer 1's sums to int8.
+- **The host reference** divides and rounds half to even:
+  `np.round(v / hidden_scale)`.
+- **The core** does it in hardware: `M = 1 / hidden_scale` becomes
+  `M0 = 13,049,303`, `shift = 31` ([`isa.md`](isa.md) §5), rounding half
+  up.
 
-These are why `train_mnist.py` doesn't look like a normal quantization
-script:
+The two differ only on the tie at v = 10,450, which no image in the test set
+hits.
 
-**ReLU is applied on every layer**, including the output. When the model
-was trained, `rtl/core/activation.sv` had no bypass mode, so the network was
-trained with ReLU on the output logits too — the loss landscape matches what
-the hardware actually produces (argmax over ReLU'd scores) rather than
-training a standard logits-then-softmax network and hoping ReLU doesn't
-disturb the decision boundary afterwards. The RTL has since gained a
-per-pass bypass (`flags[2]`, [`protocol.md`](protocol.md) §2), but the
-committed model and `infer.py` still use ReLU everywhere, and the
-`FW_MATMUL` offload path cannot carry the bypass at all. Retraining with a
-linear output layer is possible now; nobody has done it.
-
-**There is no on-chip requantization unit.** `unified_buffer` stores int8
-(`DATA_WIDTH=8`), but a layer's output arrives as int16 post-ReLU. The
-**host** must rescale each layer's output down to int8 before it becomes the
-next layer's input. `train_mnist.py` calibrates that per-layer rescale
-(`hidden_scale`) empirically and bakes it into the saved model.
-
-**Bias is int16 LE on the wire** and is loaded once per output block, not
-per K-tile — `RUN_TILE` and `STREAM_RUN` deliberately don't touch
-`reg_bias`.
+**Bias** is stored as int16 and loaded into the core as int32 entries, one
+per output block.
 
 ## 4. Accuracy
 
-| Where | Accuracy |
+| Where | Result |
 |---|---|
-| Quantized model, full 10k test set (sim) | 97.50% |
-| pico2-ice, 20 sampled images | 95.00% (19/20) |
-| Local numpy, same 20 images | 95.00% (19/20) — **identical** |
-| **DE1-SoC, full 10k test set, end to end on the board** | **97.50%** — 10,000/10,000 equal to the reference model and to the host numpy path |
+| Quantized model, host reference, full 10k test set | 97.50% |
+| **DE1-SoC, full 10k test set, end to end on the board** | **97.50%**, 10,000/10,000 equal to the reference model and to the host reference |
+| (history) pico2-ice, 20 sampled images | 95.00% (19/20), identical to the host on the same images |
 
-Hardware and host agree exactly, because they run the same fixed-point math.
-Any divergence is a bug, not rounding.
+## 5. How it runs on the DE1-SoC
 
-## 5. Running it
+- **Compiled once.** `tpu.isa_compile.compile_mlp` turns the two layers into
+  a **load program** (weights, biases and requantization words into WMEM and
+  the parameter tables) and an 11-instruction **infer program**.
+- **Layer 1 never leaves the core.** Its sums are requantized in hardware and
+  written into the UB, exactly where layer 2's `MATMUL` reads them.
+- **The host is the board's ARM.** `software/mnist/de1soc/mnist_tpu` reads
+  raw 28×28 pixels, downsamples and quantizes them (byte-identical to numpy),
+  pushes the infer program and the input over the lightweight bridge, reads
+  the 10 scores back, and takes the argmax.
+
+Measured over all 10,000 test images: **109.5 µs/image** end to end one at a
+time, 77.6 µs in batches of 8 ([`performance.md`](performance.md) §0).
+
+**The drawing demo** (`software/mnist/draw_demo.py --de1soc`) sends a drawing
+to `mnist_tpu serve`, which predicts it on the TPU and lights the digit on
+HEX0. `--offline` runs the host reference instead.
+
+## 6. Running it
 
 ```bash
-# accuracy on real hardware, N random test images end-to-end
-python3 software/mnist/infer.py --port /dev/cu.usbmodemXXXX --test-n 20
-
-# hardware vs. local numpy on identical images, side by side
-python3 software/mnist/infer.py --port /dev/cu.usbmodemXXXX --compare --test-n 20
-
-# no board at all — same pipeline, pure numpy
-python3 software/mnist/infer.py --offline --test-n 20
-
-# draw a digit with the mouse; the board's LED flips green → blue on completion
-python3 software/mnist/draw_demo.py --port /dev/cu.usbmodemXXXX
-
-# retrain + requantize (overwrites the committed model)
-python3 software/mnist/train_mnist.py
+make -C software/mnist/de1soc data          # Mac: model.bin + testset.bin
+make -C software/mnist/de1soc sim-bench     # Mac: the ARM program against Verilator (make rtl-sim first)
+make -C software/mnist/de1soc arm           # VM: the ARM binary
+# copy build/{mnist_tpu,model.bin,testset.bin} to the SD card, then on the board:
+/mnt/boot/mnist_tpu bench /mnt/boot/model.bin /mnt/boot/testset.bin
+# the drawing demo, from the Mac (the console port must be free):
+python3 software/mnist/draw_demo.py --de1soc /dev/cu.usbserial-<id>0 --baud 1562500
+python3 software/mnist/draw_demo.py --offline        # no board
+python3 software/mnist/train_mnist.py                # retrain (overwrites the committed model)
 ```
 
-Add `--rows/--cols/--m-tile` and `--link` to match the flashed bitstream.
-
-## 6. Files
+## 7. Files
 
 | File | What |
 |---|---|
-| `software/mnist/train_mnist.py` | Train + quantize, around the constraints in §2–3 |
-| `software/mnist/infer.py` | Multi-layer driver; `HardwareBackend` (via `tpu.TPU.matmul_tiled()`) and `OfflineBackend` (numpy), plus `--compare` and `--no-offload` |
-| `software/mnist/draw_demo.py` | Tkinter drawing demo; `--offline` runs boardless |
-| `software/mnist/model/mnist_2x2_int8.npz` | Committed pre-trained weights |
-| `software/mnist/data/` | Downloaded IDX files (gitignored) |
+| `software/mnist/train_mnist.py` | train and quantize, around §2–3; `downsample`, `hw_layer` |
+| `software/mnist/mnist_model.py` | `load_model`, `quantize`, `predict_batch_offline` (the host reference), `OfflineModel` for the demo |
+| `software/mnist/draw_demo.py` | the Tkinter drawing demo: `--de1soc PORT [--baud]` or `--offline` |
+| `software/mnist/de1soc/` | `make_data.py`, `mnist_tpu.c` (`bench`, `serve`), `Makefile`, and its own README |
+| `software/mnist/model/mnist_2x2_int8.npz` | the committed weights |
 
-The LED flip in `draw_demo.py` goes over the **second, otherwise-idle**
-USB-CDC port, handled by `boards/pico2-ice/firmware/main.c`'s one-byte LED command listener —
-it does not disturb the TPU link.
+## 8. Open work
 
-## 7. Open work
-
-On the DE1-SoC, see [`backlog.md`](backlog.md): faster ARM preprocessing,
-fewer bridge accesses, and a bigger model, now that the new core accumulates
-in 32 bits. What follows is the pico2-ice's, which is no longer developed.
-
-The single biggest remaining win there was **batching `M_TILE` images per
-inference call**. A lone image wastes the padded activation rows: at 4×4/M_TILE=4,
-three of four streamed rows are zeros, which is why that shape measures
-*worse* single-image (80.3 ms) than M_TILE=2 (63.8 ms) despite being
-strictly more capable. Batched, layer 1 costs 30.6 ms per 2 rows vs. 44.6 —
-projecting to **~17 ms/image**.
-
-A bigger/better model is gated on §2's accumulator width: either prove it
-still fits int16, or build a `PSUM_WIDTH=32` bitstream (never built so far).
-See [`backlog.md`](backlog.md).
-
-## 8. On the DE1-SoC
-
-The same trained model runs on the instruction-stream core
-([`isa.md`](isa.md)), but differently from the pico2-ice path:
-
-- **Compiled once, not tiled per call.** `tpu.isa_compile.compile_mlp` turns
-  the two layers into a load program (weights, biases and requantization
-  words into on-chip memory) and an 11-instruction infer program.
-- **Layer 1 never leaves the core.** Its outputs are requantized in hardware
-  (`M = 1/hidden_scale` → `M0 = 13,049,303`, `shift = 31`) and written to the
-  UB, where layer 2 reads them. The host's `np.round` and the hardware's
-  round-half-up differ only on the tie at v = 10,450, which none of the
-  10,000 test images hits.
-- **The host is the board's ARM.** `software/mnist/de1soc/mnist_tpu` reads
-  raw 28×28 pixels, downsamples and quantizes them (byte-identical to
-  numpy), runs the program over the lightweight bridge, and takes the argmax.
-
-Measured on the board over all 10,000 test images: **97.50%**, every
-prediction equal to the reference model, **109.5 µs/image** end to end (one
-image per run) or 77.6 µs (batches of 8). The pico2-ice's best was 63.8
-ms/image; see [`performance.md`](performance.md) §0 for what that comparison
-does and doesn't mean.
-
-```bash
-make -C software/mnist/de1soc data sim-bench     # Mac: build the data, check against Verilator
-# copy build/{mnist_tpu,model.bin,testset.bin} to the SD card (or BoardConsole.upload), then on the board:
-/mnt/boot/mnist_tpu bench /mnt/boot/model.bin /mnt/boot/testset.bin
-.venv/bin/python software/mnist/draw_demo.py --de1soc /dev/cu.usbserial-<id>0 --baud 1562500
-```
-
-The drawing demo shows the digit on HEX0. See
-[`../software/mnist/de1soc/README.md`](../software/mnist/de1soc/README.md).
+On the DE1-SoC, see [`backlog.md`](backlog.md):
+- faster ARM preprocessing, which is half of each image;
+- fewer bridge accesses;
+- a bigger model now that the accumulator is 32 bits wide;
+- retraining without ReLU on the output.

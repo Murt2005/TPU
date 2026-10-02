@@ -1,27 +1,10 @@
 # Backlog
 
-Open work, in rough value order. The DE1-SoC and its instruction-stream core
-([`isa.md`](isa.md)) are the active target. A change there is trusted once
-`make isa-test`, `make lint` and the board tiers in
+Open work, in rough value order. A change is trusted once `make check` and,
+for anything touching synthesis or timing, the board tiers in
 [`verification.md`](verification.md) are green.
 
 ## High value
-
-**One core.** The instruction-stream core lives in `rtl/isa/`, beside the
-legacy `rtl/core/`, which only the pico2-ice uses. With the pico2-ice no
-longer developed, the plan is to move the new core into `rtl/core/` in
-place:
-- **Rewritten:** `pe.sv`, `mmu.sv`, `accumulator.sv`, `bias.sv`,
-  `activation.sv`, `unified_buffer.sv`, `tpu_core.sv`, `tpu_pkg.sv`.
-- **Replaced:** the sequencer, by the dispatcher and the LD/WT/MM/ACT engine
-  files.
-- **Kept unchanged:** `fifo.sv`, `systolic_data_setup.sv`.
-- **Deleted:** `weight_fifo.sv`, `pe_pair.sv`.
-
-Then the pico2-ice board directory, its peripherals and testbenches, and the
-old protocol driver can go in a second commit. `make isa-test`, the
-self-test's cycle-exact perf captures and a board run catch any behavioural
-drift.
 
 **ARM preprocessing.** 48.9 µs of the 109.5 µs MNIST image is
 `mnist_tpu.c`'s float downsample and quantize. It's bit-exact with numpy,
@@ -52,15 +35,16 @@ this is convenience.
 `ACTIVATE dst=DDR` decode and are rejected as `ERR_UNIMPL`. Needed once a
 model's weights outgrow WMEM (8192 rows).
 
-**The transformer on the new core.** `software/llm/` targets the legacy
-byte protocol (`PSUM_WIDTH=32`, `--link sim`/`hps`). The instruction-stream
-core has a 32-bit ACC and can return int32 rows to the host, so a compiler
-from the GPT-Neo layers to `MATMUL`/`ACTIVATE` would put it on the board.
+**A transformer on the core.** The first core ran TinyStories-1M (GPT-Neo)
+with every linear layer on the array, in simulation (`software/llm/`, at the
+tag `pico2-ice-final`). The current core has a 32-bit ACC and returns int32
+rows to the host, so a compiler from the GPT-Neo layers to `MATMUL`/`ACTIVATE`
+would put it on the board.
 
 **A bigger MNIST model.** The current one is sized to stay provably inside
-the legacy core's non-saturating int16 PSUM ([`mnist.md`](mnist.md) §2). The
-new core accumulates in 32 bits and requantizes in hardware, so that
-constraint is gone.
+the first core's wrapping int16 accumulator ([`mnist.md`](mnist.md) §2). This
+core accumulates in 32 bits and requantizes in hardware, so that constraint
+is gone. Retraining without ReLU on the output layer is also possible now.
 
 ## Low / speculative
 
@@ -72,21 +56,9 @@ for an HPS-less setup.
 **int4 payload packing.** Halves weight and activation bytes. Gated on a
 software accuracy experiment first.
 
-## Legacy core (pico2-ice): parked
-
-Valid but not being pursued, since the pico2-ice isn't developed any more:
-- `M_TILE` image batching in `software/mnist/infer.py` (projected ~17
-  ms/image at 4×4/M_TILE=4)
-- addressable resident weights and shadow-bank overlap for `tpu_sequencer`
-  (both exist in the instruction-stream core now)
-- a `PSUM_WIDTH=32` iCE40 bitstream
-- `--link hps` in `hw_regression.py` / `infer.py`
-- packed headers, the fixed-cycle `WAIT_TIMEOUT` replacement, and the
-  accumulator's lockstep column gate
-
 ## Done — kept so the trail is legible
 
-The instruction-stream core, on the DE1-SoC:
+The current core, on the DE1-SoC:
 - Phase 1: the ISA, reference model, dispatcher and engines, matching the
   model word for word
 - Phase 2: the requantizer and layer chaining through the UB
@@ -99,8 +71,12 @@ The instruction-stream core, on the DE1-SoC:
   the ARM
 - MNIST end to end on the ARM (109.5 µs/image) and the HEX-display drawing
   demo, with a 1.5625 Mbaud console link
+- One core: the instruction-stream core moved into `rtl/core/` on the TPUv1
+  datapath files, cycle-exact; unit benches for every datapath module;
+  re-validated on the board
+- The pico2-ice and the first core retired (tag `pico2-ice-final`)
 
-The legacy core, on the pico2-ice (details in
+The first core, on the pico2-ice (at the tag; details in
 [`performance.md`](performance.md) §3):
 - Full sequencer parameterization (`ARRAY_ROWS`/`NUM_COLS`/`M_TILE`)
 - `unified_buffer`'s ROWS/COLS indexing bug

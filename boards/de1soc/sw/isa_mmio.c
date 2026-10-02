@@ -1,4 +1,4 @@
-/* register server for tpu_isa_top on the HPS lightweight bridge. speaks the
+/* register server for tpu_top on the HPS lightweight bridge. speaks the
  * tb_isa protocol on stdin/stdout (header of 5 u32, then 'W' reg u32,
  * 'R' reg -> u32, 'Q'), so host/tpu/isa_device.py drives the board exactly as
  * it drives Verilator. when stdin is a tty (the serial console) it goes raw for

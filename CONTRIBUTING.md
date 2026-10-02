@@ -1,75 +1,65 @@
 # Contributing
 
-Thanks for your interest in this TPU design! This is a research/educational
-reimplementation of the Google TPUv1 datapath in synthesizable SystemVerilog.
-Contributions — bug fixes, new testbenches, board ports, docs — are welcome.
+Thanks for your interest in this TPU design: a research and educational
+reimplementation of the Google TPUv1 in synthesizable SystemVerilog, running on
+a DE1-SoC. Bug fixes, benches and docs are welcome.
 
 ## Development setup
 
-You need an open-source RTL toolchain (see the [README](README.md)'s
-toolchain sections, §1.3 and §2.3, for install commands and tested versions):
-
-- **Icarus Verilog** (`iverilog`/`vvp`) — unit/integration simulation
-- **Verilator** — lint + full-chip C++ simulation
-- **Yosys** — synthesis; also supplies the `SB_MAC16` sim model the `pe_pair`
-  tests extract at build time (so yosys is needed even for pure simulation of
-  the DSP-pair path)
-- **GTKWave** (optional) — waveform viewing
-- **Python 3.11+** with `pip install -r requirements.txt` — the host driver
-
-The FPGA builds additionally need board-specific tools:
-- **DE1-SoC** (the active target): Quartus Prime Lite, in an x86 VM on Apple
+- **Verilator** (5.032 tested): unit benches, the core's simulation, lint.
+- **Python 3.11+** with `pip install -r requirements.txt` (in `.venv/`): the
+  reference model, the compiler and the test drivers.
+- **For FPGA builds:** Quartus Prime Lite (Cyclone V), in an x86 VM on Apple
   Silicon, plus `openFPGALoader`. See [`docs/de1soc.md`](docs/de1soc.md) §3.
-- **pico2-ice:** `nextpnr-ice40` + `icestorm` + `dfu-util`; see
-  `boards/pico2-ice/fpga/`.
 
 ## Running the checks
 
-All quality gates are local `make` targets (this project intentionally does not
-use hosted CI). Before opening a PR, run:
+The quality gates are local `make` targets; this project deliberately has no
+hosted CI.
 
 ```sh
-make isa-test           # the instruction-stream core: reference model, then RTL vs model at N = 8 and 4
-make isa-selftest-sim   # the DE1-SoC self-test ROM through Verilator
-make lint               # protocol-constant check + Verilator lint (5 configs, incl. the instruction-stream top)
-make test               # the legacy core's testbenches, pass/fail summary
-make verilate-test      # the legacy core's full-chip C++ simulation, 12 shape/PHY/width combos
+make test          # the unit benches, one per datapath module (fast)
+make sim-test      # the reference model's checks, then the RTL vs the model at N = 8 and 4
+make lint          # Verilator lint: tpu_top at N = 8 and 4, tpu_selftest
+make selftest-sim  # the DE1-SoC self-test ROM, as the FPGA will replay it
+make check         # all four
 ```
 
-Changing the instruction-stream core? `make isa-test` + `make lint` +
-`make isa-selftest-sim` in sim. Anything affecting synthesis or timing also
-needs a board run (self-test PASS, then `tests/isa/test_isa_rtl.py
-serial:<port>`); see [`docs/verification.md`](docs/verification.md).
+Every target exits non-zero on failure, so they're safe to gate on.
+`make list` shows them all; `make unit-<name>` runs one bench.
 
-`make test` (via `run_tests.sh`) returns a non-zero exit code if any testbench
-fails, so it is safe to gate on. Use `make list` to see individual targets, and
-`make test-<name>` / `make wave-<name>` to run or waveform-view one testbench.
+**Anything that could move a cycle:** compare `make selftest-sim ST_SLOTS=21`
+with the captures before your change.
 
-If you have a pico2-ice, `make hw-test PORT=/dev/cu.usbmodemXXXX` replays the
-legacy core's sim vectors against a flashed board. The host flags must match the
-bitstream; pass the same `CONFIG=<name>` it was built with
-(`boards/pico2-ice/configs/`), or the individual knobs.
+**Anything touching synthesis, memory inference or timing:** also rebuild both
+Quartus designs and run the board tiers: the self-test **PASS**, then
+`tests/isa/test_isa_rtl.py serial:<port>`.
 
-## Adding a testbench
+[`docs/verification.md`](docs/verification.md) has the full ladder.
 
-1. Write `tests/<name>_tb.sv`. Print `PASSED` on success; use `$error`/`$fatal`
-   (or a `[FAIL]` string) on failure — `run_tests.sh` classifies by those.
-2. Add one `DEPS_<name>` line to `mk/sim.mk` listing the RTL it
-   needs. That's all — the test list is built from the `tests/*_tb.sv` files,
-   and a bench without a `DEPS_` line stops the build with an error naming it.
+## Adding a unit bench
+
+1. Write `tests/unit/<name>_tb.sv` as a module `<name>_tb`. `` `include
+   "check.svh" `` inside it, then use `` `TEST("…") ``, `` `CHECK(cond, msg) ``
+   and `` `CHECK_EQ(got, want, msg) ``, and end with `tb_done();`, which prints
+   the summary and fails the run if any check did.
+2. That's all. `mk/unit.mk` picks up every `tests/unit/*_tb.sv` and compiles it
+   against the core's files.
+
+Before trusting a new bench, break the module it tests on purpose and make sure
+the bench fails.
 
 ## Style conventions
 
-The RTL follows a consistent house style — please match it:
-
-- `snake_case` signals; `*_valid` companion for each data bus; `in_*` / `out_*`
-  port prefixes.
-- Synchronous, active-high `reset` inside modules (only the top level exposes
+- `snake_case` signals; `*_valid` beside each data bus; `in_*` / `out_*` port
+  prefixes where a module has both sides.
+- Synchronous, active-high `reset` inside modules (only the top exposes
   active-low `reset_n`); every sequential block is `if (reset) ... else ...`.
 - Tunables are `parameter int`; derived values are `localparam`.
-- Shared wire-protocol constants (command opcodes, flag bits, status bytes) live in
-  `rtl/core/tpu_pkg.sv` — reuse them rather than re-declaring literals.
-- Each module opens with a one-line comment naming what it is. Beyond that,
+- The instruction encoding lives in one table, `host/tpu/isa.py`, mirrored by
+  `rtl/core/tpu_pkg.sv`. Change both together, and reuse the constants rather
+  than re-declaring literals.
+- Each module opens with a short comment naming what it is. Beyond that,
   comments are sparse: short, lowercase (unless the first word is all caps),
   and about a decision or a low-level trap, not a restatement of the code.
   Explanations, contracts and latencies belong in `docs/`.
@@ -77,4 +67,5 @@ The RTL follows a consistent house style — please match it:
 ## Commit / PR notes
 
 - Keep commits focused and messages short and descriptive.
-- Make sure `make test`, `make lint`, and `make verilate-test` all pass.
+- Make sure `make check` passes; say in the message whether a result came from
+  simulation or the board.
