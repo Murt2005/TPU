@@ -171,4 +171,13 @@ See [`backlog.md`](backlog.md). Board-specific items:
   block (Cyclone V's 9×9 mode) or partly in logic. 78/87 DSPs are used at
   8×8.
 - **DDR3 (spec phase 5).** `RD_DDR_UB`, `SET_OBASE`, `MATMUL wsrc=1`,
-  `ACTIVATE dst=DDR` are decoded and rejected as `UNIMPL`.
+  `ACTIVATE dst=DDR` are decoded and rejected as `UNIMPL`. The bandwidth
+  they need is **measured on the board**: a burst-read master
+  (`top/ddr-probe.sv`) on a 128-bit FPGA-to-SDRAM port at 50 MHz reads
+  **800 MB/s**, the port's full width every cycle, from 2 bursts of 32 beats
+  in flight. With the ARM streaming through 64 MB of its own memory it reads
+  797 MB/s. A read's first beat arrives 9–10 cycles after the command. An
+  8×8 array at m = 1 needs 400 MB/s, so the port has 2× headroom at 50 MHz;
+  how far DDR3 goes past 800 MB/s needs the port on a faster clock. The port
+  has to be configured and released in U-Boot
+  ([`../boards/de1soc/fpga/hps/README.md`](../boards/de1soc/fpga/hps/README.md)).

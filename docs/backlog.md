@@ -33,7 +33,9 @@ this is convenience.
 
 **DDR3 (spec phase 5).** `RD_DDR_UB`, `SET_OBASE`, `MATMUL wsrc=1` and
 `ACTIVATE dst=DDR` decode and are rejected as `ERR_UNIMPL`. Needed once a
-model's weights outgrow WMEM (8192 rows).
+model's weights outgrow WMEM (8192 rows). Sustained FPGA-to-SDRAM bandwidth is
+measured: 800 MB/s on a 128-bit port at 50 MHz, the port's peak, also under
+ARM memory load ([`de1soc.md`](de1soc.md) §7).
 
 **A transformer on the core.** The first core ran TinyStories-1M (GPT-Neo)
 with every linear layer on the array, in simulation (`software/llm/`, at the

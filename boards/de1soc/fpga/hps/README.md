@@ -10,8 +10,9 @@ CD into `build/` at build time.
 | File | Role |
 |---|---|
 | `tpu_hw.tcl` | Platform Designer component: Avalon-MM slave, word addressing, read latency 1, waitrequest on writes |
-| `add-tpu.tcl`, `patch_top.py` | `qsys-script` edit: add `tpu` at offset 0 of `h2f_lw` and `hex_pio` at `0x10100`, both on `clk_0`; then wire `hex_pio` to `hex_display` in Terasic's `ghrd_top.v` |
-| `Makefile` | extract the GHRD → add the TPU and `hex_pio` → `qsys-generate` → compile → uncompressed `.rbf`; also builds `isa_mmio` and `setbaud` |
+| `ddr_probe_hw.tcl` | Platform Designer component for `top/ddr-probe.sv`: a 128-bit burst-read master, registers on `h2f_lw` |
+| `add-tpu.tcl`, `patch_top.py` | `qsys-script` edit: add `tpu` at offset 0 of `h2f_lw`, `hex_pio` at `0x10100` and `ddr_probe` at `0x40000`, all on `clk_0`, plus a 128-bit FPGA-to-SDRAM port (`f2h_sdram0`) for the probe; then wire `hex_pio` to `hex_display` in Terasic's `ghrd_top.v` |
+| `Makefile` | extract the GHRD → add the TPU, `hex_pio` and the probe → `qsys-generate` → compile → uncompressed `.rbf`; also builds `isa_mmio`, `setbaud` and `ddr_probe` |
 | `../../sw/isa-mmio.c` | ARM register server speaking `tb_isa`'s protocol, so `IsaDevice` drives the board as it drives Verilator |
 
 ## Build (in the OrbStack `quartus` VM)
@@ -27,6 +28,30 @@ make CD_ZIP=<path>/DE1-SoC_v.6.0.0_HWrevH_SystemCD.zip   # -> build/soc_system.r
 - **MSEL (SW10):** `00000`, positions 1–5 ON.
 - **Deploy:** copy `soc_system.rbf`, `isa_mmio` and `setbaud` onto the FAT partition from the Mac. Keep Terasic's original as `soc_system_terasic.rbf`. Small files can also go over the console with `BoardConsole.upload()` (paced at 4 KB/s); bitstreams go on the card.
 - **Ethernet:** on this image and board revision, the link comes up but receives nothing. Everything runs over the console instead.
+
+## The FPGA-to-SDRAM port
+
+U-Boot 2013.01 leaves every FPGA-to-SDRAM port in reset (`fpgaportrst`,
+`0xFFC25080`, = 0) and never sets `applycfg`, so the SDRAM controller doesn't
+take the port settings from a new bitstream. **Releasing the port from Linux
+without `applycfg` hangs the whole HPS on the first read through it.** Do both
+in U-Boot instead, before Linux runs. Without touching the SD card:
+
+1. Stop U-Boot's autoboot over the console (`reboot`, then a key during the countdown).
+2. Load `build/soc_system.rbf` over JTAG while U-Boot waits.
+3. In U-Boot, skipping `fpgaload` (it would reload the card's bitstream):
+   ```
+   run mmcload
+   mw ffc2505c a                   # staticcfg.applycfg, self-clearing
+   run bridge_enable_handoff
+   mw ffc25080 133                 # f2h_sdram0's command, read and write ports out of reset
+   run mmcboot
+   ```
+
+Then, from the Mac, `python boards/de1soc/sw/ddr-probe.py <console port>`.
+It checks the probe's checksum against the ARM's over the same physical range,
+then sweeps burst length × bursts in flight, idle and under ARM memory load.
+The probe only reads, so it needs no memory reserved from Linux.
 
 ## Running the tests on the board
 

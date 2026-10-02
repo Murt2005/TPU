@@ -12,9 +12,9 @@ SOF   := $(GHRD)/output_files/soc_system.sof
 RBF   := build/soc_system.rbf
 MMIO  := build/isa_mmio
 
-.PHONY: all ghrd qsys sof rbf mmio setbaud clean
+.PHONY: all ghrd qsys sof rbf mmio setbaud ddr-probe clean
 
-all: rbf mmio setbaud
+all: rbf mmio setbaud ddr-probe
 
 $(GHRD)/stamp-tpu:
 	rm -rf $(GHRD) build/_cd && mkdir -p build/_cd
@@ -35,7 +35,7 @@ ghrd: $(GHRD)/stamp-tpu
 qsys: ghrd
 	cd $(GHRD) && qsys-generate soc_system.qsys --synthesis=VERILOG --search-path="$(HERE),ip/**/*,$$"
 
-$(SOF): ghrd ../../top/hex-display.sv $(wildcard ../../../../rtl/*.sv ../../../../rtl/*/*.sv) ../../top/tpu-top.sv tpu_hw.tcl
+$(SOF): ghrd ../../top/hex-display.sv $(wildcard ../../../../rtl/*.sv ../../../../rtl/*/*.sv) ../../top/tpu-top.sv tpu_hw.tcl ../../top/ddr-probe.sv ddr_probe_hw.tcl
 	$(MAKE) qsys
 	cd $(GHRD) && quartus_sh --flow compile soc_system
 
@@ -58,6 +58,13 @@ build/setbaud: ../../sw/setbaud.c
 	    -Wall -Wl,--build-id=none -s -o $@ $<
 
 setbaud: build/setbaud
+
+# ddr_probe's ARM side (peek, poke, checksum, probe runs, ARM memory load); no libc
+build/ddr_probe: ../../sw/ddr-probe.c
+	arm-linux-gnueabihf-gcc -Os -static -nostdlib -ffreestanding -fno-stack-protector -marm \
+	    -Wall -Wextra -Wl,--build-id=none -s -o $@ $<
+
+ddr-probe: build/ddr_probe
 
 clean:
 	rm -rf build

@@ -55,4 +55,14 @@ selftest-sim: selftest-rom | $(SIM_DIR)
 		$(TEST_DIR)/verilator/tb-isa-selftest.cpp -o tb_isa_selftest > /dev/null
 	@$(ST_SIM) $(ST_SLOTS)
 
-.PHONY: model-test rtl-sim rtl-test sim-test selftest-rom selftest-sim
+# the DE1-SoC DDR3 bandwidth probe against a model of the FPGA-to-SDRAM port
+DDR_PROBE_SIM := $(SIM_DIR)/verilator/ddr_probe/tb_ddr_probe
+
+ddr-probe-sim: | $(SIM_DIR)
+	@mkdir -p $(dir $(DDR_PROBE_SIM))
+	@$(VERILATOR) --cc --exe --build -j $(JOBS) -Wall --Mdir $(dir $(DDR_PROBE_SIM)) verilator.vlt \
+		--top-module ddr_probe -CFLAGS -std=c++17 $(HPS_DIR)/ddr-probe.sv \
+		$(TEST_DIR)/verilator/tb-ddr-probe.cpp -o tb_ddr_probe > /dev/null
+	@$(DDR_PROBE_SIM)
+
+.PHONY: model-test rtl-sim rtl-test sim-test selftest-rom selftest-sim ddr-probe-sim
