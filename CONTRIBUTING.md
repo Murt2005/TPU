@@ -22,7 +22,7 @@ The quality gates are local `make` targets; this project deliberately has no
 hosted CI.
 
 ```sh
-make test          # the UVM block tests (tests/uvm), one per datapath block, ~1 min to build
+make test          # the UVM tests (tests/uvm): every datapath block, then tpu_top at N = 8 and 4
 make sim-test      # the reference model's checks, then the RTL vs the model at N = 8 and 4
 make lint          # Verilator lint: tpu_top at N = 8 and 4, tpu_selftest
 make selftest-sim  # the DE1-SoC self-test ROM, as the FPGA will replay it
@@ -30,7 +30,9 @@ make check         # all four
 ```
 
 Every target exits non-zero on failure, so they're safe to gate on.
-`make list` shows them all; `make uvm-<test>` runs one UVM test.
+`make list` shows them all; `make uvm-<test>` runs one block test and
+`make uvm-top [N=4]` the tpu_top test. Verilator builds use `JOBS=4` compile
+jobs; raise it for speed if your machine stays cool.
 
 **Anything that could move a cycle:** compare `make selftest-sim ST_SLOTS=21`
 with the captures before your change.

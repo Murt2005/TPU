@@ -3,6 +3,8 @@
 # Verilator 5.052 (UVM needs it); override VERILATOR_HOME to use another install
 VERILATOR_HOME ?= $(HOME)/.local/verilator-5.052
 VERILATOR      := $(VERILATOR_HOME)/bin/verilator --assert
+# parallel C++ compile jobs per Verilator build; raise it (JOBS=8) when heat isn't a concern
+JOBS           ?= 4
 
 RTL_DIR      := rtl
 COMMON_DIR   := $(RTL_DIR)/common
@@ -33,12 +35,15 @@ include mk/uvm.mk
 
 # the fast loop
 test: uvm
+	@$(MAKE) --no-print-directory uvm-top N=8
+	@$(MAKE) --no-print-directory uvm-top N=4
 
 # every gate short of a board
 check: lint test sim-test selftest-sim
 
 list:
-	@echo "make test         the UVM block tests (tests/uvm), ~1 min to build"
+	@echo "make test         the UVM tests (tests/uvm): every block, then tpu_top at N = 8 and 4"
+	@echo "  make uvm | make uvm-top [N=4]"
 	@for t in $(UVM_BLOCK_TESTS); do echo "  make uvm-$$t"; done
 	@echo "make sim-test     reference-model checks, then the RTL vs the model at N = 8 and 4"
 	@echo "  make model-test | make rtl-test [N=4] | make rtl-sim [N=4]"

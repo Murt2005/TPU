@@ -11,6 +11,7 @@ the model is itself checked against independent references.
 | Tier | Command | Sees | Can't see |
 |---|---|---|---|
 | UVM blocks | `make test` | each datapath block under random stimulus, checked every cycle against a model, with coverage bins | how the engines sequence them |
+| UVM `tpu_top` | `make test` | the whole core through its Avalon slave at N = 8 and 4, with random bus timing, every OUT word, status and level against the model | cycle counts and perf counters (`sim-test` and the self-test check those) |
 | model | `make model-test` | the model against `tpu.golden`, `hw_layer` and host rounding | anything about the RTL |
 | RTL vs model | `make sim-test` | the whole core through its real bridge registers, at N = 8 and N = 4 | synthesis, timing, the board |
 | lint | `make lint` | width, unused and latch issues at both sizes and in the self-test top | behaviour |
@@ -19,7 +20,7 @@ the model is itself checked against independent references.
 | suite, board | `tests/isa/test_isa_rtl.py serial:<port>` | the GHRD build from the ARM: every functional test | exact cycle counts (the link's latency is in them) |
 | application, board | `mnist_tpu bench` | 10,000 MNIST images end to end, preprocessing included | — |
 
-`make check` runs the first five. The last three need the board
+`make check` runs the first six. The last three need the board
 ([`de1soc.md`](de1soc.md)).
 
 ## UVM block tests (`make test`)
@@ -62,6 +63,40 @@ pick: combined with another constraint on the same variable (an inline
 so the PE's control bits are chosen in its sequence and the accumulator's
 sweep turns its rate constraints off. And a `//` comment that starts with
 the word "Verilator" is read as a pragma.
+
+## UVM `tpu_top` test (`make test`, or `make uvm-top [N=4]`)
+
+`tests/uvm/top/gen_cases.py` turns the core's tests into cases: every
+instruction, data word, expected OUT word and final status comes from the
+reference model, which keeps its memories across cases as the core does. It
+reuses the RTL suite's builders, so the cases are: the UB round trip; all 13
+decode errors and recovery with `CTRL.RESET`; 40 random single layers, a third
+with K split across two `MATMUL`s; the requantizer over three quant tables;
+MNIST load and inference at m = 8 and 1, layers chained through the UB (N = 8
+only); 40 random concurrent programs with `WAIT`s from `isa_waits`; data
+backpressure; and reading an empty OUT. 107 cases and 8,122 OUT words at N = 8,
+103 and 4,313 at N = 4.
+
+The sequence replays each case like a careful host with random timing:
+instruction and data pushes interleaved (data only into free space while
+instructions remain, read from LEVELS, so the bus can't deadlock), sometimes a
+data push between an instruction's two halves, idle gaps, OUT drained while the
+core runs. One case holds LD behind a `WAIT` on a 3,200-cycle `MATMUL` while
+1,100 data words arrive at full speed, so the host's writes stall on
+`waitrequest`. The monitor checks the Avalon rules (`waitrequest` only on a
+write to a full FIFO, never a read and a write together); the scoreboard checks
+every OUT word in order, and the sequence checks each case's STATUS, `ERR_SEQ`
+and drained LEVELS. Coverage bins: every opcode and `MATMUL`/`ACTIVATE`
+variant, every error code, a stalled write, a data push between instruction
+halves, OUT read mid-run, the empty-OUT read.
+
+Mutation-checked with five control-path bugs, each failing the test: `WAIT`
+never waits, no `waitrequest` (writes into a full FIFO lost), `MATMUL`'s
+accumulate flag ignored, `ERR_SEQ` off by one, UNDERFLOW never set.
+
+`make rtl-test` stays: it adds the full requantizer sweep, the perf counters and
+the tile rate (cycle-exact over the Verilator link), and it's the same suite the
+board runs.
 
 SVUnit was considered before UVM; its Verilator support is tied to 5.024, and
 it faults on 5.032 and fails on 5.052.

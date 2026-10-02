@@ -191,7 +191,7 @@ More in [`docs/de1soc.md`](docs/de1soc.md) §6.
 Everything except the FPGA runs on your laptop with Verilator:
 
 ```bash
-make test           # the UVM block tests, one per datapath block
+make test           # the UVM tests: every datapath block, then tpu_top at N = 8 and 4
 make sim-test       # the reference model's checks, then the RTL vs the model word for word, N = 8 and 4
 make selftest-sim   # the board's self-test ROM, exactly as the FPGA will replay it
 make check          # all of the above, plus lint
@@ -274,7 +274,7 @@ TPU/
 
 | Command | Where | Does |
 |---|---|---|
-| `make test` | Mac | the UVM block tests (`make uvm-<test>` for one) |
+| `make test` | Mac | the UVM tests: blocks, then `tpu_top` at N = 8 and 4 (`make uvm-<test>`, `make uvm-top`) |
 | `make sim-test` | Mac | `model-test`, then `rtl-test` at N = 8 and 4 (`make rtl-test N=4` for one size) |
 | `make lint` | Mac | Verilator lint: `tpu_top` at N = 8 and 4, `tpu_selftest` |
 | `make selftest-sim [ST_SLOTS=21]` | Mac | the self-test ROM in Verilator, optionally reading the perf captures back |

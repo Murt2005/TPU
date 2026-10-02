@@ -15,7 +15,7 @@ model-test:
 # tpu_top as a register-level transport for host/tpu/isa_device.py
 rtl-sim: | $(SIM_DIR)
 	@mkdir -p $(RTL_SIM_DIR)
-	@$(VERILATOR) --cc --exe --build -j 0 -Wall --Mdir $(RTL_SIM_DIR) verilator.vlt \
+	@$(VERILATOR) --cc --exe --build -j $(JOBS) -Wall --Mdir $(RTL_SIM_DIR) verilator.vlt \
 		--top-module tpu_top \
 		-GARRAY_SIZE=$(N) -GWMEM_ROWS=$(WMEM_ROWS) -GUB_DEPTH=$(UB_DEPTH) \
 		-GACC_DEPTH=$(ACC_DEPTH) -GPARAMETER_DEPTH=$(PARAM_DEPTH) \
@@ -47,7 +47,7 @@ selftest-rom:
 
 selftest-sim: selftest-rom | $(SIM_DIR)
 	@mkdir -p $(dir $(ST_SIM))
-	@$(VERILATOR) --cc --exe --build -j 0 -Wall --Mdir $(dir $(ST_SIM)) verilator.vlt \
+	@$(VERILATOR) --cc --exe --build -j $(JOBS) -Wall --Mdir $(dir $(ST_SIM)) verilator.vlt \
 		--top-module tpu_selftest -GARRAY_SIZE=$(N) -GROM_FILE='"$(abspath $(ST_HEX))"' \
 		-CFLAGS -std=c++17 $(CORE_RTL) $(HPS_DIR)/replay.sv $(HPS_DIR)/tpu-selftest.sv \
 		$(TEST_DIR)/verilator/tb-isa-selftest.cpp -o tb_isa_selftest > /dev/null
