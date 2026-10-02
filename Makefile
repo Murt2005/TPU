@@ -1,6 +1,6 @@
 # simulation and lint entry point; rules live in mk/, see `make list`
 
-VERILATOR := verilator
+VERILATOR := verilator --assert
 
 CORE_DIR   := rtl/core
 PERIPH_DIR := rtl/peripherals

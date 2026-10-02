@@ -67,14 +67,14 @@ module tpu_core #(
     logic [31:0] output_in;
 
     fifo #(.WIDTH(64), .DEPTH(INSTRUCTION_FIFO_DEPTH)) u_instruction_fifo (
-        .clk(clk), .reset(reset), .write_enable(instruction_push), .write_data(instruction_word),
-        .read_enable(instruction_pop), .read_data(instruction_head), .full(instruction_full), .empty(instruction_empty));
+        .clk(clk), .reset(reset), .write_enable_in(instruction_push), .write_data_in(instruction_word),
+        .read_enable_in(instruction_pop), .read_data_out(instruction_head), .full_out(instruction_full), .empty_out(instruction_empty));
     fifo #(.WIDTH(32), .DEPTH(DATA_FIFO_DEPTH)) u_data_fifo (
-        .clk(clk), .reset(reset), .write_enable(data_push), .write_data(data_word),
-        .read_enable(data_pop), .read_data(data_head), .full(data_full), .empty(data_empty));
+        .clk(clk), .reset(reset), .write_enable_in(data_push), .write_data_in(data_word),
+        .read_enable_in(data_pop), .read_data_out(data_head), .full_out(data_full), .empty_out(data_empty));
     fifo #(.WIDTH(32), .DEPTH(OUTPUT_FIFO_DEPTH)) u_output_fifo (
-        .clk(clk), .reset(reset), .write_enable(output_push), .write_data(output_in),
-        .read_enable(output_pop), .read_data(output_word), .full(output_full), .empty(output_empty));
+        .clk(clk), .reset(reset), .write_enable_in(output_push), .write_data_in(output_in),
+        .read_enable_in(output_pop), .read_data_out(output_word), .full_out(output_full), .empty_out(output_empty));
 
     logic [10:0] instruction_occupancy, data_occupancy, output_occupancy;
     always_ff @(posedge clk) begin
@@ -111,9 +111,9 @@ module tpu_core #(
     generate
         for (engine_queue = 0; engine_queue < 4; engine_queue++) begin : g_queue
             fifo #(.WIDTH(QUEUE_ENTRY_WIDTH), .DEPTH(QUEUE_DEPTH)) u_queue (
-                .clk(clk), .reset(reset), .write_enable(queue_push[engine_queue]), .write_data(queue_in),
-                .read_enable(queue_pop[engine_queue]), .read_data(queue_head[engine_queue]),
-                .full(queue_full[engine_queue]), .empty(queue_empty[engine_queue]));
+                .clk(clk), .reset(reset), .write_enable_in(queue_push[engine_queue]), .write_data_in(queue_in),
+                .read_enable_in(queue_pop[engine_queue]), .read_data_out(queue_head[engine_queue]),
+                .full_out(queue_full[engine_queue]), .empty_out(queue_empty[engine_queue]));
         end
     endgenerate
 

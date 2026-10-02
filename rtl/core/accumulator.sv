@@ -36,9 +36,9 @@ module accumulator #(
         for (lane = 0; lane < ARRAY_SIZE; lane++) begin : g_column
             fifo #(.WIDTH(32), .DEPTH(SKEW_DEPTH)) u_column (
                 .clk(clk), .reset(reset),
-                .write_enable(partial_sum_valid[lane]), .write_data(partial_sum[lane]),
-                .read_enable(row_pop), .read_data(column_head[lane]),
-                .full(), .empty(column_empty[lane])
+                .write_enable_in(partial_sum_valid[lane]), .write_data_in(partial_sum[lane]),
+                .read_enable_in(row_pop), .read_data_out(column_head[lane]),
+                .full_out(), .empty_out(column_empty[lane])
             );
         end
     endgenerate
@@ -48,9 +48,9 @@ module accumulator #(
 
     fifo #(.WIDTH(ACC_ADDRESS_WIDTH + 1), .DEPTH(TAG_DEPTH)) u_tags (
         .clk(clk), .reset(reset),
-        .write_enable(tag_push), .write_data(tag_in),
-        .read_enable(row_pop), .read_data(tag_head),
-        .full(), .empty(tag_empty)
+        .write_enable_in(tag_push), .write_data_in(tag_in),
+        .read_enable_in(row_pop), .read_data_out(tag_head),
+        .full_out(), .empty_out(tag_empty)
     );
 
     assign row_pop = (column_empty == '0) && !tag_empty;
