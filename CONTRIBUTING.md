@@ -6,7 +6,11 @@ a DE1-SoC. Bug fixes, benches and docs are welcome.
 
 ## Development setup
 
-- **Verilator** (5.032 tested): unit benches, the core's simulation, lint.
+- **Verilator 5.052**, installed in `~/.local/verilator-5.052` (or set
+  `VERILATOR_HOME`): every simulation and lint. 5.032 can't compile UVM.
+- **z3** (`brew install z3`): Verilator's solver for constrained randomization.
+- **The UVM library**, a pinned submodule (`tests/uvm/uvm-verilator`, CHIPS
+  Alliance's UVM 2020-3.2 for Verilator): `git submodule update --init`.
 - **Python 3.11+** with `pip install -r requirements.txt` (in `.venv/`): the
   reference model, the compiler and the test drivers.
 - **For FPGA builds:** Quartus Prime Lite (Cyclone V), in an x86 VM on Apple
@@ -19,14 +23,16 @@ hosted CI.
 
 ```sh
 make test          # the unit benches, one per datapath module (fast)
+make uvm           # the UVM environments (tests/uvm), ~1 min to build
 make sim-test      # the reference model's checks, then the RTL vs the model at N = 8 and 4
 make lint          # Verilator lint: tpu_top at N = 8 and 4, tpu_selftest
 make selftest-sim  # the DE1-SoC self-test ROM, as the FPGA will replay it
-make check         # all four
+make check         # all five
 ```
 
 Every target exits non-zero on failure, so they're safe to gate on.
-`make list` shows them all; `make unit-<name>` runs one bench.
+`make list` shows them all; `make unit-<name>` runs one bench and
+`make uvm-<test>` one UVM test.
 
 **Anything that could move a cycle:** compare `make selftest-sim ST_SLOTS=21`
 with the captures before your change.

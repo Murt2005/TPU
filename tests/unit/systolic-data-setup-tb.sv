@@ -30,7 +30,7 @@ module systolic_data_setup_tb;
             for (int i = 0; i < R; i++) row_in[i] = cyc < 3 ? el(cyc, i) : 8'sd0;
             #1;     // lane 0 is combinational
             for (int i = 0; i < R; i++) begin
-                int t = cyc - i;
+                automatic int t = cyc - i;
                 `CHECK_EQ(skewed_valid_out[i], 1'(t >= 0 && t < 3), $sformatf("cycle %0d lane %0d valid", cyc, i))
                 if (t >= 0 && t < 3)
                     `CHECK_EQ(skewed_row_out[i], el(t, i), $sformatf("cycle %0d lane %0d data", cyc, i))

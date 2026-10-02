@@ -1,6 +1,8 @@
 # simulation and lint entry point; rules live in mk/, see `make list`
 
-VERILATOR := verilator --assert
+# Verilator 5.052 (UVM needs it); override VERILATOR_HOME to use another install
+VERILATOR_HOME ?= $(HOME)/.local/verilator-5.052
+VERILATOR      := $(VERILATOR_HOME)/bin/verilator --assert
 
 RTL_DIR      := rtl
 COMMON_DIR   := $(RTL_DIR)/common
@@ -28,12 +30,13 @@ $(SIM_DIR):
 include mk/verilator.mk
 include mk/core.mk
 include mk/unit.mk
+include mk/uvm.mk
 
 # the fast loop
 test: unit
 
 # every gate short of a board
-check: lint test sim-test selftest-sim
+check: lint test uvm sim-test selftest-sim
 
 list:
 	@echo "make test         the unit benches (tests/unit), the fast loop"
@@ -42,6 +45,7 @@ list:
 	@echo "  make model-test | make rtl-test [N=4] | make rtl-sim [N=4]"
 	@echo "make selftest-sim the DE1-SoC self-test ROM in Verilator [ST_SLOTS=21]"
 	@echo "make lint         verilator lint: tpu_top at N = 8 and 4, tpu_selftest"
+	@echo "make uvm          the UVM environments (tests/uvm); make uvm-<test> runs one"
 	@echo "make check        all of the above"
 	@echo "make clean"
 

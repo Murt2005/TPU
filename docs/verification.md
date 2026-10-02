@@ -11,6 +11,7 @@ the model is itself checked against independent references.
 | Tier | Command | Sees | Can't see |
 |---|---|---|---|
 | unit | `make test` | each datapath module on its own: 9 self-checking benches | how the engines sequence them |
+| UVM | `make uvm` | blocks under random stimulus, checked cycle by cycle against a model, with coverage bins (so far: `fifo`) | how the engines sequence them |
 | model | `make model-test` | the model against `tpu.golden`, `hw_layer` and host rounding | anything about the RTL |
 | RTL vs model | `make sim-test` | the whole core through its real bridge registers, at N = 8 and N = 4 | synthesis, timing, the board |
 | lint | `make lint` | width, unused and latch issues at both sizes and in the self-test top | behaviour |
@@ -19,7 +20,7 @@ the model is itself checked against independent references.
 | suite, board | `tests/isa/test_isa_rtl.py serial:<port>` | the GHRD build from the ARM: every functional test | exact cycle counts (the link's latency is in them) |
 | application, board | `mnist_tpu bench` | 10,000 MNIST images end to end, preprocessing included | — |
 
-`make check` runs the first five. The last three need the board
+`make check` runs the first six. The last three need the board
 ([`de1soc.md`](de1soc.md)).
 
 ## Unit benches (`make test`)
@@ -43,6 +44,26 @@ flip ignored, the column skew off, no same-cycle refill, always overwrite,
 rounding removed, read priority lost, …), and each was caught. SVUnit was
 considered, but its Verilator support is tied to 5.024; it faults on 5.032
 and fails on 5.052.
+
+## UVM (`make uvm`)
+
+The UVM environments in `tests/uvm/` are replacing the unit benches, one block
+at a time. They run on Verilator 5.052 with CHIPS Alliance's patched UVM
+2020-3.2 (a pinned submodule, built with `UVM_NO_DPI`). Every block test is
+one binary, `uvm_blocks_top`, and `+UVM_TESTNAME` picks the test; a test
+passes when it prints `PASSED` with no UVM errors.
+
+Verilator doesn't collect covergroups, so each scoreboard counts named bins
+by hand (`coverage_bins` in `common/uvm-common-pkg.sv`), and any bin never hit
+fails the test.
+
+| Test | Checks |
+|---|---|
+| `fifo_random_test` | fill-, drain- and balanced phases of random pushes and pops against a queue model every cycle: show-ahead data, full/empty, dropped writes when full, ignored reads when empty; 11 bins, including wrap-around and simultaneous read and write when full |
+
+`fifo_random_test` was mutation-checked: writes accepted when full, `full`
+one entry early, a read pointer that never advances, and a simultaneous read
+and write that counts up each fail it.
 
 ## The model and the RTL (`make sim-test`)
 

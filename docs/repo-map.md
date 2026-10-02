@@ -71,6 +71,8 @@ Everything under `rtl/` is board-neutral. See
 | Path | What |
 |---|---|
 | `unit/*-tb.sv`, `unit/check.svh` | the unit benches and their shared check header |
+| `uvm/common/`, `uvm/blocks/` | the UVM environments: shared coverage bins and base test; one package and interface per block, all in `blocks-top.sv` (`make uvm`) |
+| `uvm/uvm-verilator/` | the UVM library, a pinned submodule |
 | `unit/gen_requant.py` | requantizer vectors from `tpu.golden` for `activation_tb` |
 | `isa/test_isa_model.py` | the model against independent references (`make model-test`) |
 | `isa/test_isa_rtl.py` | the RTL against the model, word for word (`make rtl-test`), or the board with `serial:<port>` |

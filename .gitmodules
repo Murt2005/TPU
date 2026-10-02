@@ -1,0 +1,3 @@
+[submodule "tests/uvm/uvm-verilator"]
+	path = tests/uvm/uvm-verilator
+	url = https://github.com/chipsalliance/uvm-verilator.git

@@ -29,3 +29,7 @@ lint_off -rule UNUSEDSIGNAL -file "*boards/de1soc/top/tpu-selftest.sv" -match "*
 // SW8..5 are unused pins; the display shows a capture's low 24 bits
 lint_off -rule UNUSEDSIGNAL -file "*boards/de1soc/top/tpu-selftest.sv" -match "*'sw_q'*"
 lint_off -rule UNUSEDSIGNAL -file "*boards/de1soc/top/tpu-selftest.sv" -match "*'cap_value'*"
+
+// power-on reset: the declared initial values are the FPGA's power-up state, the only reset there is
+lint_off -rule PROCASSINIT -file "*boards/de1soc/top/tpu-top.sv" -match "*'por_*"
+lint_off -rule PROCASSINIT -file "*boards/de1soc/top/tpu-selftest.sv"

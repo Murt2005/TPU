@@ -89,8 +89,10 @@ The USB-Blaster II needs Intel's firmware file, which ships inside Quartus. Copy
 `~/intelFPGA_lite/23.1std/quartus/linux64/blaster_6810.hex` out of the VM for
 `openFPGALoader`.
 
-Tested with Verilator 5.032, Quartus Prime Lite 23.1std.1, openFPGALoader 1.1.1
-and Python 3.13.
+Tested with Verilator 5.052 (in `~/.local/verilator-5.052`; set `VERILATOR_HOME`
+for another location), z3, Quartus Prime Lite 23.1std.1, openFPGALoader 1.1.1
+and Python 3.13. The UVM library is a submodule: clone with
+`--recurse-submodules`, or run `git submodule update --init`.
 
 ### 1.4 First light: the self-test over JTAG
 
