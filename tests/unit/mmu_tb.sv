@@ -12,26 +12,26 @@ module mmu_tb;
     logic signed [N-1:0][8:0] sds_in = '0, skewed;
     logic        [N-1:0]      skewed_valid;
     logic                     sds_valid = 1'b0;
-    logic signed [N-1:0][7:0] act;
-    logic        [N-1:0]      act_first;
-    logic                     wvalid = 1'b0;
-    logic [$clog2(N)-1:0]     wrow = '0;
-    logic signed [N-1:0][7:0] wdata = '0;
-    logic signed [N-1:0][31:0] psum;
-    logic        [N-1:0]       psum_valid;
+    logic signed [N-1:0][7:0] activation;
+    logic        [N-1:0]      activation_first;
+    logic                     weight_valid = 1'b0;
+    logic [$clog2(N)-1:0]     weight_row = '0;
+    logic signed [N-1:0][7:0] weight_data = '0;
+    logic signed [N-1:0][31:0] partial_sum;
+    logic        [N-1:0]       partial_sum_valid;
 
     systolic_data_setup #(.ARRAY_ROWS(N), .DATA_WIDTH(9)) u_sds (
-        .clk(clk), .reset(reset), .ub_read_data(sds_in), .ub_read_valid(sds_valid),
-        .mmu_in_row(skewed), .mmu_in_valid(skewed_valid));
+        .clk(clk), .reset(reset), .UB_read_data(sds_in), .UB_read_valid(sds_valid),
+        .MMU_in_row(skewed), .MMU_in_valid(skewed_valid));
     always_comb
         for (int r = 0; r < N; r++) begin
-            act[r]       = skewed[r][7:0];
-            act_first[r] = skewed[r][8];
+            activation[r]       = skewed[r][7:0];
+            activation_first[r] = skewed[r][8];
         end
 
-    mmu #(.N(N)) dut (
-        .clk(clk), .reset(reset), .act(act), .act_first(act_first), .act_valid(skewed_valid),
-        .wvalid(wvalid), .wrow(wrow), .wdata(wdata), .psum(psum), .psum_valid(psum_valid));
+    mmu #(.ARRAY_SIZE(N)) dut (
+        .clk(clk), .reset(reset), .activation(activation), .activation_first(activation_first), .activation_valid(skewed_valid),
+        .weight_valid(weight_valid), .weight_row(weight_row), .weight_data(weight_data), .partial_sum(partial_sum), .partial_sum_valid(partial_sum_valid));
 
     always #5 clk = ~clk;
     task automatic tick(); @(posedge clk); #1; endtask
@@ -39,7 +39,7 @@ module mmu_tb;
     int got [N][$];
     always @(posedge clk)
         for (int c = 0; c < N; c++)
-            if (psum_valid[c]) got[c].push_back(psum[c]);
+            if (partial_sum_valid[c]) got[c].push_back(partial_sum[c]);
 
     logic signed [7:0] W [T][N][N];     // [tile][K row][column]
     logic signed [7:0] A [T][MMAX][N];  // [tile][activation row][K]
@@ -65,13 +65,13 @@ module mmu_tb;
                 sds_valid = acts;
                 for (int r = 0; r < N; r++)
                     sds_in[r] = acts ? {1'(pos == 0), A[w-1][pos][r]} : '0;
-                wvalid = wts;
-                wrow   = wts ? $clog2(N)'(pos - (len - N)) : '0;
-                for (int c = 0; c < N; c++) wdata[c] = wts ? W[w][pos - (len - N)][c] : 8'sd0;
+                weight_valid = wts;
+                weight_row   = wts ? $clog2(N)'(pos - (len - N)) : '0;
+                for (int c = 0; c < N; c++) weight_data[c] = wts ? W[w][pos - (len - N)][c] : 8'sd0;
                 tick();
             end
         end
-        sds_valid = 1'b0; wvalid = 1'b0;
+        sds_valid = 1'b0; weight_valid = 1'b0;
         repeat (3 * N) tick();
         for (int c = 0; c < N; c++) begin
             `CHECK_EQ(got[c].size(), T * m, $sformatf("column %0d row count", c))

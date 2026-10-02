@@ -3,54 +3,54 @@
 // generic circular-queue FIFO
 module fifo #(
     parameter int WIDTH = 16,
-    parameter int DEPTH = 4  // must be a power of 2
+    parameter int DEPTH = 4   // must be a power of 2
 ) (
-    input  logic                        clk,
-    input  logic                        reset,
+    input  logic                    clk,
+    input  logic                    reset,
 
-    input  logic                        write_enable,
-    input  logic signed [WIDTH-1:0]     write_data,
+    input  logic                    write_enable,
+    input  logic signed [WIDTH-1:0] write_data,
 
-    input  logic                        read_enable,
-    output logic signed [WIDTH-1:0]     read_data,
+    input  logic                    read_enable,
+    output logic signed [WIDTH-1:0] read_data,
 
-    output logic                        full,
-    output logic                        empty
+    output logic                    full,
+    output logic                    empty
 );
 
-    localparam int PTR_WIDTH = $clog2(DEPTH);
+    localparam int POINTER_WIDTH = $clog2(DEPTH);
 
     // if/$fatal, not an SVA assert: yosys's frontend can't parse `assert ... else`
     initial begin
-        if ((1 << PTR_WIDTH) != DEPTH)
-            $fatal(1, "fifo: DEPTH=%0d is not a power of 2 ( wraps at %0d)", DEPTH, (1 << PTR_WIDTH));
+        if ((1 << POINTER_WIDTH) != DEPTH)
+            $fatal(1, "fifo: DEPTH=%0d is not a power of 2 ( wraps at %0d)", DEPTH, (1 << POINTER_WIDTH));
     end
 
     logic signed [WIDTH-1:0] memory [DEPTH];
 
-    logic [PTR_WIDTH-1:0] write_ptr;
-    logic [PTR_WIDTH-1:0] read_ptr;
-    logic [PTR_WIDTH:0]   data_count;
+    logic [POINTER_WIDTH-1:0] write_pointer;
+    logic [POINTER_WIDTH-1:0] read_pointer;
+    logic [POINTER_WIDTH:0]   data_count;
 
-    assign full  = (data_count == (PTR_WIDTH+1)'(DEPTH));
+    assign full  = (data_count == (POINTER_WIDTH+1)'(DEPTH));
     assign empty = (data_count == 0);
 
     // check later if this should be changed to memory[read_ptr] && read_enable
-    assign read_data = memory[read_ptr];
+    assign read_data = memory[read_pointer];
 
     always_ff @(posedge clk) begin
         if (reset) begin
-            write_ptr <= '0;
-            read_ptr <= '0;
-            data_count  <= '0;
+            write_pointer <= '0;
+            read_pointer  <= '0;
+            data_count    <= '0;
         end else begin
             if (write_enable && !full) begin
-                memory[write_ptr] <= write_data;
-                write_ptr      <= write_ptr + 1'b1;
+                memory[write_pointer] <= write_data;
+                write_pointer         <= write_pointer + 1'b1;
             end
 
             if (read_enable && !empty) begin
-                read_ptr <= read_ptr + 1'b1;
+                read_pointer <= read_pointer + 1'b1;
             end
 
             case ({(write_enable && !full), (read_enable && !empty)})

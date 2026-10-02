@@ -4,31 +4,31 @@
 // writes a layer's requantized output (and has priority), MM reads rows into the
 // array (and has priority), ACT reads for RD_UB
 module unified_buffer #(
-    parameter int N     = 8,
-    parameter int DEPTH = 16384,
-    parameter int AW    = $clog2(DEPTH)
+    parameter int ARRAY_SIZE    = 8,
+    parameter int DEPTH         = 16384,
+    parameter int ADDRESS_WIDTH = $clog2(DEPTH)
 ) (
-    input  logic            clk,
+    input  logic                     clk,
 
-    input  logic            ld_we,
-    input  logic [AW-1:0]   ld_waddr,
-    input  logic [N*8-1:0]  ld_wdata,
-    input  logic            act_we,
-    input  logic [AW-1:0]   act_waddr,
-    input  logic [N*8-1:0]  act_wdata,
+    input  logic                     load_write_enable,
+    input  logic [ADDRESS_WIDTH-1:0] load_write_address,
+    input  logic [ARRAY_SIZE*8-1:0]  load_write_data,
+    input  logic                     activate_write_enable,
+    input  logic [ADDRESS_WIDTH-1:0] activate_write_address,
+    input  logic [ARRAY_SIZE*8-1:0]  activate_write_data,
 
-    input  logic            mm_re,
-    input  logic [AW-1:0]   mm_raddr,
-    input  logic [AW-1:0]   act_raddr,
-    output logic [N*8-1:0]  rdata          // one cycle after the address
+    input  logic                     matmul_read_enable,
+    input  logic [ADDRESS_WIDTH-1:0] matmul_read_address,
+    input  logic [ADDRESS_WIDTH-1:0] activate_read_address,
+    output logic [ARRAY_SIZE*8-1:0]  read_data               // one cycle after the address
 );
 
-    logic [N*8-1:0] ub [DEPTH];
+    logic [ARRAY_SIZE*8-1:0] memory [DEPTH];
 
     always_ff @(posedge clk) begin
-        if (act_we)     ub[act_waddr] <= act_wdata;
-        else if (ld_we) ub[ld_waddr]  <= ld_wdata;
-        rdata <= ub[mm_re ? mm_raddr : act_raddr];
+        if (activate_write_enable)     memory[activate_write_address] <= activate_write_data;
+        else if (load_write_enable) memory[load_write_address]  <= load_write_data;
+        read_data <= memory[matmul_read_enable ? matmul_read_address : activate_read_address];
     end
 
 endmodule

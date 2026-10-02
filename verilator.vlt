@@ -8,8 +8,8 @@ lint_off -rule IMPORTSTAR -file "*rtl/core/*.sv"
 lint_off -rule PINCONNECTEMPTY -file "*rtl/core/accumulator.sv"
 
 // each engine decodes only the instruction fields it executes
-lint_off -rule UNUSEDSIGNAL -file "*rtl/core/*_engine.sv" -match "*'insn'*"
-lint_off -rule UNUSEDSIGNAL -file "*rtl/core/dispatch.sv" -match "*'f_func'*"
+lint_off -rule UNUSEDSIGNAL -file "*rtl/core/*_engine.sv" -match "*'instruction'*"
+lint_off -rule UNUSEDSIGNAL -file "*rtl/core/dispatch.sv" -match "*'field_function'*"
 
 // the read grants are implied by MM's priority; dispatched is exported for debug
 lint_off -rule UNUSEDSIGNAL -file "*rtl/core/tpu_core.sv"

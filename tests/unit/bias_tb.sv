@@ -8,7 +8,7 @@ module bias_tb;
     logic [N*32-1:0] in_row, bias_row, out_row;
     logic enable;
 
-    bias #(.N(N)) dut (.*);
+    bias #(.ARRAY_SIZE(N)) dut (.*);
 
     initial begin
         in_row   = {32'h7fffffff, -32'sd10, 32'sd0, 32'sd5};

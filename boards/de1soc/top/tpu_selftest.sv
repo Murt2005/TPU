@@ -6,13 +6,13 @@
 // HEX1..0: the mismatch count; "PASS" when clean. KEY0 reruns, KEY3..1 unused.
 // SW9 up: HEX5..0 show capture slot SW4..0 (perf counters) in hex
 module tpu_selftest #(
-    parameter int    N        = 8,
-    parameter int    ROM_DEPTH = 16384,
-    parameter        ROM_FILE  = "isa_selftest.hex"
+    parameter int ARRAY_SIZE = 8,
+    parameter int ROM_DEPTH  = 16384,
+    parameter     ROM_FILE   = "isa_selftest.hex"
 ) (
     input  logic       CLOCK_50,
-    input  logic [3:0] KEY,             // only KEY0 is used
-    input  logic [9:0] SW,              // SW9 + SW4..0; the rest unused
+    input  logic [3:0] KEY,      // only KEY0 is used
+    input  logic [9:0] SW,       // SW9 + SW4..0; the rest unused
     output logic [9:0] LEDR,
     output logic [6:0] HEX0,
     output logic [6:0] HEX1,
@@ -43,7 +43,7 @@ module tpu_selftest #(
     logic        avs_read, avs_write, avs_waitrequest;
     logic [31:0] avs_readdata, avs_writedata;
 
-    tpu_top #(.N(N)) u_tpu (
+    tpu_top #(.ARRAY_SIZE(ARRAY_SIZE)) u_tpu (
         .clk(clk), .reset_n(!run_reset),
         .avs_address(avs_address), .avs_read(avs_read), .avs_readdata(avs_readdata),
         .avs_write(avs_write), .avs_writedata(avs_writedata), .avs_waitrequest(avs_waitrequest));

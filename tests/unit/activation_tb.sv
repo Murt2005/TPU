@@ -7,11 +7,11 @@ module activation_tb;
 
     localparam int N = 4;
     logic clk = 1'b0, reset = 1'b1;
-    logic [N*32-1:0] in_row = '0, out_row, mul_in = '0, quant_row = '0;
-    logic relu = 1'b0, mul_en = 1'b0;
-    logic [N*8-1:0] q_row;
+    logic [N*32-1:0] in_row = '0, out_row, multiply_in = '0, quantization_row = '0;
+    logic relu = 1'b0, multiply_enable = 1'b0;
+    logic [N*8-1:0] quantized_row;
 
-    activation #(.N(N)) dut (.*);
+    activation #(.ARRAY_SIZE(N)) dut (.*);
 
     always #5 clk = ~clk;
     task automatic tick(); @(posedge clk); #1; endtask
@@ -44,16 +44,16 @@ module activation_tb;
         `CHECK(v.size() > 1000, $sformatf("only %0d vectors", v.size()))
         for (int i = 0; i + N <= v.size(); i += N) begin
             for (int l = 0; l < N; l++) begin
-                mul_in[32*l +: 32]    = v[i + l];
-                quant_row[32*l +: 32] = q[i + l];
+                multiply_in[32*l +: 32]    = v[i + l];
+                quantization_row[32*l +: 32] = q[i + l];
             end
-            mul_en = 1'b1; tick(); mul_en = 1'b0;
+            multiply_enable = 1'b1; tick(); multiply_enable = 1'b0;
             for (int l = 0; l < N; l++) begin
                 nv++;
-                if (q_row[8*l +: 8] !== want[i + l]) begin
+                if (quantized_row[8*l +: 8] !== want[i + l]) begin
                     bad++;
                     if (bad <= 5)
-                        `CHECK_EQ(q_row[8*l +: 8], want[i + l], $sformatf("v=0x%h q=0x%h", v[i + l], q[i + l]))
+                        `CHECK_EQ(quantized_row[8*l +: 8], want[i + l], $sformatf("v=0x%h q=0x%h", v[i + l], q[i + l]))
                 end
             end
         end

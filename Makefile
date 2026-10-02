@@ -12,8 +12,8 @@ SIM_DIR    := sim
 CORE_RTL := $(CORE_DIR)/tpu_pkg.sv $(CORE_DIR)/fifo.sv $(CORE_DIR)/systolic_data_setup.sv \
             $(CORE_DIR)/pe.sv $(CORE_DIR)/mmu.sv $(CORE_DIR)/weight_fifo.sv \
             $(CORE_DIR)/unified_buffer.sv $(CORE_DIR)/accumulator.sv $(CORE_DIR)/bias.sv \
-            $(CORE_DIR)/activation.sv $(CORE_DIR)/dispatch.sv $(CORE_DIR)/ld_engine.sv \
-            $(CORE_DIR)/wt_engine.sv $(CORE_DIR)/mm_engine.sv $(CORE_DIR)/act_engine.sv \
+            $(CORE_DIR)/activation.sv $(CORE_DIR)/dispatch.sv $(CORE_DIR)/load_engine.sv \
+            $(CORE_DIR)/weight_engine.sv $(CORE_DIR)/matmul_engine.sv $(CORE_DIR)/activate_engine.sv \
             $(CORE_DIR)/tpu_core.sv $(PERIPH_DIR)/host_bridge.sv $(HPS_DIR)/tpu_top.sv
 
 all: test

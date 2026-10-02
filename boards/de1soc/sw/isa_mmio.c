@@ -37,7 +37,7 @@ static void put(const void *p, size_t n) {
 
 int main(int argc, char **argv) {
     uint32_t offset = argc > 1 ? (uint32_t)strtoul(argv[1], 0, 0) : 0;
-    /* N, WMEM_ROWS, UB_DEPTH, ACC_DEPTH, PARAM_DEPTH: the bitstream's build parameters */
+    /* ARRAY_SIZE, WMEM_ROWS, UB_DEPTH, ACC_DEPTH, PARAMETER_DEPTH: the bitstream's build parameters */
     uint32_t params[5] = {8, 8192, 16384, 1024, 256};
     for (int i = 0; i < 5 && argc > 2 + i; i++) params[i] = (uint32_t)strtoul(argv[2 + i], 0, 0);
 

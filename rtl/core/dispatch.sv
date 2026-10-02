@@ -4,200 +4,200 @@ import tpu_pkg::*;
 
 // dispatcher: decodes in order, one instruction per cycle, into four engine queues
 module dispatch #(
-    parameter int N           = 8,
-    parameter int WMEM_ROWS   = 8192,
-    parameter int UB_DEPTH    = 16384,
-    parameter int ACC_DEPTH   = 1024,
-    parameter int PARAM_DEPTH = 256
+    parameter int ARRAY_SIZE      = 8,
+    parameter int WMEM_ROWS       = 8192,
+    parameter int UB_DEPTH        = 16384,
+    parameter int ACC_DEPTH       = 1024,
+    parameter int PARAMETER_DEPTH = 256
 ) (
-    input  logic        clk,
-    input  logic        reset,
+    input  logic                         clk,
+    input  logic                         reset,
 
-    input  logic        insn_valid,
-    input  logic [63:0] insn,
-    output logic        insn_pop,
+    input  logic                         instruction_valid,
+    input  logic [63:0]                  instruction,
+    output logic                         instruction_pop,
 
     // queue pushes, one entry per engine
-    output logic [3:0]          q_push,
-    output logic [UOP_W-1:0]    q_data,
-    input  logic [3:0]          q_full,
+    output logic [3:0]                   queue_push,
+    output logic [QUEUE_ENTRY_WIDTH-1:0] queue_entry,
+    input  logic [3:0]                   queue_full,
 
-    input  logic [63:0]         completed,   // 4 x 16-bit, from the engines
-    output logic [63:0]         dispatched,
+    input  logic [63:0]                  completed,         // 4 x 16-bit, from the engines
+    output logic [63:0]                  dispatched,
 
-    output logic        err,
-    output logic [7:0]  err_code,
-    output logic [31:0] err_seq,
-    output logic        done,
-    output logic [15:0] tag,
-    input  logic        clear_done,
-    output logic        busy                 // fence pending
+    output logic                         error,
+    output logic [7:0]                   error_code,
+    output logic [31:0]                  error_sequence,
+    output logic                         done,
+    output logic [15:0]                  tag,
+    input  logic                         clear_done,
+    output logic                         fence_pending
 );
 
-    logic [31:0] seq;
-    logic [31:0] wbase;          // shadow of WT's WBASE, for weight range checks
+    logic [31:0] instruction_sequence;
+    logic [31:0] weight_base;          // shadow of WT's WBASE, for weight range checks
     logic        fence;
     logic [15:0] fence_tag;
 
     // -- decode -------------------------------------------------------------
-    logic [5:0] op;
-    assign op = insn[63:58];
+    logic [5:0] opcode;
+    assign opcode = instruction[63:58];
 
-    logic [63:0] legal;
-    logic        known;
+    logic [63:0] legal_bits;
+    logic        opcode_known;
     always_comb begin
-        known = 1'b1;
-        case (op)
-            OP_NOP:                     legal = MASK_NOP;
-            OP_WR_WMEM:                 legal = MASK_WR_WMEM;
-            OP_WR_UB, OP_RD_UB:         legal = MASK_WR_UB;
-            OP_WR_BIAS, OP_WR_QUANT:    legal = MASK_WR_PAR;
-            OP_RD_DDR_UB:               legal = MASK_RD_DDR;
-            OP_SET_WBASE, OP_SET_OBASE: legal = MASK_SET32;
-            OP_MATMUL:                  legal = MASK_MATMUL;
-            OP_ACTIVATE:                legal = MASK_ACT;
-            OP_WAIT:                    legal = MASK_WAIT;
-            OP_SIGNAL:                  legal = MASK_SIGNAL;
-            default: begin              legal = '0; known = 1'b0; end
+        opcode_known = 1'b1;
+        case (opcode)
+            OPCODE_NOP:                         legal_bits = MASK_NOP;
+            OPCODE_WR_WMEM:                     legal_bits = MASK_WR_WMEM;
+            OPCODE_WR_UB, OPCODE_RD_UB:         legal_bits = MASK_WR_UB;
+            OPCODE_WR_BIAS, OPCODE_WR_QUANT:    legal_bits = MASK_WR_PARAMETER;
+            OPCODE_RD_DDR_UB:                   legal_bits = MASK_RD_DDR_UB;
+            OPCODE_SET_WBASE, OPCODE_SET_OBASE: legal_bits = MASK_SET_32_BIT;
+            OPCODE_MATMUL:                      legal_bits = MASK_MATMUL;
+            OPCODE_ACTIVATE:                    legal_bits = MASK_ACTIVATE;
+            OPCODE_WAIT:                        legal_bits = MASK_WAIT;
+            OPCODE_SIGNAL:                      legal_bits = MASK_SIGNAL;
+            default:                            begin legal_bits = '0; opcode_known = 1'b0; end
         endcase
     end
 
     // fields (counts stored minus one)
-    logic [63:0] f_n_rows, f_n_ub, f_n_par, f_anb;
-    logic [8:0]  f_m, f_am;
-    logic [12:0] f_kt;
-    logic [10:0] f_nb;
-    logic [63:0] f_wmem_row, f_ub_addr, f_par, f_acc_addr, f_mm_ub, f_act_acc, f_act_ub, f_act_par;
-    logic [1:0]  f_func, f_dst;
-    logic        f_rq, f_bias, f_wsrc;
+    logic [63:0] field_row_count, field_UB_count, field_parameter_count, field_activate_block_count;
+    logic [8:0]  field_matmul_rows, field_activate_rows;
+    logic [12:0] field_k_tiles;
+    logic [10:0] field_block_count;
+    logic [63:0] field_WMEM_row, field_UB_address, field_parameter_index, field_ACC_address, field_matmul_UB_address, field_activate_ACC_address, field_activate_UB_address, field_activate_parameter_index;
+    logic [1:0]  field_function, field_destination;
+    logic        field_requantize, field_bias, field_weight_source;
     always_comb begin
-        f_n_rows   = 64'(insn[15:0]) + 1;
-        f_n_ub     = 64'(insn[11:0]) + 1;
-        f_n_par    = 64'(insn[7:0]) + 1;
-        f_wmem_row = 64'(insn[47:32]);
-        f_ub_addr  = 64'(insn[45:32]);
-        f_par      = 64'(insn[39:32]);
-        f_wsrc     = insn[56];
-        f_m        = 9'(insn[55:48]) + 9'd1;
-        f_kt       = 13'(insn[47:36]) + 13'd1;
-        f_nb       = 11'(insn[35:26]) + 11'd1;
-        f_acc_addr = 64'(insn[25:16]);
-        f_mm_ub    = 64'(insn[15:2]);
-        f_func     = insn[57:56];
-        f_rq       = insn[55];
-        f_dst      = insn[54:53];
-        f_bias     = insn[52];
-        f_anb      = 64'(insn[51:42]) + 1;
-        f_am       = 9'(insn[41:34]) + 9'd1;
-        f_act_acc  = 64'(insn[33:24]);
-        f_act_ub   = 64'(insn[23:10]);
-        f_act_par  = 64'(insn[9:2]);
+        field_row_count   = 64'(instruction[15:0]) + 1;
+        field_UB_count     = 64'(instruction[11:0]) + 1;
+        field_parameter_count    = 64'(instruction[7:0]) + 1;
+        field_WMEM_row = 64'(instruction[47:32]);
+        field_UB_address  = 64'(instruction[45:32]);
+        field_parameter_index      = 64'(instruction[39:32]);
+        field_weight_source     = instruction[56];
+        field_matmul_rows        = 9'(instruction[55:48]) + 9'd1;
+        field_k_tiles       = 13'(instruction[47:36]) + 13'd1;
+        field_block_count       = 11'(instruction[35:26]) + 11'd1;
+        field_ACC_address = 64'(instruction[25:16]);
+        field_matmul_UB_address    = 64'(instruction[15:2]);
+        field_function     = instruction[57:56];
+        field_requantize       = instruction[55];
+        field_destination      = instruction[54:53];
+        field_bias     = instruction[52];
+        field_activate_block_count      = 64'(instruction[51:42]) + 1;
+        field_activate_rows       = 9'(instruction[41:34]) + 9'd1;
+        field_activate_ACC_address  = 64'(instruction[33:24]);
+        field_activate_UB_address   = 64'(instruction[23:10]);
+        field_activate_parameter_index  = 64'(instruction[9:2]);
     end
 
     // products at their real widths: 64-bit operands made Quartus build 64x64 DSP multipliers
-    logic [23:0] p_nb_kt;
-    logic [20:0] p_nb_m, p_anb_am;
-    logic [21:0] p_kt_m;
-    assign p_nb_kt  = 24'(f_nb) * 24'(f_kt);
-    assign p_nb_m   = 21'(f_nb) * 21'(f_m);
-    assign p_kt_m   = 22'(f_kt) * 22'(f_m);
-    assign p_anb_am = 21'(f_anb[10:0]) * 21'(f_am);
+    logic [23:0] product_block_count_k_tiles;
+    logic [20:0] product_block_count_rows, product_activate_block_count_rows;
+    logic [21:0] product_k_tiles_rows;
+    assign product_block_count_k_tiles       = 24'(field_block_count) * 24'(field_k_tiles);
+    assign product_block_count_rows          = 21'(field_block_count) * 21'(field_matmul_rows);
+    assign product_k_tiles_rows              = 22'(field_k_tiles) * 22'(field_matmul_rows);
+    assign product_activate_block_count_rows = 21'(field_activate_block_count[10:0]) * 21'(field_activate_rows);
 
-    logic [7:0] code;
+    logic [7:0] decode_error;
     always_comb begin
-        code = ERR_NONE;
-        if (!known)
-            code = ERR_OPCODE;
-        else if ((insn & ~legal) != 0)
-            code = ERR_RESERVED;
-        else if (op == OP_ACTIVATE && (f_func[1] || f_dst == 2'd3))
-            code = ERR_RESERVED;
-        else if (op == OP_RD_DDR_UB || op == OP_SET_OBASE
-                 || (op == OP_MATMUL && f_wsrc)
-                 || (op == OP_ACTIVATE && f_dst == DST_DDR))
-            code = ERR_UNIMPL;   // DDR3 is phase 5
-        else if (op == OP_ACTIVATE && f_dst == DST_UB && !f_rq)
-            code = ERR_COMBO;
-        else case (op)
-            OP_WR_WMEM:  if (f_wmem_row + f_n_rows > 64'(WMEM_ROWS)) code = ERR_RANGE;
-            OP_WR_UB,
-            OP_RD_UB:    if (f_ub_addr + f_n_ub > 64'(UB_DEPTH)) code = ERR_RANGE;
-            OP_WR_BIAS,
-            OP_WR_QUANT: if (f_par + f_n_par > 64'(PARAM_DEPTH)) code = ERR_RANGE;
-            OP_MATMUL:   if (f_acc_addr + 64'(p_nb_m) > 64'(ACC_DEPTH)
-                             || f_mm_ub + 64'(p_kt_m) > 64'(UB_DEPTH)
-                             || (64'(wbase) + 64'(p_nb_kt)) * N > 64'(WMEM_ROWS)) code = ERR_RANGE;
-            OP_ACTIVATE: if (f_act_acc + 64'(p_anb_am) > 64'(ACC_DEPTH)
-                             || ((f_bias || f_rq) && f_act_par + f_anb > 64'(PARAM_DEPTH))
-                             || (f_dst == DST_UB && f_act_ub + 64'(p_anb_am) > 64'(UB_DEPTH)))
-                             code = ERR_RANGE;
+        decode_error = ERROR_NONE;
+        if (!opcode_known)
+            decode_error = ERROR_OPCODE;
+        else if ((instruction & ~legal_bits) != 0)
+            decode_error = ERROR_RESERVED;
+        else if (opcode == OPCODE_ACTIVATE && (field_function[1] || field_destination == 2'd3))
+            decode_error = ERROR_RESERVED;
+        else if (opcode == OPCODE_RD_DDR_UB || opcode == OPCODE_SET_OBASE
+                 || (opcode == OPCODE_MATMUL && field_weight_source)
+                 || (opcode == OPCODE_ACTIVATE && field_destination == DESTINATION_DDR))
+            decode_error = ERROR_UNIMPLEMENTED;   // DDR3 is phase 5
+        else if (opcode == OPCODE_ACTIVATE && field_destination == DESTINATION_UB && !field_requantize)
+            decode_error = ERROR_COMBINATION;
+        else case (opcode)
+            OPCODE_WR_WMEM:  if (field_WMEM_row + field_row_count > 64'(WMEM_ROWS)) decode_error = ERROR_RANGE;
+            OPCODE_WR_UB,
+            OPCODE_RD_UB:    if (field_UB_address + field_UB_count > 64'(UB_DEPTH)) decode_error = ERROR_RANGE;
+            OPCODE_WR_BIAS,
+            OPCODE_WR_QUANT: if (field_parameter_index + field_parameter_count > 64'(PARAMETER_DEPTH)) decode_error = ERROR_RANGE;
+            OPCODE_MATMUL:   if (field_ACC_address + 64'(product_block_count_rows) > 64'(ACC_DEPTH)
+                             || field_matmul_UB_address + 64'(product_k_tiles_rows) > 64'(UB_DEPTH)
+                             || (64'(weight_base) + 64'(product_block_count_k_tiles)) * ARRAY_SIZE > 64'(WMEM_ROWS)) decode_error = ERROR_RANGE;
+            OPCODE_ACTIVATE: if (field_activate_ACC_address + 64'(product_activate_block_count_rows) > 64'(ACC_DEPTH)
+                             || ((field_bias || field_requantize) && field_activate_parameter_index + field_activate_block_count > 64'(PARAMETER_DEPTH))
+                             || (field_destination == DESTINATION_UB && field_activate_UB_address + 64'(product_activate_block_count_rows) > 64'(UB_DEPTH)))
+                             decode_error = ERROR_RANGE;
             default: ;
         endcase
     end
 
     // which queues an instruction goes to
-    logic [3:0] targets;
+    logic [3:0] target_queues;
     always_comb begin
-        case (op)
-            OP_WR_WMEM, OP_WR_UB, OP_WR_BIAS, OP_WR_QUANT: targets = 4'b0001;
-            OP_SET_WBASE:                                  targets = 4'b0010;
-            OP_MATMUL:                                     targets = 4'b0110;
-            OP_ACTIVATE, OP_RD_UB:                         targets = 4'b1000;
-            OP_WAIT:                                       targets = 4'b0001 << insn[57:56];
-            default:                                       targets = 4'b0000;   // NOP, SIGNAL
+        case (opcode)
+            OPCODE_WR_WMEM, OPCODE_WR_UB, OPCODE_WR_BIAS, OPCODE_WR_QUANT: target_queues = 4'b0001;
+            OPCODE_SET_WBASE:                                              target_queues = 4'b0010;
+            OPCODE_MATMUL:                                                 target_queues = 4'b0110;
+            OPCODE_ACTIVATE, OPCODE_RD_UB:                                 target_queues = 4'b1000;
+            OPCODE_WAIT:                                                   target_queues = 4'b0001 << instruction[57:56];
+            default:                                                       target_queues = 4'b0000;   // NOP, SIGNAL
         endcase
     end
 
-    logic all_quiet;
-    assign all_quiet = (completed == dispatched);
+    logic all_engines_quiet;
+    assign all_engines_quiet = (completed == dispatched);
 
-    logic go;
-    assign go = insn_valid && !err && !fence && code == ERR_NONE && (targets & q_full) == 0;
+    logic dispatch_now;
+    assign dispatch_now = instruction_valid && !error && !fence && decode_error == ERROR_NONE && (target_queues & queue_full) == 0;
 
-    assign insn_pop = go;
-    assign q_push   = go ? targets : 4'b0000;
+    assign instruction_pop = dispatch_now;
+    assign queue_push      = dispatch_now ? target_queues : 4'b0000;
     // a WAIT carries the counts dispatched so far, not including itself
-    assign q_data   = {dispatched, insn};
-    assign busy     = fence;
+    assign queue_entry   = {dispatched, instruction};
+    assign fence_pending = fence;
 
     always_ff @(posedge clk) begin
         if (reset) begin
-            seq        <= '0;
-            wbase      <= '0;
-            fence      <= 1'b0;
-            fence_tag  <= '0;
-            dispatched <= '0;
-            err        <= 1'b0;
-            err_code   <= '0;
-            err_seq    <= '0;
-            done       <= 1'b0;
-            tag        <= '0;
+            instruction_sequence <= '0;
+            weight_base          <= '0;
+            fence                <= 1'b0;
+            fence_tag            <= '0;
+            dispatched           <= '0;
+            error                <= 1'b0;
+            error_code           <= '0;
+            error_sequence       <= '0;
+            done                 <= 1'b0;
+            tag                  <= '0;
         end else begin
             if (clear_done)
                 done <= 1'b0;
 
-            if (insn_valid && !err && !fence && code != ERR_NONE) begin
-                err      <= 1'b1;
-                err_code <= code;
-                err_seq  <= seq;
+            if (instruction_valid && !error && !fence && decode_error != ERROR_NONE) begin
+                error          <= 1'b1;
+                error_code     <= decode_error;
+                error_sequence <= instruction_sequence;
             end
 
-            if (go) begin
-                seq <= seq + 1;
-                for (int e = 0; e < 4; e++)
-                    if (targets[e])
-                        dispatched[16*e +: 16] <= dispatched[16*e +: 16] + 16'd1;
-                if (op == OP_SET_WBASE)
-                    wbase <= insn[31:0];
-                else if (op == OP_MATMUL)
-                    wbase <= wbase + 32'(p_nb_kt);
-                if (op == OP_SIGNAL) begin
+            if (dispatch_now) begin
+                instruction_sequence <= instruction_sequence + 1;
+                for (int engine = 0; engine < 4; engine++)
+                    if (target_queues[engine])
+                        dispatched[16*engine +: 16] <= dispatched[16*engine +: 16] + 16'd1;
+                if (opcode == OPCODE_SET_WBASE)
+                    weight_base <= instruction[31:0];
+                else if (opcode == OPCODE_MATMUL)
+                    weight_base <= weight_base + 32'(product_block_count_k_tiles);
+                if (opcode == OPCODE_SIGNAL) begin
                     fence     <= 1'b1;
-                    fence_tag <= insn[15:0];
+                    fence_tag <= instruction[15:0];
                 end
             end
 
-            if (fence && all_quiet) begin
+            if (fence && all_engines_quiet) begin
                 fence <= 1'b0;
                 done  <= 1'b1;
                 tag   <= fence_tag;

@@ -11,7 +11,7 @@ set_module_property EDITABLE false
 
 set rtl ../../../../rtl
 set files [list \
-    $rtl/core/tpu_pkg.sv $rtl/core/fifo.sv $rtl/core/systolic_data_setup.sv $rtl/core/pe.sv $rtl/core/mmu.sv $rtl/core/weight_fifo.sv $rtl/core/unified_buffer.sv $rtl/core/accumulator.sv $rtl/core/bias.sv $rtl/core/activation.sv $rtl/core/dispatch.sv $rtl/core/ld_engine.sv $rtl/core/wt_engine.sv $rtl/core/mm_engine.sv $rtl/core/act_engine.sv $rtl/core/tpu_core.sv $rtl/peripherals/host_bridge.sv \
+    $rtl/core/tpu_pkg.sv $rtl/core/fifo.sv $rtl/core/systolic_data_setup.sv $rtl/core/pe.sv $rtl/core/mmu.sv $rtl/core/weight_fifo.sv $rtl/core/unified_buffer.sv $rtl/core/accumulator.sv $rtl/core/bias.sv $rtl/core/activation.sv $rtl/core/dispatch.sv $rtl/core/load_engine.sv $rtl/core/weight_engine.sv $rtl/core/matmul_engine.sv $rtl/core/activate_engine.sv $rtl/core/tpu_core.sv $rtl/peripherals/host_bridge.sv \
     ../../top/tpu_top.sv]
 
 add_fileset QUARTUS_SYNTH QUARTUS_SYNTH "" ""
@@ -20,7 +20,7 @@ foreach f $files {
     add_fileset_file [file tail $f] SYSTEM_VERILOG PATH $f
 }
 
-foreach {name value} {N 8 WMEM_ROWS 8192 UB_DEPTH 16384 ACC_DEPTH 1024 PARAM_DEPTH 256} {
+foreach {name value} {ARRAY_SIZE 8 WMEM_ROWS 8192 UB_DEPTH 16384 ACC_DEPTH 1024 PARAMETER_DEPTH 256} {
     add_parameter $name INTEGER $value
     set_parameter_property $name HDL_PARAMETER true
 }

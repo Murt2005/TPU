@@ -2,11 +2,11 @@
 
 // DE1-SoC top: host_bridge + tpu_core + power-on reset
 module tpu_top #(
-    parameter int N           = 8,
-    parameter int WMEM_ROWS   = 8192,
-    parameter int UB_DEPTH    = 16384,
-    parameter int ACC_DEPTH   = 1024,
-    parameter int PARAM_DEPTH = 256
+    parameter int ARRAY_SIZE      = 8,
+    parameter int WMEM_ROWS       = 8192,
+    parameter int UB_DEPTH        = 16384,
+    parameter int ACC_DEPTH       = 1024,
+    parameter int PARAMETER_DEPTH = 256
 ) (
     input  logic        clk,
     input  logic        reset_n,
@@ -33,39 +33,39 @@ module tpu_top #(
     logic rst, core_reset;
     assign rst = ~reset_n | ~por_done;
 
-    logic        insn_push, insn_full, data_push, data_full, out_pop, out_empty;
-    logic [63:0] insn_word;
-    logic [31:0] data_word, out_word;
-    logic        clear_done, clear_perf, done, err, idle;
-    logic [7:0]  err_code;
-    logic [31:0] err_seq, perf_cycles, perf_mm_beats, perf_mm_wstall, perf_mm_sync;
+    logic        instruction_push, instruction_full, data_push, data_full, output_pop, output_empty;
+    logic [63:0] instruction_word;
+    logic [31:0] data_word, output_word;
+    logic        clear_done, clear_performance, done, error, idle;
+    logic [7:0]  error_code;
+    logic [31:0] error_sequence, performance_cycles, performance_matmul_beats, performance_matmul_weight_stalls, performance_matmul_sync_stalls;
     logic [15:0] tag;
-    logic [9:0]  insn_free;
-    logic [10:0] data_free, out_count;
+    logic [9:0]  instruction_free;
+    logic [10:0] data_free, output_count;
 
     host_bridge u_bridge (
         .clk(clk), .reset(rst),
         .avs_address(avs_address), .avs_read(avs_read), .avs_readdata(avs_readdata),
         .avs_write(avs_write), .avs_writedata(avs_writedata), .avs_waitrequest(avs_waitrequest),
-        .insn_push(insn_push), .insn_word(insn_word), .insn_full(insn_full),
+        .instruction_push(instruction_push), .instruction_word(instruction_word), .instruction_full(instruction_full),
         .data_push(data_push), .data_word(data_word), .data_full(data_full),
-        .out_pop(out_pop), .out_word(out_word), .out_empty(out_empty),
-        .core_reset(core_reset), .clear_done(clear_done), .clear_perf(clear_perf),
-        .done(done), .err(err), .err_code(err_code), .err_seq(err_seq), .tag(tag), .idle(idle),
-        .insn_free(insn_free), .data_free(data_free), .out_count(out_count),
-        .perf_cycles(perf_cycles), .perf_mm_beats(perf_mm_beats),
-        .perf_mm_wstall(perf_mm_wstall), .perf_mm_sync(perf_mm_sync));
+        .output_pop(output_pop), .output_word(output_word), .output_empty(output_empty),
+        .core_reset(core_reset), .clear_done(clear_done), .clear_performance(clear_performance),
+        .done(done), .error(error), .error_code(error_code), .error_sequence(error_sequence), .tag(tag), .idle(idle),
+        .instruction_free(instruction_free), .data_free(data_free), .output_count(output_count),
+        .performance_cycles(performance_cycles), .performance_matmul_beats(performance_matmul_beats),
+        .performance_matmul_weight_stalls(performance_matmul_weight_stalls), .performance_matmul_sync_stalls(performance_matmul_sync_stalls));
 
-    tpu_core #(.N(N), .WMEM_ROWS(WMEM_ROWS), .UB_DEPTH(UB_DEPTH), .ACC_DEPTH(ACC_DEPTH),
-               .PARAM_DEPTH(PARAM_DEPTH)) u_core (
+    tpu_core #(.ARRAY_SIZE(ARRAY_SIZE), .WMEM_ROWS(WMEM_ROWS), .UB_DEPTH(UB_DEPTH), .ACC_DEPTH(ACC_DEPTH),
+               .PARAMETER_DEPTH(PARAMETER_DEPTH)) u_core (
         .clk(clk), .reset(rst | core_reset),
-        .insn_push(insn_push), .insn_word(insn_word), .insn_full(insn_full),
+        .instruction_push(instruction_push), .instruction_word(instruction_word), .instruction_full(instruction_full),
         .data_push(data_push), .data_word(data_word), .data_full(data_full),
-        .out_pop(out_pop), .out_word(out_word), .out_empty(out_empty),
-        .clear_done(clear_done), .clear_perf(clear_perf),
-        .done(done), .err(err), .err_code(err_code), .err_seq(err_seq), .tag(tag), .idle(idle),
-        .insn_free(insn_free), .data_free(data_free), .out_count(out_count),
-        .perf_cycles(perf_cycles), .perf_mm_beats(perf_mm_beats),
-        .perf_mm_wstall(perf_mm_wstall), .perf_mm_sync(perf_mm_sync));
+        .output_pop(output_pop), .output_word(output_word), .output_empty(output_empty),
+        .clear_done(clear_done), .clear_performance(clear_performance),
+        .done(done), .error(error), .error_code(error_code), .error_sequence(error_sequence), .tag(tag), .idle(idle),
+        .instruction_free(instruction_free), .data_free(data_free), .output_count(output_count),
+        .performance_cycles(performance_cycles), .performance_matmul_beats(performance_matmul_beats),
+        .performance_matmul_weight_stalls(performance_matmul_weight_stalls), .performance_matmul_sync_stalls(performance_matmul_sync_stalls));
 
 endmodule

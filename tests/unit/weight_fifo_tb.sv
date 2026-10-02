@@ -8,13 +8,13 @@ module weight_fifo_tb;
     localparam int N = 4;
     logic clk = 1'b0, reset = 1'b1;
     logic fill_ready, fill_slot_next, fill_advance = 1'b0;
-    logic fill_we = 1'b0, fill_slot = 1'b0;
+    logic fill_write_enable = 1'b0, fill_slot = 1'b0;
     logic [7:0] fill_row = '0;
     logic [N*8-1:0] fill_data = '0;
     logic [N-1:0][N*8-1:0] tile;
     logic tile_full, take = 1'b0;
 
-    weight_fifo #(.N(N)) dut (.*);
+    weight_fifo #(.ARRAY_SIZE(N)) dut (.*);
 
     always #5 clk = ~clk;
     task automatic tick(); @(posedge clk); #1; endtask
@@ -26,11 +26,11 @@ module weight_fifo_tb;
         logic slot;
         slot = fill_slot_next;
         for (int r = 0; r < N; r++) begin
-            fill_we = 1'b1; fill_slot = slot; fill_row = 8'(r); fill_data = row_of(t, r);
+            fill_write_enable = 1'b1; fill_slot = slot; fill_row = 8'(r); fill_data = row_of(t, r);
             fill_advance = r == N - 1;
             tick();
         end
-        fill_we = 1'b0; fill_advance = 1'b0;
+        fill_write_enable = 1'b0; fill_advance = 1'b0;
     endtask
 
     initial begin

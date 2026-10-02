@@ -17,8 +17,8 @@ rtl-sim: | $(SIM_DIR)
 	@mkdir -p $(RTL_SIM_DIR)
 	@$(VERILATOR) --cc --exe --build -j 0 -Wall --Mdir $(RTL_SIM_DIR) verilator.vlt \
 		--top-module tpu_top \
-		-GN=$(N) -GWMEM_ROWS=$(WMEM_ROWS) -GUB_DEPTH=$(UB_DEPTH) \
-		-GACC_DEPTH=$(ACC_DEPTH) -GPARAM_DEPTH=$(PARAM_DEPTH) \
+		-GARRAY_SIZE=$(N) -GWMEM_ROWS=$(WMEM_ROWS) -GUB_DEPTH=$(UB_DEPTH) \
+		-GACC_DEPTH=$(ACC_DEPTH) -GPARAMETER_DEPTH=$(PARAM_DEPTH) \
 		-CFLAGS "-std=c++17 -DTB_N=$(N) -DTB_WMEM_ROWS=$(WMEM_ROWS) \
 		         -DTB_UB_DEPTH=$(UB_DEPTH) -DTB_ACC_DEPTH=$(ACC_DEPTH) \
 		         -DTB_PARAM_DEPTH=$(PARAM_DEPTH)" \
@@ -48,7 +48,7 @@ selftest-rom:
 selftest-sim: selftest-rom | $(SIM_DIR)
 	@mkdir -p $(dir $(ST_SIM))
 	@$(VERILATOR) --cc --exe --build -j 0 -Wall --Mdir $(dir $(ST_SIM)) verilator.vlt \
-		--top-module tpu_selftest -GN=$(N) -GROM_FILE='"$(abspath $(ST_HEX))"' \
+		--top-module tpu_selftest -GARRAY_SIZE=$(N) -GROM_FILE='"$(abspath $(ST_HEX))"' \
 		-CFLAGS -std=c++17 $(CORE_RTL) $(HPS_DIR)/replay.sv $(HPS_DIR)/tpu_selftest.sv \
 		$(TEST_DIR)/verilator/tb_isa_selftest.cpp -o tb_isa_selftest > /dev/null
 	@$(ST_SIM) $(ST_SLOTS)

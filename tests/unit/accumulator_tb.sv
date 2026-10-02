@@ -7,14 +7,14 @@ module accumulator_tb;
 
     localparam int N = 4, D = 16, AW = $clog2(D);
     logic clk = 1'b0, reset = 1'b1;
-    logic signed [N-1:0][31:0] psum = '0;
-    logic        [N-1:0]       psum_valid = '0;
-    logic                      tag_push = 1'b0, row_written, act_busy;
+    logic signed [N-1:0][31:0] partial_sum = '0;
+    logic        [N-1:0]       partial_sum_valid = '0;
+    logic                      tag_push = 1'b0, row_written, activate_read_blocked;
     logic [AW:0]               tag_in = '0;
-    logic [AW-1:0]             act_raddr = '0;
-    logic [N*32-1:0]           rdata;
+    logic [AW-1:0]             activate_read_address = '0;
+    logic [N*32-1:0]           read_data;
 
-    accumulator #(.N(N), .ACC_DEPTH(D)) dut (.*);
+    accumulator #(.ARRAY_SIZE(N), .ACC_DEPTH(D)) dut (.*);
 
     always #5 clk = ~clk;
     task automatic tick(); @(posedge clk); #1; endtask
@@ -22,7 +22,7 @@ module accumulator_tb;
     int written = 0, busy_cycles = 0;
     always @(posedge clk) begin
         if (row_written) written++;
-        if (act_busy) busy_cycles++;
+        if (activate_read_blocked) busy_cycles++;
     end
 
     // rows arrive the way the mmu emits them: column c of row k at cycle k + c
@@ -32,19 +32,19 @@ module accumulator_tb;
             tag_in   = cyc < n ? {ow[cyc], AW'(addr[cyc])} : '0;
             for (int c = 0; c < N; c++) begin
                 int k = cyc - c;
-                psum_valid[c] = k >= 0 && k < n;
-                psum[c]       = (k >= 0 && k < n) ? vals[k][c] : 0;
+                partial_sum_valid[c] = k >= 0 && k < n;
+                partial_sum[c]       = (k >= 0 && k < n) ? vals[k][c] : 0;
             end
             tick();
         end
-        tag_push = 1'b0; psum_valid = '0;
+        tag_push = 1'b0; partial_sum_valid = '0;
         repeat (4) tick();
     endtask
 
     task automatic expect_row(int addr, int want [N], string what);
-        act_raddr = AW'(addr); tick();
+        activate_read_address = AW'(addr); tick();
         for (int c = 0; c < N; c++)
-            `CHECK_EQ(rdata[32*c +: 32], 32'(want[c]), $sformatf("%s, ACC[%0d] col %0d", what, addr, c))
+            `CHECK_EQ(read_data[32*c +: 32], 32'(want[c]), $sformatf("%s, ACC[%0d] col %0d", what, addr, c))
     endtask
 
     int addr [];
