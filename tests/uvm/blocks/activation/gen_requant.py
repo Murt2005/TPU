@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""requantizer vectors for activation_tb, from tpu.golden.requant (the host reference,
+"""requantizer vectors for activation_test, from tpu.golden.requant (the host reference,
 independent of the RTL). usage: gen_requant.py <out.txt>; lines: v(hex32) q(hex32) out(hex8)"""
 import sys
 

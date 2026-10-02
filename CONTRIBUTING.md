@@ -22,17 +22,15 @@ The quality gates are local `make` targets; this project deliberately has no
 hosted CI.
 
 ```sh
-make test          # the unit benches, one per datapath module (fast)
-make uvm           # the UVM environments (tests/uvm), ~1 min to build
+make test          # the UVM block tests (tests/uvm), one per datapath block, ~1 min to build
 make sim-test      # the reference model's checks, then the RTL vs the model at N = 8 and 4
 make lint          # Verilator lint: tpu_top at N = 8 and 4, tpu_selftest
 make selftest-sim  # the DE1-SoC self-test ROM, as the FPGA will replay it
-make check         # all five
+make check         # all four
 ```
 
 Every target exits non-zero on failure, so they're safe to gate on.
-`make list` shows them all; `make unit-<name>` runs one bench and
-`make uvm-<test>` one UVM test.
+`make list` shows them all; `make uvm-<test>` runs one UVM test.
 
 **Anything that could move a cycle:** compare `make selftest-sim ST_SLOTS=21`
 with the captures before your change.
@@ -43,17 +41,22 @@ Quartus designs and run the board tiers: the self-test **PASS**, then
 
 [`docs/verification.md`](docs/verification.md) has the full ladder.
 
-## Adding a unit bench
+## Adding a UVM block test
 
-1. Write `tests/unit/<name>-tb.sv` as a module `<name>_tb`. `` `include
-   "check.svh" `` inside it, then use `` `TEST("…") ``, `` `CHECK(cond, msg) ``
-   and `` `CHECK_EQ(got, want, msg) ``, and end with `tb_done();`, which prints
-   the summary and fails the run if any check did.
-2. That's all. `mk/unit.mk` picks up every `tests/unit/*-tb.sv` and compiles it
-   against the core's files.
+1. Make `tests/uvm/blocks/<block>/` with `<block>-if.sv` (the block's pins) and
+   `<block>-pkg.sv`: item, sequence, driver, monitor, scoreboard, env and a test
+   extending `base_test`. `fifo-pkg.sv` is the smallest example.
+2. The scoreboard models the block's contract and counts coverage bins with
+   `coverage_bins` (`add` in the constructor, `hit` as they occur, `check` in
+   `check_phase`); a bin never hit fails the test.
+3. Instantiate the block in `blocks/blocks-top.sv` on its own interface and
+   reset, and put the virtual interface in the config db.
+4. Add the block to `UVM_BLOCKS_LIST` and the test to `UVM_BLOCK_TESTS` in
+   `mk/uvm.mk`.
 
-Before trusting a new bench, break the module it tests on purpose and make sure
-the bench fails.
+Before trusting a new test, break the block it tests on purpose (in a copy of
+the RTL) and make sure the test fails. Keep `dist` off any variable another
+constraint also restricts; Verilator treats it as a hard pick.
 
 ## Style conventions
 

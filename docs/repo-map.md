@@ -8,9 +8,9 @@ has the directory-level version.
 | File | What |
 |---|---|
 | `README.md` | Entry point: what this is, the DE1-SoC quick start, the design in brief, status |
-| `CONTRIBUTING.md` | Dev setup, the local gates, adding a unit bench, house style |
+| `CONTRIBUTING.md` | Dev setup, the local gates, adding a UVM block test, house style |
 | `Makefile` | `make test`, `make check`, `make list`; defines `CORE_RTL` (the core's files in compile order) and includes `mk/` |
-| `mk/unit.mk` | the unit benches: `make test` / `make unit`, `make unit-<name>` |
+| `mk/uvm.mk` | the UVM block tests: `make test` / `make uvm`, `make uvm-<test>` |
 | `mk/core.mk` | `make model-test`, `rtl-sim`, `rtl-test`, `sim-test` (N = 8 and 4); `selftest-rom`, `selftest-sim` |
 | `mk/verilator.mk` | `make lint`: `tpu_top` at N = 8 and 4, and `tpu_selftest` |
 | `verilator.vlt` | lint waivers, each with a reason |
@@ -70,10 +70,9 @@ Everything under `rtl/` is board-neutral. See
 
 | Path | What |
 |---|---|
-| `unit/*-tb.sv`, `unit/check.svh` | the unit benches and their shared check header |
-| `uvm/common/`, `uvm/blocks/` | the UVM environments: shared coverage bins and base test; one package and interface per block, all in `blocks-top.sv` (`make uvm`) |
+| `uvm/common/`, `uvm/blocks/` | the UVM environments: shared coverage bins and base test; one package and interface per block, all in `blocks-top.sv` (`make test`) |
 | `uvm/uvm-verilator/` | the UVM library, a pinned submodule |
-| `unit/gen_requant.py` | requantizer vectors from `tpu.golden` for `activation_tb` |
+| `uvm/blocks/activation/gen_requant.py` | requantizer vectors from `tpu.golden` for `activation_test` |
 | `isa/test_isa_model.py` | the model against independent references (`make model-test`) |
 | `isa/test_isa_rtl.py` | the RTL against the model, word for word (`make rtl-test`), or the board with `serial:<port>` |
 | `isa/isa_progs.py` | random legal programs for the concurrency tests |

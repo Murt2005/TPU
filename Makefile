@@ -29,23 +29,21 @@ $(SIM_DIR):
 
 include mk/verilator.mk
 include mk/core.mk
-include mk/unit.mk
 include mk/uvm.mk
 
 # the fast loop
-test: unit
+test: uvm
 
 # every gate short of a board
-check: lint test uvm sim-test selftest-sim
+check: lint test sim-test selftest-sim
 
 list:
-	@echo "make test         the unit benches (tests/unit), the fast loop"
-	@for t in $(UNIT_TESTS); do echo "  make unit-$$t"; done
+	@echo "make test         the UVM block tests (tests/uvm), ~1 min to build"
+	@for t in $(UVM_BLOCK_TESTS); do echo "  make uvm-$$t"; done
 	@echo "make sim-test     reference-model checks, then the RTL vs the model at N = 8 and 4"
 	@echo "  make model-test | make rtl-test [N=4] | make rtl-sim [N=4]"
 	@echo "make selftest-sim the DE1-SoC self-test ROM in Verilator [ST_SLOTS=21]"
 	@echo "make lint         verilator lint: tpu_top at N = 8 and 4, tpu_selftest"
-	@echo "make uvm          the UVM environments (tests/uvm); make uvm-<test> runs one"
 	@echo "make check        all of the above"
 	@echo "make clean"
 

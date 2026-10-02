@@ -29,7 +29,7 @@ Working on the code:
 | [`architecture.md`](architecture.md) | The core: control vs datapath, every module and its latency, the memories and their port priorities, overlapped tiles, the requantizer, parameters, the board wrapper, the software around it |
 | [`isa.md`](isa.md) | The programmer's view: the 64-bit instructions and fields, the engines, `WAIT`/`SIGNAL`, decode errors, data layouts, the `host_bridge` register map, the requantizer's arithmetic, compiling an MLP |
 | [`de1soc.md`](de1soc.md) | The DE1-SoC: what runs on the board and what was measured, the rev H board and its two serial ports, Quartus in an OrbStack VM, the self-test and GHRD flows, the ARM programs, the gotchas |
-| [`verification.md`](verification.md) | The ladder from unit benches to the board, what each tier sees, and what to run per change |
+| [`verification.md`](verification.md) | The ladder from the UVM block tests to the board, what each tier sees, and what to run per change |
 | [`performance.md`](performance.md) | The DE1-SoC numbers; then, as history, the first core's 8.0 s → 63.8 ms trail on the pico2-ice |
 | [`utilization.md`](utilization.md) | History: the first core's measured array utilization and wire composition, and the instruction-stream design they motivated |
 | [`mnist.md`](mnist.md) | The demo model: shape, quantization, accuracy, how it runs on the board |

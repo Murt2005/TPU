@@ -4,13 +4,21 @@ UVM_DIR       := $(TEST_DIR)/uvm
 UVM_LIBRARY   := $(UVM_DIR)/uvm-verilator/src
 UVM_SIM       := $(SIM_DIR)/uvm
 UVM_BLOCKS    := $(UVM_SIM)/blocks/Vuvm_blocks_top
-UVM_BLOCK_TESTS := fifo_random_test
+UVM_BLOCKS_LIST := fifo pe systolic-data-setup weight-fifo accumulator bias activation unified-buffer mmu
+UVM_BLOCK_TESTS := fifo_random_test pe_random_test systolic_data_setup_random_test weight_fifo_random_test \
+                   accumulator_random_test bias_random_test activation_test unified_buffer_random_test mmu_random_test
+REQUANT_VECTORS := $(UVM_SIM)/requant_vectors.txt
 
 UVM_FLAGS := --binary --timing -j 0 -Wno-fatal -Wno-lint -Wno-style -Wno-SYMRSVDWORD \
              -Wno-CONSTRAINTIGN -Wno-ZERODLY +define+UVM_NO_DPI +incdir+$(UVM_LIBRARY)
 UVM_BLOCK_SOURCES := $(UVM_DIR)/common/uvm-common-pkg.sv \
-                     $(UVM_DIR)/blocks/fifo/fifo-if.sv $(UVM_DIR)/blocks/fifo/fifo-pkg.sv \
+                     $(foreach b,$(UVM_BLOCKS_LIST),$(UVM_DIR)/blocks/$(b)/$(b)-if.sv $(UVM_DIR)/blocks/$(b)/$(b)-pkg.sv) \
                      $(UVM_DIR)/blocks/blocks-top.sv
+
+# requantizer vectors from the host reference (tpu.golden.requant), for activation_test
+$(REQUANT_VECTORS): $(UVM_DIR)/blocks/activation/gen_requant.py host/tpu/golden.py | $(SIM_DIR)
+	@mkdir -p $(UVM_SIM)
+	@python3 $(UVM_DIR)/blocks/activation/gen_requant.py $@ > /dev/null
 
 $(UVM_LIBRARY)/uvm_pkg.sv:
 	@echo "the UVM library is a submodule: run 'git submodule update --init'" && false
@@ -24,12 +32,12 @@ $(UVM_BLOCKS): $(UVM_LIBRARY)/uvm_pkg.sv $(UVM_BLOCK_SOURCES) $(CORE_RTL) | $(SI
 
 # a test passes when it prints PASSED and UVM reports no errors or fatals
 define UVM_TEST_RULE
-uvm-$(1): $(UVM_BLOCKS)
-	@$(UVM_BLOCKS) +UVM_TESTNAME=$(1) > $(UVM_SIM)/blocks/$(1).log 2>&1; \
+uvm-$(1): $(UVM_BLOCKS) $(REQUANT_VECTORS)
+	@$(UVM_BLOCKS) +UVM_TESTNAME=$(1) +vectors=$(abspath $(REQUANT_VECTORS)) > $(UVM_SIM)/blocks/$(1).log 2>&1; \
 	if grep -q 'RESULT.*$(1) PASSED' $(UVM_SIM)/blocks/$(1).log; then \
-		printf '  %-28s PASS\n' $(1); \
+		printf '  %-34s PASS\n' $(1); \
 	else \
-		printf '  %-28s FAIL (%s)\n' $(1) $(UVM_SIM)/blocks/$(1).log; \
+		printf '  %-34s FAIL (%s)\n' $(1) $(UVM_SIM)/blocks/$(1).log; \
 		grep -E 'UVM_(ERROR|FATAL) ' $(UVM_SIM)/blocks/$(1).log | head -5; exit 1; \
 	fi
 endef

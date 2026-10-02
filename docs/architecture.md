@@ -202,7 +202,7 @@ packing ([`backlog.md`](backlog.md)).
 
 ## 9. Build flow
 
-- **Simulation:** Verilator. `make test` runs the unit benches, `make
+- **Simulation:** Verilator. `make test` runs the UVM block tests, `make
   sim-test` runs the RTL against the model at N = 8 and 4, and `make
   selftest-sim` replays the self-test ROM. See [`verification.md`](verification.md).
 - **FPGA:** Quartus Prime Lite in an x86 VM.

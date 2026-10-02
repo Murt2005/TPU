@@ -191,7 +191,7 @@ More in [`docs/de1soc.md`](docs/de1soc.md) §6.
 Everything except the FPGA runs on your laptop with Verilator:
 
 ```bash
-make test           # the unit benches, one per datapath module
+make test           # the UVM block tests, one per datapath block
 make sim-test       # the reference model's checks, then the RTL vs the model word for word, N = 8 and 4
 make selftest-sim   # the board's self-test ROM, exactly as the FPGA will replay it
 make check          # all of the above, plus lint
@@ -256,7 +256,7 @@ TPU/
 ├── host/              the `tpu` Python package: encoder, reference model, compiler,
 │                      WAIT checker, device and board-console links
 ├── tests/
-│   ├── unit/          self-checking unit benches (make test)
+│   ├── uvm/           UVM environments, one per datapath block (make test)
 │   ├── isa/           the reference-model and RTL-vs-model suites (sim, or on the board)
 │   └── verilator/     C++ benches: the register transport, the self-test runner
 ├── software/mnist/    144→64→10 MLP: training, the host reference, the drawing demo;
@@ -274,7 +274,7 @@ TPU/
 
 | Command | Where | Does |
 |---|---|---|
-| `make test` | Mac | the unit benches (`make unit-<name>` for one) |
+| `make test` | Mac | the UVM block tests (`make uvm-<test>` for one) |
 | `make sim-test` | Mac | `model-test`, then `rtl-test` at N = 8 and 4 (`make rtl-test N=4` for one size) |
 | `make lint` | Mac | Verilator lint: `tpu_top` at N = 8 and 4, `tpu_selftest` |
 | `make selftest-sim [ST_SLOTS=21]` | Mac | the self-test ROM in Verilator, optionally reading the perf captures back |
@@ -311,8 +311,8 @@ bitstreams on the card.
     concurrently.
   - **Throughput:** each tile costs exactly `max(m, N)` cycles with no
     steady-state stalls.
-  - **Unit benches:** every datapath module has one, each checked against an
-    injected bug.
+  - **UVM block tests:** every datapath block has a UVM environment with random
+    stimulus, a model and coverage bins, each checked against an injected bug.
 - **Next** ([`docs/backlog.md`](docs/backlog.md)):
   - faster ARM preprocessing and fewer bridge accesses, which together make up
     most of the 110 µs;
@@ -349,7 +349,7 @@ datapath files, rewritten for the new instruction set.
 Contributions are welcome: bug fixes, benches, docs. See
 [CONTRIBUTING.md](CONTRIBUTING.md) for setup, the local gates (`make check`, plus
 the board tiers for anything touching synthesis; there's no hosted CI by
-choice), how to add a unit bench, and the house style.
+choice), how to add a UVM block test, and the house style.
 
 ## 9. License
 

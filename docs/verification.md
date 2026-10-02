@@ -10,8 +10,7 @@ the model is itself checked against independent references.
 
 | Tier | Command | Sees | Can't see |
 |---|---|---|---|
-| unit | `make test` | each datapath module on its own: 9 self-checking benches | how the engines sequence them |
-| UVM | `make uvm` | blocks under random stimulus, checked cycle by cycle against a model, with coverage bins (so far: `fifo`) | how the engines sequence them |
+| UVM blocks | `make test` | each datapath block under random stimulus, checked every cycle against a model, with coverage bins | how the engines sequence them |
 | model | `make model-test` | the model against `tpu.golden`, `hw_layer` and host rounding | anything about the RTL |
 | RTL vs model | `make sim-test` | the whole core through its real bridge registers, at N = 8 and N = 4 | synthesis, timing, the board |
 | lint | `make lint` | width, unused and latch issues at both sizes and in the self-test top | behaviour |
@@ -20,50 +19,52 @@ the model is itself checked against independent references.
 | suite, board | `tests/isa/test_isa_rtl.py serial:<port>` | the GHRD build from the ARM: every functional test | exact cycle counts (the link's latency is in them) |
 | application, board | `mnist_tpu bench` | 10,000 MNIST images end to end, preprocessing included | — |
 
-`make check` runs the first six. The last three need the board
+`make check` runs the first five. The last three need the board
 ([`de1soc.md`](de1soc.md)).
 
-## Unit benches (`make test`)
+## UVM block tests (`make test`)
 
-Plain SystemVerilog in `tests/unit/`, built with `verilator --binary` against
-the core's files. `check.svh` gives named tests, `CHECK`/`CHECK_EQ` that
-report file and line, and a summary whose exit status fails `make`.
-`make unit-<name>` runs one.
+`tests/uvm/` holds one UVM environment per datapath block: an interface and a
+package with the item, sequence, driver, monitor, scoreboard, env and test. They
+run on Verilator 5.052 with CHIPS Alliance's patched UVM 2020-3.2 (a pinned
+submodule, built with `UVM_NO_DPI`). All nine tests share one binary,
+`uvm_blocks_top`, which instantiates every block on its own interface;
+`+UVM_TESTNAME` picks the test, and `make uvm-<test>` runs one. A test passes
+when it prints `PASSED` with no UVM errors.
 
-| Bench | Checks |
-|---|---|
-| `pe` | the flip uses the loaded weight; the next weight loads under the current one; a write in the flip's own cycle belongs to the next tile; int8 extremes; an invalid activation neither computes nor flips |
-| `mmu` | three back-to-back tiles on `matmul_engine`'s overlap schedule at m = 1, N and 2N+1, every column against a plain matmul |
-| `weight_fifo` | ping-pong order, the same-cycle refill, wrap-around |
-| `accumulator` | column-skewed rows re-aligned; overwrite vs accumulate; 32-bit wrap; the same row N rows later |
-| `activation` | ReLU/identity; the requantizer against 21,240 vectors from `tpu.golden.requant` (`gen_requant.py`) over 67 quant words |
-| `bias`, `unified_buffer`, `fifo`, `systolic_data_setup` | add and pass-through; port priorities; show-ahead order and full/empty; per-lane delay |
+Each scoreboard is a model of the block's contract, not of its implementation,
+and checks every cycle (or every row, tile or job). Verilator doesn't collect
+covergroups, so each scoreboard counts named bins by hand (`coverage_bins` in
+`common/uvm-common-pkg.sv`), and a bin never hit fails the test.
 
-Each bench has been mutation-checked: one real bug injected per module (the
-flip ignored, the column skew off, no same-cycle refill, always overwrite,
-rounding removed, read priority lost, …), and each was caught. SVUnit was
-considered, but its Verilator support is tied to 5.024; it faults on 5.032
-and fails on 5.052.
+| Test | Stimulus | Checks |
+|---|---|---|
+| `fifo_random_test` | fill-, drain- and balanced phases of random pushes and pops | a queue model every cycle: show-ahead data, full/empty, dropped writes when full, ignored reads when empty, wrap-around |
+| `pe_random_test` | 3,000 cycles that keep the scheduler's rules (one weight write per flip, none without one) | a two-register weight model: the flip uses the loaded weight, a write in the flip's cycle is the next tile's, an invalid activation neither computes nor flips, 32-bit wrap, int8 extremes |
+| `systolic_data_setup_random_test` | bursts, sparse stretches and gaps | lane *i* shows the row from *i* cycles earlier, data and valid |
+| `weight_fifo_random_test` | tiles filled the weight engine's way (a row only when `fill_ready_out`, advance on the last row) with random stalls and takes | every taken tile is the next one filled; `fill_ready_out` and `tile_full_out` follow the two-slot rule, including the same-cycle refill |
+| `accumulator_random_test` | 1,500 skewed rows (column *c* of a row *c* cycles after its tag), overwrite or accumulate, into a 16-row ACC, plus a random read every cycle | an ACC model: rows written in order, 32-bit wrap, the read blocked exactly for each accumulated row, every unblocked read (including the row being written) |
+| `bias_random_test` | rows and bias rows with 32-bit extremes | `row_in + bias`, wrapping, or `row_in` when disabled |
+| `activation_test` | random rows, then the requantizer over 21,240 vectors from `tpu.golden.requant` (`gen_requant.py`), 67 quant words | ReLU/identity every cycle; every requantized lane against the host reference |
+| `unified_buffer_random_test` | both write ports and both read sources at random over 16 entries | activate write beats load write, matmul read beats activate read, a read during a write returns the old entry |
+| `mmu_random_test` | 60 jobs of 1–4 back-to-back tiles on `matmul_engine`'s overlap schedule, m from 1 to 3N | every output column against a plain matrix multiply, in order, with nothing missing or extra |
 
-## UVM (`make uvm`)
+Every test was mutation-checked by injecting one real bug per block into a
+copy of the RTL: the flip ignored, the column skew off, no same-cycle refill,
+always overwrite, the bias enable ignored, rounding removed, the read priority
+lost, the weight rows reversed, and, for the FIFO, writes accepted when full,
+`full` one entry early, a stuck read pointer and a wrong count on a
+simultaneous read and write. Each test failed on its bug.
 
-The UVM environments in `tests/uvm/` are replacing the unit benches, one block
-at a time. They run on Verilator 5.052 with CHIPS Alliance's patched UVM
-2020-3.2 (a pinned submodule, built with `UVM_NO_DPI`). Every block test is
-one binary, `uvm_blocks_top`, and `+UVM_TESTNAME` picks the test; a test
-passes when it prints `PASSED` with no UVM errors.
+Two Verilator behaviours to know when writing stimulus. A `dist` is a hard
+pick: combined with another constraint on the same variable (an inline
+`with`, an implication) it makes `randomize()` fail rather than solving both,
+so the PE's control bits are chosen in its sequence and the accumulator's
+sweep turns its rate constraints off. And a `//` comment that starts with
+the word "Verilator" is read as a pragma.
 
-Verilator doesn't collect covergroups, so each scoreboard counts named bins
-by hand (`coverage_bins` in `common/uvm-common-pkg.sv`), and any bin never hit
-fails the test.
-
-| Test | Checks |
-|---|---|
-| `fifo_random_test` | fill-, drain- and balanced phases of random pushes and pops against a queue model every cycle: show-ahead data, full/empty, dropped writes when full, ignored reads when empty; 11 bins, including wrap-around and simultaneous read and write when full |
-
-`fifo_random_test` was mutation-checked: writes accepted when full, `full`
-one entry early, a read pointer that never advances, and a simultaneous read
-and write that counts up each fail it.
+SVUnit was considered before UVM; its Verilator support is tied to 5.024, and
+it faults on 5.032 and fails on 5.052.
 
 ## The model and the RTL (`make sim-test`)
 
@@ -130,7 +131,7 @@ against Verilator first.
 
 | Changed | Run |
 |---|---|
-| a datapath module | `make unit-<name>`, then `make check` |
+| a datapath module | `make uvm-<test>`, then `make check` |
 | an engine, the dispatcher, the ISA, `host/tpu/` | `make check` |
 | anything that could move a cycle | `make check`, and compare `make selftest-sim ST_SLOTS=21` with the previous captures |
 | synthesis, memory inference, timing | `make check` + both Quartus builds (DSPs, RAM blocks, slack) + the self-test **PASS** on the board + the suite from the ARM |
