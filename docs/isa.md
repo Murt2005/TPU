@@ -32,7 +32,7 @@ is in [`architecture.md`](architecture.md).
 
 `N` is the array size (`N = 8` in every board build, so 64 PEs). The memory
 depths are parameters of `tpu_core` (`WMEM_ROWS`, `UB_DEPTH`, `ACC_DEPTH`,
-`PARAM_DEPTH`). The figures above are the defaults the board builds use.
+`PARAMETER_DEPTH`). The figures above are the defaults the board builds use.
 
 ### The four engines
 
@@ -153,7 +153,7 @@ An Avalon-MM slave with 12 word registers, a fixed read latency of 1, and
 | 2 | `DATA` | W | pushes a data word |
 | 3 | `OUT` | R | pops an out word. Empty reads return 0 and set `UNDERFLOW` |
 | 4 | `STATUS` | R | `{TAG[31:16], ERR_CODE[15:8], 0, UNDERFLOW[3], IDLE[2], ERR[1], DONE[0]}` |
-| 5 | `LEVELS` | R | `{out_count[31:21], data_free[20:10], insn_free[9:0]}` |
+| 5 | `LEVELS` | R | `{output_count[31:21], data_free[20:10], instruction_free[9:0]}` |
 | 6 | `CTRL` | W | bit 0 `RESET`: flush queues and FIFOs, clear ERR; memories keep their contents. Bit 1 `CLEAR_DONE` (and `UNDERFLOW`). Bit 2 `CLEAR_PERF` |
 | 7 | `ERR_SEQ` | R | index of the faulting instruction |
 | 8 | `PERF_CYCLES` | R | free-running cycles since `CLEAR_PERF` |

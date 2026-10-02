@@ -47,7 +47,7 @@ between them.
 
 ```
  host FIFOs ──► dispatch ──► queues (8 deep) ──► LD ─────► WMEM, UB, bias table, quant table
-   insn 512×64                                   WT ─────► WMEM reads → weight_fifo (2 slots)
+   instruction 512×64                            WT ─────► WMEM reads → weight_fifo (2 slots)
    data 1024×32                                  MM ─────► UB reads, weight rows, row tags
    out 1024×32 ◄─────────────────────────────────ACT ────► ACC reads, bias/activation control
 
@@ -62,12 +62,12 @@ between them.
 
 | File | Does |
 |---|---|
-| `tpu_pkg.sv` | opcodes, engine numbers, error codes, per-opcode legal-bit masks, `wait_met` (mirrors `host/tpu/isa.py`) |
+| `tpu_pkg.sv` | opcodes, engine numbers, error codes, per-opcode legal-bit masks, `wait_counts_reached` (mirrors `host/tpu/isa.py`) |
 | `dispatch.sv` | decodes one instruction per cycle in order: legal bits, range checks (with a shadow WBASE), routing to the engine queues, `WAIT` snapshots of the per-engine dispatch counts, the `SIGNAL` fence, `ERR`/`ERR_SEQ` |
-| `ld_engine.sv` | `WR_WMEM`/`WR_UB`/`WR_BIAS`/`WR_QUANT`: gathers 32-bit data words into rows (N int8) or entries (N int32) and writes them. Holds a UB entry's last word while ACT owns the UB write port |
-| `wt_engine.sv` | `SET_WBASE`, and the weight half of `MATMUL`: one WMEM row read per cycle into the weight FIFO's free slot, back to back across tiles |
-| `mm_engine.sv` | the compute half of `MATMUL`: the overlap schedule (§4). Issues UB row reads with the flip bit, the next tile's weight rows onto the mmu's bus, and a `{overwrite, ACC row}` tag per row |
-| `act_engine.sv` | `ACTIVATE` and `RD_UB`: reads ACC rows (when MM isn't), sequences bias → activation, writes the UB or emits words to the out FIFO |
+| `load_engine.sv` | `WR_WMEM`/`WR_UB`/`WR_BIAS`/`WR_QUANT`: gathers 32-bit data words into rows (N int8) or entries (N int32) and writes them. Holds a UB entry's last word while ACT owns the UB write port |
+| `weight_engine.sv` | `SET_WBASE`, and the weight half of `MATMUL`: one WMEM row read per cycle into the weight FIFO's free slot, back to back across tiles |
+| `matmul_engine.sv` | the compute half of `MATMUL`: the overlap schedule (§4). Issues UB row reads with the flip bit, the next tile's weight rows onto the mmu's bus, and a `{overwrite, ACC row}` tag per row |
+| `activate_engine.sv` | `ACTIVATE` and `RD_UB`: reads ACC rows (when MM isn't), sequences bias → activation, writes the UB or emits words to the out FIFO |
 | `tpu_core.sv` | the host FIFOs with LEVELS counts, the dispatcher and queues, WMEM and the parameter tables, the datapath wiring, completion counters, perf counters |
 
 Every engine pops its queue only when idle. A `WAIT` at the head blocks it
@@ -79,7 +79,7 @@ until the masked engines' completion counts reach the snapshot.
 |---|---|---|---|
 | `unified_buffer.sv` | Unified Buffer | 16384 × N int8 activations; ACT's write beats LD's, MM's read beats ACT's | read 1 cycle |
 | `systolic_data_setup.sv` | Systolic data setup | delays element *i* of a row by *i* cycles; carries the flip bit as a 9th bit | lane *i*: *i* cycles |
-| `pe.sv` | MAC cell | `w_cur` computing, `w_next` loading; psum = w·act + psum from above | 1 cycle |
+| `pe.sv` | MAC cell | `weight_current` computing, `weight_next` loading; partial sum = weight·activation + the partial sum from above | 1 cycle |
 | `mmu.sv` | Matrix multiply unit | N × N PEs; a row-select weight bus per column, skewed by the column index | row *r*, column *c*: *r* + *c* + 1 |
 | `weight_fifo.sv` | Weight FIFO | two tile slots (ping-pong): WT fills one while MM drains the other; a slot released this cycle refills this cycle | — |
 | `accumulator.sv` | Accumulators | per-column FIFOs re-align the skewed outputs into rows; the row tag picks the ACC row; overwrite, or read-modify-write (32-bit wrap) | RMW: read at pop, write next cycle |
@@ -120,14 +120,14 @@ loads tile *j*+1's weights while tile *j* computes:
 
 - **PE.** Two weights. The first activation row of every tile carries a flip
   bit through the skew and across the array. At each PE it computes with
-  `w_next` and promotes it to `w_cur`, on exactly the cycle that tile's data
+  `weight_next` and promotes it to `weight_current`, on exactly the cycle that tile's data
   arrives there.
 - **Weight bus.** One row-select bus per column, delayed *c* cycles at column
   *c*. A weight row then reaches every column the same distance ahead of the
   flip that will use it.
-- **Schedule** (`mm_engine`). A window of max(m, N) cycles per tile. It
+- **Schedule** (`matmul_engine`). A window of max(m, N) cycles per tile. It
   streams tile *j*'s m activation rows from position 0, and in the window's
-  last N cycles writes tile *j*+1's N weight rows into `w_next`. The first
+  last N cycles writes tile *j*+1's N weight rows into `weight_next`. The first
   tile has a preload window of N cycles, and the last has no weights.
 - **Stalls.** If the next tile isn't in the weight FIFO, the whole window
   freezes (counted in `PERF_MM_WSTALL`). A freeze only widens the gaps the
@@ -168,9 +168,9 @@ in [`isa.md`](isa.md) §5.
 
 | Parameter | Board builds | Notes |
 |---|---|---|
-| `N` | 8 | array size; a multiple of 4 (int8 rows pack into 32-bit words). Verified in simulation at 8 and 4 |
-| `WMEM_ROWS`, `UB_DEPTH`, `ACC_DEPTH`, `PARAM_DEPTH` | 8192, 16384, 1024, 256 | address widths follow; the instruction fields cap them (16-, 14-, 10- and 8-bit addresses) |
-| `IFIFO_DEPTH`, `DFIFO_DEPTH`, `OFIFO_DEPTH`, `QDEPTH` | 512, 1024, 1024, 8 | `LEVELS` reports free space and the out count |
+| `ARRAY_SIZE` | 8 | N, the array size; a multiple of 4 (int8 rows pack into 32-bit words). Verified in simulation at 8 and 4 |
+| `WMEM_ROWS`, `UB_DEPTH`, `ACC_DEPTH`, `PARAMETER_DEPTH` | 8192, 16384, 1024, 256 | address widths follow; the instruction fields cap them (16-, 14-, 10- and 8-bit addresses) |
+| `INSTRUCTION_FIFO_DEPTH`, `DATA_FIFO_DEPTH`, `OUTPUT_FIFO_DEPTH`, `QUEUE_DEPTH` | 512, 1024, 1024, 8 | `LEVELS` reports free space and the out count |
 
 At N = 8 the Cyclone V build uses 78 of 87 DSP blocks: 64 PE multipliers, 8
 requantizer lanes, and the tile-count products. A 16×16 array needs DSP

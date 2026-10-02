@@ -21,7 +21,7 @@ HPS→FPGA bridge would cut the rest.
 **A larger array.** 78 of 87 DSP blocks are used at 8×8: 64 PEs, 8
 requantizer lanes and the tile-count products. 16×16 needs the PE multiplies
 packed three per DSP block (Cyclone V's 9×9 mode) or partly in soft logic.
-The RTL is fully parameterized in `N` and verified at 8 and 4.
+The RTL is fully parameterized in `ARRAY_SIZE` and verified at 8 and 4.
 
 ## Medium
 
@@ -62,7 +62,7 @@ The current core, on the DE1-SoC:
 - Phase 1: the ISA, reference model, dispatcher and engines, matching the
   model word for word
 - Phase 2: the requantizer and layer chaining through the UB
-- Phase 3: overlapped tiles (`w_cur`/`w_next` PEs, 2-slot WT), measured at
+- Phase 3: overlapped tiles (`weight_current`/`weight_next` PEs, 2-slot WT), measured at
   `max(m, N)` cycles per tile
 - Quartus bring-up in an OrbStack VM; the DSP-width and requantizer-timing
   fixes

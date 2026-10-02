@@ -27,13 +27,13 @@ has the directory-level version.
 
 | File | What |
 |---|---|
-| `tpu_pkg.sv` | opcodes, engines, error codes, legal-bit masks, `wait_met` (mirrors `host/tpu/isa.py`) |
+| `tpu_pkg.sv` | opcodes, engines, error codes, legal-bit masks, `wait_counts_reached` (mirrors `host/tpu/isa.py`) |
 | `tpu_core.sv` | host FIFOs, dispatcher, engine queues, WMEM and the parameter tables, the datapath wiring, status and perf counters |
 | `dispatch.sv` | in-order decode, range checks, routing, `WAIT` snapshots, the `SIGNAL` fence |
-| `ld_engine.sv`, `wt_engine.sv`, `mm_engine.sv`, `act_engine.sv` | the four engines (control only) |
+| `load_engine.sv`, `weight_engine.sv`, `matmul_engine.sv`, `activate_engine.sv` | the four engines (control only) |
 | `unified_buffer.sv` | the UB memory and its port priorities |
 | `systolic_data_setup.sv` | the row skew (element *i* delayed *i* cycles) |
-| `pe.sv`, `mmu.sv` | the PE (`w_cur`/`w_next`, flip) and the N × N array with the skewed weight bus |
+| `pe.sv`, `mmu.sv` | the PE (`weight_current`/`weight_next`, flip) and the N × N array with the skewed weight bus |
 | `weight_fifo.sv` | the two-slot tile buffer between WMEM and the array |
 | `accumulator.sv` | column de-skew, row tags, the ACC memory, read-modify-write |
 | `bias.sv`, `activation.sv` | bias add; ReLU and the requantizer |

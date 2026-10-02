@@ -280,7 +280,7 @@ TPU/
 | `make -C boards/de1soc/fpga/hps CD_ZIP=…` | VM | Terasic's GHRD + the TPU + `hex_pio` → `build/soc_system.rbf`, plus `build/isa_mmio` and `build/setbaud` |
 | `make -C software/mnist/de1soc data` / `arm` / `sim-bench` | Mac / VM / Mac | MNIST model + test data / the ARM program / the ARM program against Verilator |
 
-The array size is `N` on `tpu_top` (8 in both board builds; set in
+The array size is `ARRAY_SIZE` on `tpu_top` (8 in both board builds; set in
 `tpu_selftest.sv` and `boards/de1soc/fpga/hps/tpu_hw.tcl`), with the memory depths
 beside it. 8×8 uses 78 of the Cyclone V's 87 DSP blocks, so a bigger array needs
 DSP packing ([`docs/backlog.md`](docs/backlog.md)). Measured fit and timing are in

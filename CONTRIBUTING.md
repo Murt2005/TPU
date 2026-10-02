@@ -51,8 +51,17 @@ the bench fails.
 
 ## Style conventions
 
-- `snake_case` signals; `*_valid` beside each data bus; `in_*` / `out_*` port
-  prefixes where a module has both sides.
+- Names are spelled out, with `_` between words: `lower_snake_case` for
+  signals, ports, functions and instances (`u_` + the module name);
+  `UPPER_SNAKE_CASE` for parameters, constants and states. No `_i`/`_o`
+  direction suffixes.
+- Four acronyms stay short, in capitals even inside a lower-case name:
+  **UB** (unified buffer), **WMEM** (weight memory), **ACC** (accumulator
+  memory) and **MMU** (the array), e.g. `activate_UB_write_address`. Opcode
+  mnemonics stay as the ISA spells them (`OPCODE_WR_WMEM`). `clk`, `reset_n`
+  and Avalon's `avs_*` keep their standard names.
+- `*_valid` beside each data bus; `in_*` / `out_*` port prefixes where a
+  module has both sides.
 - Synchronous, active-high `reset` inside modules (only the top exposes
   active-low `reset_n`); every sequential block is `if (reset) ... else ...`.
 - Tunables are `parameter int`; derived values are `localparam`.

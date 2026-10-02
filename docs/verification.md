@@ -32,7 +32,7 @@ report file and line, and a summary whose exit status fails `make`.
 | Bench | Checks |
 |---|---|
 | `pe` | the flip uses the loaded weight; the next weight loads under the current one; a write in the flip's own cycle belongs to the next tile; int8 extremes; an invalid activation neither computes nor flips |
-| `mmu` | three back-to-back tiles on `mm_engine`'s overlap schedule at m = 1, N and 2N+1, every column against a plain matmul |
+| `mmu` | three back-to-back tiles on `matmul_engine`'s overlap schedule at m = 1, N and 2N+1, every column against a plain matmul |
 | `weight_fifo` | ping-pong order, the same-cycle refill, wrap-around |
 | `accumulator` | column-skewed rows re-aligned; overwrite vs accumulate; 32-bit wrap; the same row N rows later |
 | `activation` | ReLU/identity; the requantizer against 21,240 vectors from `tpu.golden.requant` (`gen_requant.py`) over 67 quant words |
