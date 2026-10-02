@@ -167,9 +167,9 @@ module tpu_core #(
 
     weight_fifo #(.ARRAY_SIZE(ARRAY_SIZE)) u_weight_fifo (
         .clk(clk), .reset(reset),
-        .fill_ready(fill_ready), .fill_slot_next(fill_slot_next), .fill_advance(fill_advance),
-        .fill_write_enable(fill_write_enable), .fill_slot(fill_slot), .fill_row(fill_row), .fill_data(fill_data),
-        .tile(tile), .tile_full(tile_full), .take(tile_take));
+        .fill_ready_out(fill_ready), .fill_slot_next_out(fill_slot_next), .fill_advance_in(fill_advance),
+        .fill_write_enable_in(fill_write_enable), .fill_slot_in(fill_slot), .fill_row_in(fill_row), .fill_data_in(fill_data),
+        .tile_out(tile), .tile_full_out(tile_full), .tile_take_in(tile_take));
 
     // -- UB rows -> systolic data setup -> mmu -> accumulators ----------------------
     logic                               activation_valid, activation_weight_flip;
