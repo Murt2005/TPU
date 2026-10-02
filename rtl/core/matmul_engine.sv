@@ -15,40 +15,40 @@ module matmul_engine #(
     input  logic                         clk,
     input  logic                         reset,
 
-    input  logic                         queue_valid,
-    input  logic [QUEUE_ENTRY_WIDTH-1:0] queue_entry,
-    output logic                         queue_pop,
-    input  logic [63:0]                  completed,
-    output logic                         instruction_done,
+    input  logic                         queue_valid_in,
+    input  logic [QUEUE_ENTRY_WIDTH-1:0] queue_entry_in,
+    output logic                         queue_pop_out,
+    input  logic [63:0]                  completed_in,
+    output logic                         instruction_done_out,
 
-    input  logic [ARRAY_SIZE-1:0][ARRAY_SIZE*8-1:0] tile,            // weight_fifo
-    input  logic                          tile_full,
-    output logic                          tile_take,
+    input  logic        [ARRAY_SIZE-1:0][ARRAY_SIZE*8-1:0] tile_in,                      // weight_fifo
+    input  logic                          tile_full_in,
+    output logic                          tile_take_out,
 
-    output logic                          UB_read_enable,         // always granted
-    output logic [UB_ADDRESS_WIDTH-1:0]   UB_read_address,
-    output logic                          activation_valid,       // the UB row read last cycle goes in now
-    output logic                          activation_weight_flip, // ... and it's a tile's first row: flip
+    output logic                          UB_read_enable_out,         // always granted
+    output logic [UB_ADDRESS_WIDTH-1:0]   UB_read_address_out,
+    output logic                          activation_valid_out,       // the UB row read last cycle goes in now
+    output logic                          activation_weight_flip_out, // ... and it's a tile's first row: flip
 
-    output logic                          weight_valid,           // the next tile's weight row, onto the
-    output logic [$clog2(ARRAY_SIZE)-1:0] weight_row,             // mmu's row-select bus
-    output logic signed [ARRAY_SIZE-1:0][7:0] weight_data,
+    output logic                          weight_valid_out,           // the next tile's weight row, onto the
+    output logic [$clog2(ARRAY_SIZE)-1:0] weight_row_select_out,      // mmu's row-select bus
+    output logic signed [ARRAY_SIZE-1:0][7:0]              weight_data_out,
 
-    output logic                       tag_push,                 // accumulator: where each issued row goes
-    output logic [ACC_ADDRESS_WIDTH:0] tag_in,
-    input  logic                       row_written,
+    output logic                       tag_push_out,                 // accumulator: where each issued row goes
+    output logic [ACC_ADDRESS_WIDTH:0] tag_out,
+    input  logic                       row_written_in,
 
-    output logic                       performance_beat,
-    output logic                       performance_weight_stall,
-    output logic                       performance_sync_stall,
-    output logic                       idle
+    output logic                       performance_beat_out,
+    output logic                       performance_weight_stall_out,
+    output logic                       performance_sync_stall_out,
+    output logic                       idle_out
 );
 
     localparam int ROW_SELECT_WIDTH = $clog2(ARRAY_SIZE);
 
     logic [63:0] instruction, wait_snapshot;
-    assign instruction   = queue_entry[63:0];
-    assign wait_snapshot = queue_entry[127:64];
+    assign instruction   = queue_entry_in[63:0];
+    assign wait_snapshot = queue_entry_in[127:64];
     logic [5:0] opcode;
     assign opcode = instruction[63:58];
 
@@ -72,7 +72,7 @@ module matmul_engine #(
     logic activation_issue_now, weight_issue_now, window_frozen, advance, window_end;
     assign activation_issue_now = window_has_activations && window_position < activation_rows;
     assign weight_issue_now     = window_has_weights && window_position >= weight_window_start;
-    assign window_frozen        = weight_issue_now && !tile_full;
+    assign window_frozen        = weight_issue_now && !tile_full_in;
     assign advance              = state == S_RUN && !window_frozen;
     assign window_end           = advance && window_position == window_length - 9'd1;
 
@@ -81,28 +81,28 @@ module matmul_engine #(
     logic        [ROW_SELECT_WIDTH-1:0] weight_register_row;
     logic signed [ARRAY_SIZE-1:0] [7:0] weight_register_data;
     logic        [ROW_SELECT_WIDTH-1:0] weight_row_now;
-    assign weight_row_now         = ROW_SELECT_WIDTH'(window_position - weight_window_start);
-    assign activation_valid       = activation_valid_delayed;
-    assign activation_weight_flip = activation_weight_flip_delayed;
-    assign weight_valid           = weight_register_valid;
-    assign weight_row             = weight_register_row;
-    assign weight_data            = weight_register_data;
+    assign weight_row_now             = ROW_SELECT_WIDTH'(window_position - weight_window_start);
+    assign activation_valid_out       = activation_valid_delayed;
+    assign activation_weight_flip_out = activation_weight_flip_delayed;
+    assign weight_valid_out           = weight_register_valid;
+    assign weight_row_select_out      = weight_register_row;
+    assign weight_data_out            = weight_register_data;
 
     // -- control -----------------------------------------------------------
-    assign UB_read_enable  = advance && activation_issue_now;
-    assign UB_read_address = UB_ADDRESS_WIDTH'(chunk_base + 16'(window_position));
-    assign tag_push        = UB_read_enable;
-    assign tag_in          = {(k_tile == 13'd0) && !accumulate, ACC_ADDRESS_WIDTH'(ACC_base + 16'(window_position))};
-    assign tile_take       = advance && weight_issue_now && window_position == window_length - 9'd1;
+    assign UB_read_enable_out  = advance && activation_issue_now;
+    assign UB_read_address_out = UB_ADDRESS_WIDTH'(chunk_base + 16'(window_position));
+    assign tag_push_out        = UB_read_enable_out;
+    assign tag_out             = {(k_tile == 13'd0) && !accumulate, ACC_ADDRESS_WIDTH'(ACC_base + 16'(window_position))};
+    assign tile_take_out       = advance && weight_issue_now && window_position == window_length - 9'd1;
 
     logic wait_satisfied;
-    assign wait_satisfied = wait_counts_reached(instruction[51:48], wait_snapshot, completed);
-    assign queue_pop      = queue_valid && state == S_IDLE && (opcode != OPCODE_WAIT || wait_satisfied);
-    assign idle           = state == S_IDLE && !queue_valid;
+    assign wait_satisfied = wait_counts_reached(instruction[51:48], wait_snapshot, completed_in);
+    assign queue_pop_out  = queue_valid_in && state == S_IDLE && (opcode != OPCODE_WAIT || wait_satisfied);
+    assign idle_out       = state == S_IDLE && !queue_valid_in;
 
-    assign performance_beat         = UB_read_enable;
-    assign performance_weight_stall = state == S_RUN && window_frozen;
-    assign performance_sync_stall   = queue_valid && state == S_IDLE && opcode == OPCODE_WAIT && !wait_satisfied;
+    assign performance_beat_out         = UB_read_enable_out;
+    assign performance_weight_stall_out = state == S_RUN && window_frozen;
+    assign performance_sync_stall_out   = queue_valid_in && state == S_IDLE && opcode == OPCODE_WAIT && !wait_satisfied;
 
     always_ff @(posedge clk) begin
         if (reset) begin
@@ -124,22 +124,22 @@ module matmul_engine #(
             weight_register_valid          <= 1'b0;
             weight_register_row            <= '0;
             weight_register_data           <= '0;
-            instruction_done               <= 1'b0;
+            instruction_done_out           <= 1'b0;
         end else begin
-            instruction_done               <= 1'b0;
-            activation_valid_delayed       <= UB_read_enable;
+            instruction_done_out           <= 1'b0;
+            activation_valid_delayed       <= UB_read_enable_out;
             activation_weight_flip_delayed <= window_position == 9'd0;
 
             // weight row registered to line up with the UB read latency
             weight_register_valid <= advance && weight_issue_now;
             weight_register_row   <= weight_row_now;
             for (int column = 0; column < ARRAY_SIZE; column++)
-                weight_register_data[column] <= tile[weight_row_now][8*column +: 8];
+                weight_register_data[column] <= tile_in[weight_row_now][8*column +: 8];
 
-            rows_in_flight <= rows_in_flight + 8'(tag_push) - 8'(row_written);
+            rows_in_flight <= rows_in_flight + 8'(tag_push_out) - 8'(row_written_in);
 
             case (state)
-                S_IDLE: if (queue_pop) begin
+                S_IDLE: if (queue_pop_out) begin
                     if (opcode == OPCODE_MATMUL) begin
                         accumulate             <= instruction[57];
                         activation_rows        <= 9'(instruction[55:48]) + 9'd1;
@@ -154,7 +154,7 @@ module matmul_engine #(
                         window_position        <= '0;
                         state                  <= S_RUN;
                     end else begin
-                        instruction_done <= 1'b1;            // WAIT
+                        instruction_done_out <= 1'b1;            // WAIT
                     end
                 end
                 S_RUN: if (advance) begin
@@ -180,8 +180,8 @@ module matmul_engine #(
                     end
                 end
                 S_DRAIN: if (rows_in_flight == 8'd0) begin
-                    instruction_done <= 1'b1;
-                    state            <= S_IDLE;
+                    instruction_done_out <= 1'b1;
+                    state                <= S_IDLE;
                 end
                 default: state <= S_IDLE;
             endcase

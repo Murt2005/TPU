@@ -13,25 +13,25 @@ module dispatch #(
     input  logic                         clk,
     input  logic                         reset,
 
-    input  logic                         instruction_valid,
-    input  logic [63:0]                  instruction,
-    output logic                         instruction_pop,
+    input  logic                         instruction_valid_in,
+    input  logic [63:0]                  instruction_in,
+    output logic                         instruction_pop_out,
 
     // queue pushes, one entry per engine
-    output logic [3:0]                   queue_push,
-    output logic [QUEUE_ENTRY_WIDTH-1:0] queue_entry,
-    input  logic [3:0]                   queue_full,
+    output logic [3:0]                   queue_push_out,
+    output logic [QUEUE_ENTRY_WIDTH-1:0] queue_entry_out,
+    input  logic [3:0]                   queue_full_in,
 
-    input  logic [63:0]                  completed,         // 4 x 16-bit, from the engines
-    output logic [63:0]                  dispatched,
+    input  logic [63:0]                  completed_in,         // 4 x 16-bit, from the engines
+    output logic [63:0]                  dispatched_out,
 
-    output logic                         error,
-    output logic [7:0]                   error_code,
-    output logic [31:0]                  error_sequence,
-    output logic                         done,
-    output logic [15:0]                  tag,
-    input  logic                         clear_done,
-    output logic                         fence_pending
+    output logic                         error_out,
+    output logic [7:0]                   error_code_out,
+    output logic [31:0]                  error_sequence_out,
+    output logic                         done_out,
+    output logic [15:0]                  tag_out,
+    input  logic                         clear_done_in,
+    output logic                         fence_pending_out
 );
 
     logic [31:0] instruction_sequence;
@@ -41,7 +41,7 @@ module dispatch #(
 
     // -- decode -------------------------------------------------------------
     logic [5:0] opcode;
-    assign opcode = instruction[63:58];
+    assign opcode = instruction_in[63:58];
 
     logic [63:0] legal_bits;
     logic        opcode_known;
@@ -71,27 +71,27 @@ module dispatch #(
     logic [1:0]  field_function, field_destination;
     logic        field_requantize, field_bias, field_weight_source;
     always_comb begin
-        field_row_count   = 64'(instruction[15:0]) + 1;
-        field_UB_count     = 64'(instruction[11:0]) + 1;
-        field_parameter_count    = 64'(instruction[7:0]) + 1;
-        field_WMEM_row = 64'(instruction[47:32]);
-        field_UB_address  = 64'(instruction[45:32]);
-        field_parameter_index      = 64'(instruction[39:32]);
-        field_weight_source     = instruction[56];
-        field_matmul_rows        = 9'(instruction[55:48]) + 9'd1;
-        field_k_tiles       = 13'(instruction[47:36]) + 13'd1;
-        field_block_count       = 11'(instruction[35:26]) + 11'd1;
-        field_ACC_address = 64'(instruction[25:16]);
-        field_matmul_UB_address    = 64'(instruction[15:2]);
-        field_function     = instruction[57:56];
-        field_requantize       = instruction[55];
-        field_destination      = instruction[54:53];
-        field_bias     = instruction[52];
-        field_activate_block_count      = 64'(instruction[51:42]) + 1;
-        field_activate_rows       = 9'(instruction[41:34]) + 9'd1;
-        field_activate_ACC_address  = 64'(instruction[33:24]);
-        field_activate_UB_address   = 64'(instruction[23:10]);
-        field_activate_parameter_index  = 64'(instruction[9:2]);
+        field_row_count                = 64'(instruction_in[15:0]) + 1;
+        field_UB_count                 = 64'(instruction_in[11:0]) + 1;
+        field_parameter_count          = 64'(instruction_in[7:0]) + 1;
+        field_WMEM_row                 = 64'(instruction_in[47:32]);
+        field_UB_address               = 64'(instruction_in[45:32]);
+        field_parameter_index          = 64'(instruction_in[39:32]);
+        field_weight_source            = instruction_in[56];
+        field_matmul_rows              = 9'(instruction_in[55:48]) + 9'd1;
+        field_k_tiles                  = 13'(instruction_in[47:36]) + 13'd1;
+        field_block_count              = 11'(instruction_in[35:26]) + 11'd1;
+        field_ACC_address              = 64'(instruction_in[25:16]);
+        field_matmul_UB_address        = 64'(instruction_in[15:2]);
+        field_function                 = instruction_in[57:56];
+        field_requantize               = instruction_in[55];
+        field_destination              = instruction_in[54:53];
+        field_bias                     = instruction_in[52];
+        field_activate_block_count     = 64'(instruction_in[51:42]) + 1;
+        field_activate_rows            = 9'(instruction_in[41:34]) + 9'd1;
+        field_activate_ACC_address     = 64'(instruction_in[33:24]);
+        field_activate_UB_address      = 64'(instruction_in[23:10]);
+        field_activate_parameter_index = 64'(instruction_in[9:2]);
     end
 
     // products at their real widths: 64-bit operands made Quartus build 64x64 DSP multipliers
@@ -108,7 +108,7 @@ module dispatch #(
         decode_error = ERROR_NONE;
         if (!opcode_known)
             decode_error = ERROR_OPCODE;
-        else if ((instruction & ~legal_bits) != 0)
+        else if ((instruction_in & ~legal_bits) != 0)
             decode_error = ERROR_RESERVED;
         else if (opcode == OPCODE_ACTIVATE && (field_function[1] || field_destination == 2'd3))
             decode_error = ERROR_RESERVED;
@@ -143,22 +143,22 @@ module dispatch #(
             OPCODE_SET_WBASE:                                              target_queues = 4'b0010;
             OPCODE_MATMUL:                                                 target_queues = 4'b0110;
             OPCODE_ACTIVATE, OPCODE_RD_UB:                                 target_queues = 4'b1000;
-            OPCODE_WAIT:                                                   target_queues = 4'b0001 << instruction[57:56];
+            OPCODE_WAIT:                                                   target_queues = 4'b0001 << instruction_in[57:56];
             default:                                                       target_queues = 4'b0000;   // NOP, SIGNAL
         endcase
     end
 
     logic all_engines_quiet;
-    assign all_engines_quiet = (completed == dispatched);
+    assign all_engines_quiet = (completed_in == dispatched_out);
 
     logic dispatch_now;
-    assign dispatch_now = instruction_valid && !error && !fence && decode_error == ERROR_NONE && (target_queues & queue_full) == 0;
+    assign dispatch_now = instruction_valid_in && !error_out && !fence && decode_error == ERROR_NONE && (target_queues & queue_full_in) == 0;
 
-    assign instruction_pop = dispatch_now;
-    assign queue_push      = dispatch_now ? target_queues : 4'b0000;
+    assign instruction_pop_out = dispatch_now;
+    assign queue_push_out      = dispatch_now ? target_queues : 4'b0000;
     // a WAIT carries the counts dispatched so far, not including itself
-    assign queue_entry   = {dispatched, instruction};
-    assign fence_pending = fence;
+    assign queue_entry_out   = {dispatched_out, instruction_in};
+    assign fence_pending_out = fence;
 
     always_ff @(posedge clk) begin
         if (reset) begin
@@ -166,41 +166,41 @@ module dispatch #(
             weight_base          <= '0;
             fence                <= 1'b0;
             fence_tag            <= '0;
-            dispatched           <= '0;
-            error                <= 1'b0;
-            error_code           <= '0;
-            error_sequence       <= '0;
-            done                 <= 1'b0;
-            tag                  <= '0;
+            dispatched_out       <= '0;
+            error_out            <= 1'b0;
+            error_code_out       <= '0;
+            error_sequence_out   <= '0;
+            done_out             <= 1'b0;
+            tag_out              <= '0;
         end else begin
-            if (clear_done)
-                done <= 1'b0;
+            if (clear_done_in)
+                done_out <= 1'b0;
 
-            if (instruction_valid && !error && !fence && decode_error != ERROR_NONE) begin
-                error          <= 1'b1;
-                error_code     <= decode_error;
-                error_sequence <= instruction_sequence;
+            if (instruction_valid_in && !error_out && !fence && decode_error != ERROR_NONE) begin
+                error_out          <= 1'b1;
+                error_code_out     <= decode_error;
+                error_sequence_out <= instruction_sequence;
             end
 
             if (dispatch_now) begin
                 instruction_sequence <= instruction_sequence + 1;
                 for (int engine = 0; engine < 4; engine++)
                     if (target_queues[engine])
-                        dispatched[16*engine +: 16] <= dispatched[16*engine +: 16] + 16'd1;
+                        dispatched_out[16*engine +: 16] <= dispatched_out[16*engine +: 16] + 16'd1;
                 if (opcode == OPCODE_SET_WBASE)
-                    weight_base <= instruction[31:0];
+                    weight_base <= instruction_in[31:0];
                 else if (opcode == OPCODE_MATMUL)
                     weight_base <= weight_base + 32'(product_block_count_k_tiles);
                 if (opcode == OPCODE_SIGNAL) begin
                     fence     <= 1'b1;
-                    fence_tag <= instruction[15:0];
+                    fence_tag <= instruction_in[15:0];
                 end
             end
 
             if (fence && all_engines_quiet) begin
-                fence <= 1'b0;
-                done  <= 1'b1;
-                tag   <= fence_tag;
+                fence    <= 1'b0;
+                done_out <= 1'b1;
+                tag_out  <= fence_tag;
             end
         end
     end

@@ -47,25 +47,25 @@ module tpu_top #(
         .clk(clk), .reset(rst),
         .avs_address(avs_address), .avs_read(avs_read), .avs_readdata(avs_readdata),
         .avs_write(avs_write), .avs_writedata(avs_writedata), .avs_waitrequest(avs_waitrequest),
-        .instruction_push(instruction_push), .instruction_word(instruction_word), .instruction_full(instruction_full),
-        .data_push(data_push), .data_word(data_word), .data_full(data_full),
-        .output_pop(output_pop), .output_word(output_word), .output_empty(output_empty),
-        .core_reset(core_reset), .clear_done(clear_done), .clear_performance(clear_performance),
-        .done(done), .error(error), .error_code(error_code), .error_sequence(error_sequence), .tag(tag), .idle(idle),
-        .instruction_free(instruction_free), .data_free(data_free), .output_count(output_count),
-        .performance_cycles(performance_cycles), .performance_matmul_beats(performance_matmul_beats),
-        .performance_matmul_weight_stalls(performance_matmul_weight_stalls), .performance_matmul_sync_stalls(performance_matmul_sync_stalls));
+        .instruction_push_out(instruction_push), .instruction_word_out(instruction_word), .instruction_full_in(instruction_full),
+        .data_push_out(data_push), .data_word_out(data_word), .data_full_in(data_full),
+        .output_pop_out(output_pop), .output_word_in(output_word), .output_empty_in(output_empty),
+        .core_reset_out(core_reset), .clear_done_out(clear_done), .clear_performance_out(clear_performance),
+        .done_in(done), .error_in(error), .error_code_in(error_code), .error_sequence_in(error_sequence), .tag_in(tag), .idle_in(idle),
+        .instruction_free_in(instruction_free), .data_free_in(data_free), .output_count_in(output_count),
+        .performance_cycles_in(performance_cycles), .performance_matmul_beats_in(performance_matmul_beats),
+        .performance_matmul_weight_stalls_in(performance_matmul_weight_stalls), .performance_matmul_sync_stalls_in(performance_matmul_sync_stalls));
 
     tpu_core #(.ARRAY_SIZE(ARRAY_SIZE), .WMEM_ROWS(WMEM_ROWS), .UB_DEPTH(UB_DEPTH), .ACC_DEPTH(ACC_DEPTH),
                .PARAMETER_DEPTH(PARAMETER_DEPTH)) u_core (
         .clk(clk), .reset(rst | core_reset),
-        .instruction_push(instruction_push), .instruction_word(instruction_word), .instruction_full(instruction_full),
-        .data_push(data_push), .data_word(data_word), .data_full(data_full),
-        .output_pop(output_pop), .output_word(output_word), .output_empty(output_empty),
-        .clear_done(clear_done), .clear_performance(clear_performance),
-        .done(done), .error(error), .error_code(error_code), .error_sequence(error_sequence), .tag(tag), .idle(idle),
-        .instruction_free(instruction_free), .data_free(data_free), .output_count(output_count),
-        .performance_cycles(performance_cycles), .performance_matmul_beats(performance_matmul_beats),
-        .performance_matmul_weight_stalls(performance_matmul_weight_stalls), .performance_matmul_sync_stalls(performance_matmul_sync_stalls));
+        .instruction_push_in(instruction_push), .instruction_word_in(instruction_word), .instruction_full_out(instruction_full),
+        .data_push_in(data_push), .data_word_in(data_word), .data_full_out(data_full),
+        .output_pop_in(output_pop), .output_word_out(output_word), .output_empty_out(output_empty),
+        .clear_done_in(clear_done), .clear_performance_in(clear_performance),
+        .done_out(done), .error_out(error), .error_code_out(error_code), .error_sequence_out(error_sequence), .tag_out(tag), .idle_out(idle),
+        .instruction_free_out(instruction_free), .data_free_out(data_free), .output_count_out(output_count),
+        .performance_cycles_out(performance_cycles), .performance_matmul_beats_out(performance_matmul_beats),
+        .performance_matmul_weight_stalls_out(performance_matmul_weight_stalls), .performance_matmul_sync_stalls_out(performance_matmul_sync_stalls));
 
 endmodule

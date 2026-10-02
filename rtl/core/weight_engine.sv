@@ -11,29 +11,29 @@ module weight_engine #(
     input  logic                          clk,
     input  logic                          reset,
 
-    input  logic                          queue_valid,
-    input  logic [QUEUE_ENTRY_WIDTH-1:0]  queue_entry,
-    output logic                          queue_pop,
-    input  logic [63:0]                   completed,
-    output logic                          instruction_done,
+    input  logic                          queue_valid_in,
+    input  logic [QUEUE_ENTRY_WIDTH-1:0]  queue_entry_in,
+    output logic                          queue_pop_out,
+    input  logic [63:0]                   completed_in,
+    output logic                          instruction_done_out,
 
-    output logic [WMEM_ADDRESS_WIDTH-1:0] WMEM_read_address,
-    input  logic [ARRAY_SIZE*8-1:0]       WMEM_read_data,    // one cycle after the address
+    output logic [WMEM_ADDRESS_WIDTH-1:0] WMEM_read_address_out,
+    input  logic [ARRAY_SIZE*8-1:0]       WMEM_read_data_in,     // one cycle after the address
 
-    input  logic                          fill_ready,        // weight_fifo
-    input  logic                          fill_slot_next,
-    output logic                          fill_advance,
-    output logic                          fill_write_enable,
-    output logic                          fill_slot,
-    output logic [7:0]                    fill_row,
-    output logic [ARRAY_SIZE*8-1:0]       fill_data,
+    input  logic                          fill_ready_in,         // weight_fifo
+    input  logic                          fill_slot_next_in,
+    output logic                          fill_advance_out,
+    output logic                          fill_write_enable_out,
+    output logic                          fill_slot_out,
+    output logic [7:0]                    fill_row_out,
+    output logic [ARRAY_SIZE*8-1:0]       fill_data_out,
 
-    output logic                          idle
+    output logic                          idle_out
 );
 
     logic [63:0] instruction, wait_snapshot;
-    assign instruction   = queue_entry[63:0];
-    assign wait_snapshot = queue_entry[127:64];
+    assign instruction   = queue_entry_in[63:0];
+    assign wait_snapshot = queue_entry_in[127:64];
     logic [5:0] opcode;
     assign opcode = instruction[63:58];
 
@@ -48,38 +48,38 @@ module weight_engine #(
     assign matmul_tiles = 24'(11'(instruction[35:26]) + 11'd1) * 24'(13'(instruction[47:36]) + 13'd1);
 
     logic issuing_read;
-    assign issuing_read = tiles_left != 0 && fill_ready;
+    assign issuing_read = tiles_left != 0 && fill_ready_in;
 
-    assign fill_advance      = issuing_read && row == 8'(ARRAY_SIZE - 1);
-    assign fill_write_enable = read_pending;
-    assign fill_slot         = read_slot;
-    assign fill_row          = read_row;
-    assign fill_data         = WMEM_read_data;
+    assign fill_advance_out      = issuing_read && row == 8'(ARRAY_SIZE - 1);
+    assign fill_write_enable_out = read_pending;
+    assign fill_slot_out         = read_slot;
+    assign fill_row_out          = read_row;
+    assign fill_data_out         = WMEM_read_data_in;
 
-    assign WMEM_read_address = WMEM_ADDRESS_WIDTH'(tile * ARRAY_SIZE + 32'(row));
-    assign queue_pop      = queue_valid && tiles_left == 0 && !read_pending
-                        && (opcode != OPCODE_WAIT || wait_counts_reached(instruction[51:48], wait_snapshot, completed));
-    assign idle       = tiles_left == 0 && !read_pending && !queue_valid;
+    assign WMEM_read_address_out = WMEM_ADDRESS_WIDTH'(tile * ARRAY_SIZE + 32'(row));
+    assign queue_pop_out      = queue_valid_in && tiles_left == 0 && !read_pending
+                        && (opcode != OPCODE_WAIT || wait_counts_reached(instruction[51:48], wait_snapshot, completed_in));
+    assign idle_out       = tiles_left == 0 && !read_pending && !queue_valid_in;
 
     always_ff @(posedge clk) begin
         if (reset) begin
-            weight_base      <= '0;
-            tiles_left       <= '0;
-            tile             <= '0;
-            row              <= '0;
-            read_pending     <= 1'b0;
-            read_slot        <= 1'b0;
-            read_final       <= 1'b0;
-            read_row         <= '0;
-            instruction_done <= 1'b0;
+            weight_base          <= '0;
+            tiles_left           <= '0;
+            tile                 <= '0;
+            row                  <= '0;
+            read_pending         <= 1'b0;
+            read_slot            <= 1'b0;
+            read_final           <= 1'b0;
+            read_row             <= '0;
+            instruction_done_out <= 1'b0;
         end else begin
-            instruction_done <= 1'b0;
+            instruction_done_out <= 1'b0;
 
-            if (queue_pop) begin
+            if (queue_pop_out) begin
                 case (opcode)
                     OPCODE_SET_WBASE: begin
-                        weight_base      <= instruction[31:0];
-                        instruction_done <= 1'b1;
+                        weight_base          <= instruction[31:0];
+                        instruction_done_out <= 1'b1;
                     end
                     OPCODE_MATMUL: begin
                         tile        <= weight_base;
@@ -87,13 +87,13 @@ module weight_engine #(
                         weight_base <= weight_base + 32'(matmul_tiles);
                         row         <= '0;
                     end
-                    default: instruction_done <= 1'b1;   // WAIT
+                    default: instruction_done_out <= 1'b1;   // WAIT
                 endcase
             end
 
             // one row read per cycle; the slot index flips as the last row issues
             read_pending <= issuing_read;
-            read_slot    <= fill_slot_next;
+            read_slot    <= fill_slot_next_in;
             read_row     <= row;
             read_final   <= issuing_read && row == 8'(ARRAY_SIZE - 1) && tiles_left == 32'd1;
             if (issuing_read) begin
@@ -107,7 +107,7 @@ module weight_engine #(
             end
 
             if (read_pending && read_row == 8'(ARRAY_SIZE - 1) && read_final)
-                instruction_done <= 1'b1;
+                instruction_done_out <= 1'b1;
         end
     end
 
