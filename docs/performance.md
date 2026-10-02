@@ -49,6 +49,35 @@ clock.
 73.5 ms at 115,200 baud, 7.5 ms at 1,562,500. Both take 117 µs on the
 board; the rest is the 785-byte image crossing the serial link.
 
+### Weights from DDR3
+
+Measured on the board on 2026-10-02 with `boards/de1soc/sw/ddr-bench.py`,
+from the on-chip counters only: a `MATMUL` takes `max(m, N)` cycles a tile,
+plus every cycle the array waits for weights (`PERF_MM_WSTALL`). WT and MM
+are held until the whole program is queued, so the console link never enters.
+
+| Layer | Tiles | WSTALL from WMEM | WSTALL from DDR3 (idle / ARM streaming 64 MB) | Weights from DDR3 |
+|---|---|---|---|---|
+| MNIST layer 1 (144 × 64) | 144 | 11 | 22 / 22–24 | 392 MB/s, 98.1% of the array's rate |
+| WMEM's capacity (1024 tiles) | 1,024 | 11 | 22 / 24–32 | 399 MB/s, 99.7% |
+| Qwen q/k/v fused (896 × 1152) | 16,128 | — (doesn't fit) | 22 / 31 | 399.9 MB/s, 99.98% |
+| Qwen down (4864 × 896) | 68,096 | — | 22 / 22–29 | 400.0 MB/s, 99.99–100% |
+
+- **DDR3 costs a fixed ~11 cycles a `MATMUL`, never per tile.** The stall is
+  the first tile's DDR3 latency; after that the stream keeps the array fed.
+  A second `MATMUL` behind the first is prefetched and adds 0–6 cycles.
+- **400 MB/s is the array's appetite, not DDR3's limit.** At 8×8 and 50 MHz
+  the array takes one 8-byte weight row a cycle at m = 1. The port carries
+  800 MB/s (§ the probe in [`de1soc.md`](de1soc.md) §7), so it has 2×
+  headroom, also with the ARM loading memory.
+- **For MNIST** the weights fit WMEM, and DDR3 would cost 2 × 11 cycles a
+  run: 0.44 µs on a 109.5 µs image.
+- **For an LLM** this is the spec's decode bound, now measured: at m = 1
+  every weight byte is used once per token, so Qwen2.5-0.5B's 494 MB take
+  494 / 400 = **1.24 s of array time per token** (0.8 tokens/s), before
+  any host work or handoffs. 16×16 or 100 MHz doubles the appetite to
+  800 MB/s, exactly the port's measured peak.
+
 Resources and timing are in [`de1soc.md`](de1soc.md) §1.
 
 ## History: the pico2-ice and the first core
