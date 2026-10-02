@@ -26,7 +26,10 @@ def accesses(word, wbase, n):
     if name == "MATMUL":
         tiles = f["n_blocks"] * f["k_tiles"]
         acc = ("ACC", f["acc_addr"], f["acc_addr"] + f["n_blocks"] * f["m"])
-        wt = (isa.WT, [("WMEM", wbase * n, (wbase + tiles) * n)], [])
+        if f["wsrc"]:   # DDR3 bytes; the host's own writes to DDR3 happen before the program
+            wt = (isa.WT, [("DDR", wbase * n * n, (wbase + tiles) * n * n)], [])
+        else:
+            wt = (isa.WT, [("WMEM", wbase * n, (wbase + tiles) * n)], [])
         mm = (isa.MM, [("UB", f["ub_addr"], f["ub_addr"] + f["k_tiles"] * f["m"]), acc], [acc])
         return [wt, mm], wbase + tiles
     if name == "ACTIVATE":

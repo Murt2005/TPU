@@ -108,7 +108,12 @@ it faults on 5.032 and fails on 5.052.
 - MNIST layer 1 against `hw_layer` at 32 bits;
 - the requantizer against host rounding, with exactly one difference, at the
   tie v = 10,450;
-- the compiled MNIST program is hazard-free with every `WAIT` necessary.
+- the compiled MNIST program is hazard-free with every `WAIT` necessary;
+- weights from DDR3 (`MATMUL wsrc=1`, model only so far): 60 random layers
+  at N = 8 and 4 give the same out words as from WMEM and match `tpu.golden`;
+  one K-sum split across WMEM and DDR3; MNIST with its weights in DDR3 gives
+  the same out words as the WMEM build; the DDR3 range check; and the
+  DDR3-weight program is hazard-free.
 
 Then `make rtl-test` (run at N = 8 and 4 by `sim-test`) drives `tpu_top`
 through `tests/verilator/tb-isa.cpp` and requires every output word to equal

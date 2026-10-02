@@ -15,7 +15,7 @@ is in [`architecture.md`](architecture.md).
 | Top levels | `boards/de1soc/top/tpu-top.sv` (bridge + core); in the board designs, `tpu-selftest.sv` and the GHRD component |
 | Reference model | `host/tpu/isa_model.py`: executes a program in order with the exact arithmetic; the RTL must match it word for word |
 | Design spec | the instruction-stream spec doc (claude.ai artifact `FP1ach14aGXhH2N1aCLCox`). This page describes what is built |
-| Status | Spec phases 1–3 built: the serial core, then the requantizer and on-core layer chaining, then overlapped tiles. **Hardware-validated on the DE1-SoC** ([`de1soc.md`](de1soc.md)). Phase 5 (DDR3) not started |
+| Status | Spec phases 1–3 built: the serial core, then the requantizer and on-core layer chaining, then overlapped tiles. **Hardware-validated on the DE1-SoC** ([`de1soc.md`](de1soc.md)). Phase 5 (DDR3) begun: FPGA-to-SDRAM bandwidth measured on the board (800 MB/s), `MATMUL wsrc=1` in the reference model; the RTL still rejects it |
 
 ## 1. Shape
 
@@ -77,8 +77,17 @@ bit outside an opcode's fields must be zero.
 Weights are read starting at tile `WBASE`, and WBASE then advances by
 `n_blocks · k_tiles`, so consecutive `MATMUL`s walk WMEM without a
 `SET_WBASE` in between. `acc = 1` adds to ACC instead of overwriting, which
-is how a K-sum splits across several `MATMUL`s. `wsrc = 1` (weights from
-DDR3) is phase 5.
+is how a K-sum splits across several `MATMUL`s.
+
+`wsrc = 1` streams the weights from DDR3 instead of WMEM (phase 5; in the
+reference model, not yet in the RTL). WBASE stays a tile index: tile *t* is
+the `N·N` bytes at DDR3 byte address `t·N·N` (64 B at `N = 8`, four 16-byte
+beats), rows in WMEM's order. There is one WBASE for both sources, and every
+`MATMUL` advances it, whichever source it reads. The range check is against
+the DDR3 size (1 GB) instead of WMEM. The host writes the weights into DDR3
+itself, outside the program (the ARM's stores; a preload in simulation), so
+nothing in a program orders them: they must be in place, and visible past the
+ARM's caches, before the program that reads them starts.
 
 **`ACTIVATE`** reads `n_blocks · m` ACC rows and computes
 `v = acc + bias[param_idx + block]` (32-bit wrap, if `bias = 1`), then

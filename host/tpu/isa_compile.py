@@ -8,11 +8,16 @@ from .isa_layout import bias_entries, out_rows, ub_entries, weight_rows
 
 
 class CompiledMlp:
-    def __init__(self, layers, m, n):
+    def __init__(self, layers, m, n, ddr_base=None):
         """layers: dicts with w (K x N int8), b (N ints, accumulator units),
         relu (bool) and scale (requant M for a chained layer, None for the
-        last, which returns int32 to the host). m: rows per inference"""
-        self.n, self.m, self.layers = n, m, layers
+        last, which returns int32 to the host). m: rows per inference.
+        ddr_base: a DDR3 byte address (a multiple of n*n) to stream the weights
+        from with MATMUL wsrc=1, instead of loading them into WMEM; the host
+        writes ddr_image() there before running anything"""
+        if ddr_base is not None and ddr_base % (n * n):
+            raise ValueError(f"ddr_base {ddr_base:#x} isn't a whole {n * n}-byte tile")
+        self.n, self.m, self.layers, self.ddr_base = n, m, layers, ddr_base
         self.plan = []
         wmem_rows, wbias, wquant = [], [], []
         par = 0
@@ -45,22 +50,31 @@ class CompiledMlp:
         self.quant = np.concatenate(wquant)
         self.k_in = layers[0]["w"].shape[0]
 
+    def ddr_image(self):
+        """(DDR3 byte address, bytes) the host writes before the load program, or None"""
+        if self.ddr_base is None:
+            return None
+        return self.ddr_base, self.wmem.astype(np.int8).tobytes()
+
     def load_program(self):
-        prog = [isa.wr_wmem(0, len(self.wmem)), isa.wr_bias(0, len(self.bias)),
-                isa.wr_quant(0, len(self.quant)),
-                isa.wait(isa.WT, isa.LD), isa.wait(isa.ACT, isa.LD), isa.signal(1)]
-        data = (isa.pack_int8(self.wmem) + isa.pack_int32(self.bias.ravel())
-                + isa.pack_int32(self.quant.ravel()))
-        return prog, data
+        params = [isa.wr_bias(0, len(self.bias)), isa.wr_quant(0, len(self.quant))]
+        param_data = isa.pack_int32(self.bias.ravel()) + isa.pack_int32(self.quant.ravel())
+        if self.ddr_base is not None:
+            return params + [isa.wait(isa.ACT, isa.LD), isa.signal(1)], param_data
+        prog = [isa.wr_wmem(0, len(self.wmem))] + params + [
+            isa.wait(isa.WT, isa.LD), isa.wait(isa.ACT, isa.LD), isa.signal(1)]
+        return prog, isa.pack_int8(self.wmem) + param_data
 
     def infer_program(self, x):
         """x: m x K int8. returns (program, data)"""
         m = self.m
         first = self.plan[0]
         ub = ub_entries(np.asarray(x), self.n)
-        prog = [isa.wr_ub(first["ub_in"], len(ub)), isa.set_wbase(0), isa.wait(isa.MM, isa.LD)]
+        in_ddr = self.ddr_base is not None
+        wbase = self.ddr_base // (self.n * self.n) if in_ddr else 0
+        prog = [isa.wr_ub(first["ub_in"], len(ub)), isa.set_wbase(wbase), isa.wait(isa.MM, isa.LD)]
         for p in self.plan:
-            prog += [isa.matmul(m, p["kt"], p["nb"], p["acc"], p["ub_in"]),
+            prog += [isa.matmul(m, p["kt"], p["nb"], p["acc"], p["ub_in"], wsrc=int(in_ddr)),
                      isa.wait(isa.ACT, isa.MM),
                      isa.activate(p["nb"], m, p["acc"],
                                   func=isa.FUNC_RELU if p["relu"] else isa.FUNC_IDENTITY,
@@ -77,5 +91,5 @@ class CompiledMlp:
         return out_rows(out, self.m, last["nb"], self.n)[:, :last["n_out"]]
 
 
-def compile_mlp(layers, m, n=8):
-    return CompiledMlp(layers, m, n)
+def compile_mlp(layers, m, n=8, ddr_base=None):
+    return CompiledMlp(layers, m, n, ddr_base)

@@ -8,8 +8,8 @@ import numpy as np
 
 from tpu import golden, isa
 from tpu.isa_layout import bias_entries, out_rows, ub_entries, weight_rows
-from tpu.isa_model import (ERR_COMBO, ERR_OPCODE, ERR_RANGE, ERR_RESERVED, ERR_UNIMPL,
-                           IsaModel)
+from tpu.isa_model import (ERR_COMBO, ERR_NONE, ERR_OPCODE, ERR_RANGE, ERR_RESERVED, ERR_UNIMPL,
+                           Ddr, IsaModel)
 
 failures = []
 
@@ -57,34 +57,44 @@ def test_errors():
         check(f"decode error: {name}", ok, str(m.err))
 
 
-def run_layer(model, x, w, b, relu=True, k_split=None):
+def run_layer(model, x, w, b, relu=True, k_split=None, ddr_base=None, words=False):
     """compile one layer: load weights/bias, write x, MATMUL (optionally split
-    across two instructions on K), ACTIVATE to host. returns M x N"""
+    across two instructions on K), ACTIVATE to host. returns M x N, or the raw
+    out words. ddr_base: the host puts the weights in DDR3 there, and the
+    MATMULs stream them with wsrc=1 instead of reading WMEM"""
     model.reset()
     n = model.n
     rows, kt, nb = weight_rows(w, n)
     ub = ub_entries(x, n)
     bias = bias_entries(b, n)
     m = x.shape[0]
-    prog = [isa.wr_wmem(0, len(rows)), isa.wr_bias(0, nb),
-            isa.wr_ub(0, len(ub)), isa.wait(isa.WT, isa.LD), isa.wait(isa.MM, isa.LD),
-            isa.wait(isa.ACT, isa.LD), isa.set_wbase(0)]
-    data = isa.pack_int8(rows) + isa.pack_int32(bias.ravel()) + isa.pack_int8(ub)
+    wsrc, tile0 = 0, 0
+    if ddr_base is None:
+        prog = [isa.wr_wmem(0, len(rows)), isa.wr_bias(0, nb), isa.wr_ub(0, len(ub)),
+                isa.wait(isa.WT, isa.LD)]
+        data = isa.pack_int8(rows)
+    else:
+        model.ddr.write(ddr_base, rows)
+        wsrc, tile0 = 1, ddr_base // (n * n)
+        prog = [isa.wr_bias(0, nb), isa.wr_ub(0, len(ub))]
+        data = []
+    prog += [isa.wait(isa.MM, isa.LD), isa.wait(isa.ACT, isa.LD), isa.set_wbase(tile0)]
+    data += isa.pack_int32(bias.ravel()) + isa.pack_int8(ub)
     if k_split is None:
-        prog.append(isa.matmul(m, kt, nb, 0, 0))
+        prog.append(isa.matmul(m, kt, nb, 0, 0, wsrc=wsrc))
     else:
         # weights are block-major, so split per block: K-tiles [0, s) then [s, kt)
         for blk in range(nb):
-            prog += [isa.set_wbase(blk * kt),
-                     isa.matmul(m, k_split, 1, blk * m, 0),
-                     isa.set_wbase(blk * kt + k_split),
-                     isa.matmul(m, kt - k_split, 1, blk * m, k_split * m, accumulate=True)]
+            prog += [isa.set_wbase(tile0 + blk * kt),
+                     isa.matmul(m, k_split, 1, blk * m, 0, wsrc=wsrc),
+                     isa.set_wbase(tile0 + blk * kt + k_split),
+                     isa.matmul(m, kt - k_split, 1, blk * m, k_split * m, accumulate=True, wsrc=wsrc)]
     prog += [isa.wait(isa.ACT, isa.MM),
              isa.activate(nb, m, 0, func=isa.FUNC_RELU if relu else isa.FUNC_IDENTITY),
              isa.signal(7)]
     out = model.run(prog, data)
     assert model.err is None, model.err
-    return out_rows(out, m, nb, n)[:, :w.shape[1]]
+    return out if words else out_rows(out, m, nb, n)[:, :w.shape[1]]
 
 
 def test_random_layers(rng):
@@ -105,6 +115,94 @@ def test_random_layers(rng):
         bad += not np.array_equal(got, want)
     check("random single layers vs tpu.golden (32-bit, K split across MATMULs)", bad == 0,
           f"{bad}/60 differ")
+
+
+def test_ddr_store():
+    ddr = Ddr(1 << 20)
+    payload = bytes(range(256)) * 40                     # 10 KB across three pages
+    ddr.write(4096 - 100, payload)
+    ok = ddr.read(4096 - 100, len(payload)) == payload
+    ok &= ddr.read(0, 16) == bytes(16) and ddr.read((1 << 20) - 16, 16) == bytes(16)
+    ddr.write(64, np.array([[-1, 2], [-128, 127]], np.int8))
+    ok &= ddr.read(64, 4) == bytes([255, 2, 128, 127])
+    try:
+        ddr.write((1 << 20) - 2, b"abc")
+        ok = False
+    except ValueError:
+        pass
+    check("DDR3 store: page-crossing writes, zero until written, int8 rows, bounds", ok)
+
+
+def test_ddr_errors():
+    """with wsrc=1 implemented: legal, range-checked against DDR3 rather than WMEM;
+    the rest of phase 5 stays unimplemented"""
+    m = IsaModel(n=8, wmem_rows=64, ub_depth=64, acc_depth=32, param_depth=8,
+                 ddr_weights=True, ddr_bytes=64 * 64)    # 64 tiles of DDR3, 8 of WMEM
+    cases = [
+        ("MATMUL from DDR3", [isa.set_wbase(60), isa.matmul(1, 2, 2, 0, 0, wsrc=1)], ERR_NONE),
+        ("MATMUL from DDR3 past its end", [isa.set_wbase(61), isa.matmul(1, 2, 2, 0, 0, wsrc=1)], ERR_RANGE),
+        ("MATMUL from WMEM still checks WMEM", [isa.set_wbase(6), isa.matmul(1, 2, 2, 0, 0)], ERR_RANGE),
+        ("RD_DDR_UB still unimplemented", [isa.encode("RD_DDR_UB")], ERR_UNIMPL),
+        ("ACTIVATE to DDR3 still unimplemented", [isa.activate(1, 1, 0, dst=isa.DST_DDR)], ERR_UNIMPL),
+    ]
+    for name, words, code in cases:
+        m.reset()
+        m.run(words + [isa.signal(1)])
+        got = m.err.code if m.err else ERR_NONE
+        check(f"decode, wsrc=1 enabled: {name}", got == code and m.done == (code == ERR_NONE), str(m.err))
+    m = IsaModel(n=8)
+    m.run([isa.matmul(1, 1, 1, 0, 0, wsrc=1), isa.signal(1)])
+    check("decode: MATMUL wsrc=1 is ERR_UNIMPL until enabled", m.err is not None and m.err.code == ERR_UNIMPL)
+
+
+def test_ddr_weights(rng):
+    """the same layers with their weights in DDR3 give the same out words as from
+    WMEM, word for word, and match tpu.golden"""
+    nrng = np.random.default_rng(2)
+    bad = 0
+    for i in range(60):
+        n = rng.choice([4, 8])
+        mm, k, nn = rng.randrange(1, 9), rng.randrange(1, 40), rng.randrange(1, 30)
+        x = nrng.integers(-128, 128, (mm, k), dtype=np.int64)
+        w = nrng.integers(-128, 128, (k, nn), dtype=np.int64)
+        b = nrng.integers(-(1 << 31), 1 << 31, nn, dtype=np.int64)
+        relu = bool(i % 2)
+        kt = -(-k // n)
+        split = rng.randrange(1, kt) if kt > 1 and i % 3 == 0 else None
+        base = rng.randrange(0, (1 << 30) // (n * n) - 1000) * n * n
+        model = IsaModel(n=n, wmem_rows=4096, ub_depth=512, acc_depth=512, param_depth=64,
+                         ddr_weights=True)
+        from_wmem = run_layer(model, x, w, b, relu, split, words=True)
+        from_ddr = run_layer(model, x, w, b, relu, split, ddr_base=base, words=True)
+        got = out_rows(from_ddr, mm, -(-nn // n), n)[:, :nn]
+        bad += from_ddr != from_wmem or not np.array_equal(got, golden.matmul(x, w, b, psum_width=32, relu=relu))
+    check("random layers, weights in DDR3 (wsrc=1) == in WMEM, word for word, and vs tpu.golden",
+          bad == 0, f"{bad}/60 differ")
+
+
+def test_ddr_mixed_sources():
+    """one K-sum split across the two sources: the first K-tiles from WMEM, the
+    rest from DDR3, through one WBASE that every MATMUL advances"""
+    n, m, kt = 8, 3, 4
+    nrng = np.random.default_rng(3)
+    x = nrng.integers(-128, 128, (m, kt * n), dtype=np.int64)
+    w = nrng.integers(-128, 128, (kt * n, n), dtype=np.int64)
+    rows, _, _ = weight_rows(w, n)
+    model = IsaModel(n=n, ddr_weights=True)
+    base_tile = 1000
+    model.ddr.write(base_tile * n * n, rows[2 * n:])        # K-tiles 2, 3
+    ub = ub_entries(x, n)
+    prog = [isa.wr_wmem(0, 2 * n), isa.wr_ub(0, len(ub)), isa.wait(isa.WT, isa.LD),
+            isa.wait(isa.MM, isa.LD), isa.set_wbase(0),
+            isa.matmul(m, 2, 1, 0, 0),
+            isa.set_wbase(base_tile),
+            isa.matmul(m, 2, 1, 0, 2 * m, accumulate=True, wsrc=1),
+            isa.wait(isa.ACT, isa.MM), isa.activate(1, m, 0, func=isa.FUNC_IDENTITY, bias=False),
+            isa.signal(3)]
+    out = model.run(prog, isa.pack_int8(rows[:2 * n]) + isa.pack_int8(ub))
+    ok = model.err is None and model.wbase == base_tile + 2
+    ok &= np.array_equal(out_rows(out, m, 1, n), golden.wrap(x @ w, 32))
+    check("one K-sum across WMEM and DDR3, WBASE advancing through both", ok)
 
 
 def test_mnist_layer1():
@@ -137,23 +235,34 @@ def mnist_layers():
     return x, layers, predict_batch_offline(mdl, xf)
 
 
-def test_mnist_full():
+def run_mnist(layers, x, m, ddr_base=None):
+    """(argmax per image, every out word) for the compiled MNIST program"""
     from tpu.isa_compile import compile_mlp
+    cm = compile_mlp(layers, m, ddr_base=ddr_base)
+    model = IsaModel(n=8, ddr_weights=ddr_base is not None)
+    if ddr_base is not None:
+        model.ddr.write(*cm.ddr_image())
+    model.run(*cm.load_program())
+    preds, words = [], []
+    for i in range(0, len(x), m):
+        xb = np.zeros((m, x.shape[1]), np.int64)
+        xb[:len(x[i:i + m])] = x[i:i + m]
+        model.reset()
+        out = model.run(*cm.infer_program(xb))
+        assert model.err is None, model.err
+        preds += list(cm.decode(out).argmax(1)[:len(x[i:i + m])])
+        words += out
+    return preds, words
+
+
+def test_mnist_full():
     x, layers, host_pred = mnist_layers()
     for m in (1, 8):
-        cm = compile_mlp(layers, m)
-        model = IsaModel(n=8)
-        model.run(*cm.load_program())
-        preds = []
-        for i in range(0, 20, m):
-            xb = np.zeros((m, x.shape[1]), np.int64)
-            xb[:len(x[i:i + m])] = x[i:i + m]
-            model.reset()
-            out = model.run(*cm.infer_program(xb))
-            assert model.err is None, model.err
-            preds += list(cm.decode(out).argmax(1)[:len(x[i:i + m])])
+        preds, words = run_mnist(layers, x, m)
         check(f"MNIST full program chained on the core, 20 images, m={m}: argmax == host path",
               list(preds) == list(host_pred), f"{preds} vs {list(host_pred)}")
+        _, ddr_words = run_mnist(layers, x, m, ddr_base=0x30000000)
+        check(f"MNIST with its weights in DDR3 (wsrc=1), m={m}: out words == WMEM build", ddr_words == words)
 
 
 def test_requant_vs_host_round():
@@ -172,7 +281,7 @@ def test_requant_vs_host_round():
 def test_waits():
     """the compiled program's WAITs are exactly the hazards isa_waits finds"""
     from tpu.isa_compile import compile_mlp
-    from tpu.isa_waits import check_waits, insert_waits
+    from tpu.isa_waits import accesses, check_waits, insert_waits
     x, layers, _ = mnist_layers()
     cm = compile_mlp(layers, 8)
     prog, data = cm.infer_program(x[:8])
@@ -191,6 +300,16 @@ def test_waits():
     ok &= a == model.run(redo, data)
     check("isa_waits: compiled MNIST program hazard-free, every WAIT needed, re-insertion matches",
           ok)
+    # weights in DDR3: the WT half reads DDR3, which nothing in the program writes
+    cm = compile_mlp(layers, 8, ddr_base=0x30000000)
+    load, _ = cm.load_program()
+    prog, _ = cm.infer_program(x[:8])
+    ok = check_waits(load, 8) == [] and check_waits(prog, 8) == []
+    ok &= isa.wait(isa.WT, isa.LD) not in load
+    wt = [a for w in prog if isa.decode(w)[0] == "MATMUL" for a in accesses(w, 0x30000000 // 64, 8)[0]
+          if a[0] == isa.WT]
+    ok &= all(r[0][0] == "DDR" for _, r, _ in wt)
+    check("isa_waits: DDR3-weight MNIST program hazard-free; WT reads DDR3, not WMEM", ok)
 
 
 if __name__ == "__main__":
@@ -198,6 +317,10 @@ if __name__ == "__main__":
     test_roundtrip(rng)
     test_errors()
     test_random_layers(rng)
+    test_ddr_store()
+    test_ddr_errors()
+    test_ddr_weights(rng)
+    test_ddr_mixed_sources()
     test_mnist_layer1()
     test_requant_vs_host_round()
     test_mnist_full()
