@@ -153,10 +153,10 @@ module tpu_core #(
 
     unified_buffer #(.ARRAY_SIZE(ARRAY_SIZE), .DEPTH(UB_DEPTH)) u_unified_buffer (
         .clk(clk),
-        .load_write_enable(load_UB_write_enable), .load_write_address(load_UB_write_address), .load_write_data(load_row_data),
-        .activate_write_enable(activate_UB_write_enable), .activate_write_address(activate_UB_write_address), .activate_write_data(activate_UB_write_data),
-        .matmul_read_enable(matmul_UB_read_enable), .matmul_read_address(matmul_UB_read_address), .activate_read_address(activate_UB_read_address),
-        .read_data(UB_read_data));
+        .load_write_enable_in(load_UB_write_enable), .load_write_address_in(load_UB_write_address), .load_write_data_in(load_row_data),
+        .activate_write_enable_in(activate_UB_write_enable), .activate_write_address_in(activate_UB_write_address), .activate_write_data_in(activate_UB_write_data),
+        .matmul_read_enable_in(matmul_UB_read_enable), .matmul_read_address_in(matmul_UB_read_address), .activate_read_address_in(activate_UB_read_address),
+        .read_data_out(UB_read_data));
 
     // -- weight FIFO: WT fills, MM drains ------------------------------------------
     logic                                     fill_ready, fill_slot_next, fill_advance, fill_write_enable, fill_slot;

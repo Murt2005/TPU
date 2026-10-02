@@ -10,25 +10,25 @@ module unified_buffer #(
 ) (
     input  logic                     clk,
 
-    input  logic                     load_write_enable,
-    input  logic [ADDRESS_WIDTH-1:0] load_write_address,
-    input  logic [ARRAY_SIZE*8-1:0]  load_write_data,
-    input  logic                     activate_write_enable,
-    input  logic [ADDRESS_WIDTH-1:0] activate_write_address,
-    input  logic [ARRAY_SIZE*8-1:0]  activate_write_data,
+    input  logic                     load_write_enable_in,
+    input  logic [ADDRESS_WIDTH-1:0] load_write_address_in,
+    input  logic [ARRAY_SIZE*8-1:0]  load_write_data_in,
+    input  logic                     activate_write_enable_in,
+    input  logic [ADDRESS_WIDTH-1:0] activate_write_address_in,
+    input  logic [ARRAY_SIZE*8-1:0]  activate_write_data_in,
 
-    input  logic                     matmul_read_enable,
-    input  logic [ADDRESS_WIDTH-1:0] matmul_read_address,
-    input  logic [ADDRESS_WIDTH-1:0] activate_read_address,
-    output logic [ARRAY_SIZE*8-1:0]  read_data               // one cycle after the address
+    input  logic                     matmul_read_enable_in,
+    input  logic [ADDRESS_WIDTH-1:0] matmul_read_address_in,
+    input  logic [ADDRESS_WIDTH-1:0] activate_read_address_in,
+    output logic [ARRAY_SIZE*8-1:0]  read_data_out              // one cycle after the address
 );
 
     logic [ARRAY_SIZE*8-1:0] memory [DEPTH];
 
     always_ff @(posedge clk) begin
-        if (activate_write_enable)     memory[activate_write_address] <= activate_write_data;
-        else if (load_write_enable) memory[load_write_address]  <= load_write_data;
-        read_data <= memory[matmul_read_enable ? matmul_read_address : activate_read_address];
+        if (activate_write_enable_in)  memory[activate_write_address_in] <= activate_write_data_in;
+        else if (load_write_enable_in) memory[load_write_address_in]     <= load_write_data_in;
+        read_data_out <= memory[matmul_read_enable_in ? matmul_read_address_in : activate_read_address_in];
     end
 
 endmodule
