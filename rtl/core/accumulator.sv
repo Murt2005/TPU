@@ -9,19 +9,19 @@ module accumulator #(
     parameter int ACC_DEPTH         = 1024,
     parameter int ACC_ADDRESS_WIDTH = $clog2(ACC_DEPTH)
 ) (
-    input  logic  clk,
-    input  logic  reset,
+    input  logic                                clk,
+    input  logic                                reset,
 
-    input  logic signed [ARRAY_SIZE-1:0][31:0] partial_sum,
-    input  logic [ARRAY_SIZE-1:0]        partial_sum_valid,
+    input  logic signed [ARRAY_SIZE-1:0][31:0]  partial_sum_in,
+    input  logic        [ARRAY_SIZE-1:0]        partial_sum_valid_in,
 
-    input  logic                         tag_push,
-    input  logic [ACC_ADDRESS_WIDTH:0]   tag_in,                // {overwrite, acc_row}
-    output logic                         row_written,           // a row reaches ACC this cycle
+    input  logic                                tag_push_in,
+    input  logic        [ACC_ADDRESS_WIDTH:0]   tag_in,                    // {overwrite, ACC row}
+    output logic                                row_written_out,           // a row reaches ACC this cycle
 
-    input  logic [ACC_ADDRESS_WIDTH-1:0] activate_read_address,
-    output logic                         activate_read_blocked, // MM owns the read port this cycle
-    output logic [ARRAY_SIZE*32-1:0]     read_data              // one cycle after the address
+    input  logic        [ACC_ADDRESS_WIDTH-1:0] activate_read_address_in,
+    output logic                                activate_read_blocked_out, // MM owns the read port this cycle
+    output logic        [ARRAY_SIZE*32-1:0]     read_data_out              // one cycle after the address
 );
 
     localparam int SKEW_DEPTH = (2 * ARRAY_SIZE <= 4) ? 4 : (2 * ARRAY_SIZE <= 8) ? 8 : (2 * ARRAY_SIZE <= 16) ? 16 : (2 * ARRAY_SIZE <= 32) ? 32 : 64;
@@ -35,10 +35,14 @@ module accumulator #(
     generate
         for (lane = 0; lane < ARRAY_SIZE; lane++) begin : g_column
             fifo #(.WIDTH(32), .DEPTH(SKEW_DEPTH)) u_column (
-                .clk(clk), .reset(reset),
-                .write_enable_in(partial_sum_valid[lane]), .write_data_in(partial_sum[lane]),
-                .read_enable_in(row_pop), .read_data_out(column_head[lane]),
-                .full_out(), .empty_out(column_empty[lane])
+                .clk(clk),
+                .reset(reset),
+                .write_enable_in(partial_sum_valid_in[lane]),
+                .write_data_in(partial_sum_in[lane]),
+                .read_enable_in(row_pop),
+                .read_data_out(column_head[lane]),
+                .full_out(),
+                .empty_out(column_empty[lane])
             );
         end
     endgenerate
@@ -47,10 +51,14 @@ module accumulator #(
     logic [ACC_ADDRESS_WIDTH:0] tag_head;
 
     fifo #(.WIDTH(ACC_ADDRESS_WIDTH + 1), .DEPTH(TAG_DEPTH)) u_tags (
-        .clk(clk), .reset(reset),
-        .write_enable_in(tag_push), .write_data_in(tag_in),
-        .read_enable_in(row_pop), .read_data_out(tag_head),
-        .full_out(), .empty_out(tag_empty)
+        .clk(clk),
+        .reset(reset),
+        .write_enable_in(tag_push_in),
+        .write_data_in(tag_in),
+        .read_enable_in(row_pop),
+        .read_data_out(tag_head),
+        .full_out(),
+        .empty_out(tag_empty)
     );
 
     assign row_pop = (column_empty == '0) && !tag_empty;
@@ -67,11 +75,11 @@ module accumulator #(
 
     assign matmul_read_enable    = row_pop && !tag_head[ACC_ADDRESS_WIDTH];
     assign matmul_read_address   = tag_head[ACC_ADDRESS_WIDTH-1:0];
-    assign activate_read_blocked = matmul_read_enable;
-    assign row_written           = write_back_valid;
+    assign activate_read_blocked_out = matmul_read_enable;
+    assign row_written_out           = write_back_valid;
     always_comb
         for (int column = 0; column < ARRAY_SIZE; column++)
-            write_data[32*column +: 32] = write_back_overwrite ? write_back_partial_sum[32*column +: 32] : read_data[32*column +: 32] + write_back_partial_sum[32*column +: 32];
+            write_data[32*column +: 32] = write_back_overwrite ? write_back_partial_sum[32*column +: 32] : read_data_out[32*column +: 32] + write_back_partial_sum[32*column +: 32];
 
     always_ff @(posedge clk) begin
         if (reset) begin
@@ -91,7 +99,7 @@ module accumulator #(
     logic [ARRAY_SIZE*32-1:0] memory [ACC_DEPTH];
     always_ff @(posedge clk) begin
         if (write_back_valid) memory[write_back_address] <= write_data;
-        read_data <= memory[matmul_read_enable ? matmul_read_address : activate_read_address];
+        read_data_out <= memory[matmul_read_enable ? matmul_read_address : activate_read_address_in];
     end
 
 endmodule

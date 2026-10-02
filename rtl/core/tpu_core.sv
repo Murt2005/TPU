@@ -213,9 +213,9 @@ module tpu_core #(
 
     accumulator #(.ARRAY_SIZE(ARRAY_SIZE), .ACC_DEPTH(ACC_DEPTH)) u_accumulator (
         .clk(clk), .reset(reset),
-        .partial_sum(partial_sum), .partial_sum_valid(partial_sum_valid),
-        .tag_push(tag_push), .tag_in(tag_in), .row_written(row_written),
-        .activate_read_address(activate_ACC_read_address), .activate_read_blocked(activate_ACC_read_blocked), .read_data(ACC_read_data));
+        .partial_sum_in(partial_sum), .partial_sum_valid_in(partial_sum_valid),
+        .tag_push_in(tag_push), .tag_in(tag_in), .row_written_out(row_written),
+        .activate_read_address_in(activate_ACC_read_address), .activate_read_blocked_out(activate_ACC_read_blocked), .read_data_out(ACC_read_data));
 
     // -- accumulators -> bias -> activation (sequenced by ACT) ----------------------
     logic                     use_bias, relu, multiply_enable;

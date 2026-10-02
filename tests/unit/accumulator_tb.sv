@@ -7,12 +7,12 @@ module accumulator_tb;
 
     localparam int N = 4, D = 16, AW = $clog2(D);
     logic clk = 1'b0, reset = 1'b1;
-    logic signed [N-1:0][31:0] partial_sum = '0;
-    logic        [N-1:0]       partial_sum_valid = '0;
-    logic                      tag_push = 1'b0, row_written, activate_read_blocked;
+    logic signed [N-1:0][31:0] partial_sum_in = '0;
+    logic        [N-1:0]       partial_sum_valid_in = '0;
+    logic                      tag_push_in = 1'b0, row_written_out, activate_read_blocked_out;
     logic [AW:0]               tag_in = '0;
-    logic [AW-1:0]             activate_read_address = '0;
-    logic [N*32-1:0]           read_data;
+    logic [AW-1:0]             activate_read_address_in = '0;
+    logic [N*32-1:0]           read_data_out;
 
     accumulator #(.ARRAY_SIZE(N), .ACC_DEPTH(D)) dut (.*);
 
@@ -21,30 +21,30 @@ module accumulator_tb;
 
     int written = 0, busy_cycles = 0;
     always @(posedge clk) begin
-        if (row_written) written++;
-        if (activate_read_blocked) busy_cycles++;
+        if (row_written_out) written++;
+        if (activate_read_blocked_out) busy_cycles++;
     end
 
     // rows arrive the way the mmu emits them: column c of row k at cycle k + c
     task automatic send(input int n, input int addr [], input logic ow [], input int vals [][N]);
         for (int cyc = 0; cyc < n + N; cyc++) begin
-            tag_push = cyc < n;
+            tag_push_in = cyc < n;
             tag_in   = cyc < n ? {ow[cyc], AW'(addr[cyc])} : '0;
             for (int c = 0; c < N; c++) begin
                 int k = cyc - c;
-                partial_sum_valid[c] = k >= 0 && k < n;
-                partial_sum[c]       = (k >= 0 && k < n) ? vals[k][c] : 0;
+                partial_sum_valid_in[c] = k >= 0 && k < n;
+                partial_sum_in[c]       = (k >= 0 && k < n) ? vals[k][c] : 0;
             end
             tick();
         end
-        tag_push = 1'b0; partial_sum_valid = '0;
+        tag_push_in = 1'b0; partial_sum_valid_in = '0;
         repeat (4) tick();
     endtask
 
     task automatic expect_row(int addr, int want [N], string what);
-        activate_read_address = AW'(addr); tick();
+        activate_read_address_in = AW'(addr); tick();
         for (int c = 0; c < N; c++)
-            `CHECK_EQ(read_data[32*c +: 32], 32'(want[c]), $sformatf("%s, ACC[%0d] col %0d", what, addr, c))
+            `CHECK_EQ(read_data_out[32*c +: 32], 32'(want[c]), $sformatf("%s, ACC[%0d] col %0d", what, addr, c))
     endtask
 
     int addr [];
