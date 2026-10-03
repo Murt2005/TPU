@@ -4,16 +4,17 @@ Getting [Qwen2.5-0.5B](https://huggingface.co/Qwen/Qwen2.5-0.5B) (24 layers,
 hidden 896, 14 query / 2 KV heads, SwiGLU 4,864, vocabulary 151,936, tied
 embedding) to run with every linear layer on the array and its weights streamed
 from DDR3, as the instruction-stream spec plans (its "Scaling to
-Qwen2.5-Coder-0.5B"). Status: phases 1–3 done. Every linear layer runs on the
-core in Verilator simulation, exact; not yet on the board.
+Qwen2.5-Coder-0.5B"). Status: phases 1–4 done. The C runtime runs the model
+with every linear layer on the core in Verilator simulation, exact; not yet on
+the board.
 
 | Phase | What | Status |
 |---|---|---|
 | 1 | What the core's int8 arithmetic costs the model (`accuracy.py`) | **done**: +1.74% perplexity with SmoothQuant, no hardware change |
 | 2 | A numpy reference, the tokenizer, and the DDR3 weight image (`qwen.py`, `tokenizer.py`, `export.py`, `check.py`) | **done** |
 | 3 | Each layer as core programs, checked word for word in Verilator (`core_runtime.py`, `phase3.py`) | **done**: the whole model, every `MATMUL` exact |
-| 4 | The host runtime in C on the ARM | next |
-| 5 | On the board (needs a larger DDR3 window than `mem=768M` leaves) | |
+| 4 | The host runtime in C (`runtime/`, `test_runtime.py`), for the Mac and the ARM | **done**: exact against the simulated core |
+| 5 | On the board (needs a larger DDR3 window than `mem=768M` leaves) | next |
 
 ## Setup
 
@@ -136,21 +137,60 @@ prefetching that program's weights, so the first tile is there before the
 array needs it. Verilator runs it at about 1.8 M cycles/s, so 36 s of
 simulation per token.
 
-## What phase 4 has to do
+## Phase 4: the host runtime in C
 
-The host side of each layer moves to C on the ARM, with numpy's
-`core_runtime.py` and `qwen.py` as the specification:
-- **Quantizing inputs:** smoothing, per-row int8 rounding half to even
-  (`rintf`), written in the UB's layout.
-- **Dequantizing outputs**, plus RMSNorm, RoPE, attention over the KV cache,
-  SiLU and residuals.
-- **The embedding gather** from the head's tiles.
-- **Sampling.**
+`runtime/` is the host side in C (`make -C software/qwen/runtime`; `make arm`
+cross-compiles it in the Quartus VM). It follows `qwen.py` and
+`core_runtime.py` operation for operation:
+- the embedding gathered from the head's tiles
+- RMSNorm, RoPE, attention over a float32 KV cache (2,048 positions)
+- SiLU and the residuals
+- around each linear layer: smoothing, per-row int8 quantization (`rintf`,
+  half to even), the core, and dequantization
 
-The ARM's float math won't match numpy's bit for bit, and int8 rounding
-compounds any difference. So the comparison is per `MATMUL`: the runtime can
-log its int8 inputs, and the numpy reference recomputes those `MATMUL`s.
-End to end, the judge is perplexity.
+It builds the programs itself. A matrix too wide for the 512-word instruction
+FIFO at some m (the head above m = 5) runs as several programs. One `qwen-run`
+binary takes any of four cores:
+
+| Core | What it is | For |
+|---|---|---|
+| `ref:IMAGE` | an exact int8 matmul in C over the image's tiles | checking the host math fast on the Mac |
+| `sim:TB_ISA[:IMAGE]` | the Verilator core over `tb_isa`'s pipe, weights in its DDR3 | checking against the RTL |
+| `mmio` | the DE1-SoC's core through `/dev/mem` | phase 5 |
+| `null` | no matmul (zeros) | timing the host's own work |
+
+`qwen-run --ids … --generate N` continues a prompt (token ids from
+`tokenizer.py`; text printed from the exported vocabulary). `--score` gives a
+perplexity, and `--log` records every matmul's int8 input and int32 output.
+`export.py` also writes `qwen-host.bin` and `qwen-vocab.bin`, flat files the C
+side reads without numpy.
+
+`test_runtime.py`:
+
+| Check | Result |
+|---|---|
+| every program `qwen-run` builds vs `core_runtime.py`'s, every matrix at m = 1..16 | 1,541 programs, identical word for word |
+| greedy text, C + ref core vs the numpy core path, 5 prompts × 8 tokens | 4 identical; the fifth splits at a near-tie after "jumps over the lazy dog\n\n" |
+| perplexity, 2,040 WikiText-2 tokens | C 23.091, numpy 22.920 (0.7%) |
+| C on the simulated core: prompt + 2 tokens, every matmul logged | 291 matmuls, each int32 == the exact product of its logged int8 input |
+| that log vs the ref core's | identical, byte for byte |
+
+**On the ARM** (the board, the null core, measured 2026-10-02), the host's
+own work is about **50 ms a token** at a short context. Attention over the
+KV cache adds about 0.6 ms per token of context: about 90 ms at 69
+tokens, and about 1.3 s extrapolated to 2,048, as much as the array's
+1.24 s. That's the spec's prediction for long contexts. The fixes are NEON
+(the build is scalar float) or attention on the array. Memory isn't a
+concern: 24 MB of the 771 MB Linux has.
+
+## What phase 5 has to do
+
+- **A DDR3 window for the 494 MB image.** `mem=768M` leaves 240 MB, and
+  `mem=256M` would leave 752 MB.
+- **The image in that window.** Copy it to the SD card from the Mac, then
+  have the ARM copy it into DDR3 at each boot (~3 min at the card's speed).
+- **`qwen-run --core mmio`.** Its first runs should log matmuls, checked by
+  `test_runtime.py`'s exact comparison.
 
 ## The core's limits the programs respect
 

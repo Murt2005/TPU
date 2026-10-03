@@ -41,3 +41,5 @@ software/qwen/model/
 software/qwen/data/
 software/qwen/out/
 software/qwen/.venv/
+software/qwen/runtime/qwen-run
+software/qwen/runtime/qwen-run-arm

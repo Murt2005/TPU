@@ -8,6 +8,8 @@
                      each matrix's tiles start (a tile index, for SET_WBASE)
   out/smoothing.npz  the calibration, so qwen.Qwen(core=True) can be rebuilt
                      without recalibrating
+  out/qwen-host.bin  qwen-host.npz for the C runtime: named float32 / int32 arrays
+  out/qwen-vocab.bin each token's bytes, so the runtime can print text
 
 A matrix of K inputs and N outputs is k_tiles = K/N_array by n_blocks = N/N_array
 tiles, block-major then K (isa_layout.weight_rows): exactly what one MATMUL with
@@ -15,9 +17,12 @@ WBASE at its first tile walks. The embedding lookup reads the output head's tile
 token t is column t % N of blocks t // N.
 
     software/qwen/.venv/bin/python software/qwen/export.py [--alpha 0.5] [--windows 16]
+    software/qwen/.venv/bin/python software/qwen/export.py --tables-only   # just the .bin tables
 """
 import argparse
+import json
 import os
+import struct
 import sys
 
 import numpy as np
@@ -55,6 +60,32 @@ def calibrate(float_model, batches, alpha):
     return smoothing
 
 
+def write_tables(out_dir, tokenizer, cfg):
+    """qwen-host.npz and the config as qwen-host.bin, and the vocabulary as
+    qwen-vocab.bin, little-endian, for runtime/qwen-run.c:
+      host:  "QWH1", u32 count, then per array: u16 name length, name, u8 type
+             (0 float32, 1 int32), u32 element count, the elements
+      vocab: "QWV1", u32 count, then per token: u16 length, its bytes"""
+    host = dict(np.load(os.path.join(out_dir, "qwen-host.npz")))
+    host.update({"cfg.layers": cfg["num_hidden_layers"], "cfg.hidden": cfg["hidden_size"],
+                 "cfg.heads": cfg["num_attention_heads"], "cfg.kv_heads": cfg["num_key_value_heads"],
+                 "cfg.inter": cfg["intermediate_size"], "cfg.vocab": cfg["vocab_size"],
+                 "cfg.eps": np.float32(cfg["rms_norm_eps"]), "cfg.theta": np.float32(cfg["rope_theta"])})
+    with open(os.path.join(out_dir, "qwen-host.bin"), "wb") as fh:
+        fh.write(b"QWH1" + struct.pack("<I", len(host)))
+        for name, value in sorted(host.items()):
+            a = np.asarray(value).ravel()
+            kind = 0 if np.issubdtype(a.dtype, np.floating) else 1
+            a = a.astype("<f4" if kind == 0 else "<i4")
+            fh.write(struct.pack("<H", len(name)) + name.encode() + struct.pack("<BI", kind, a.size) + a.tobytes())
+    with open(os.path.join(out_dir, "qwen-vocab.bin"), "wb") as fh:
+        count = cfg["vocab_size"]
+        fh.write(b"QWV1" + struct.pack("<I", count))
+        for i in range(count):
+            raw = tokenizer.decode_bytes([i]) if i in tokenizer.decoder else b""
+            fh.write(struct.pack("<H", len(raw)) + raw)
+
+
 def plan(model, n):
     """[(name, linear, first tile, k_tiles, n_blocks)] in DDR3 (program) order"""
     out, tile = [], 0
@@ -75,11 +106,16 @@ def main():
     ap.add_argument("--windows", type=int, default=16, help="WikiText-2 train windows to calibrate on")
     ap.add_argument("--length", type=int, default=512)
     ap.add_argument("-n", type=int, default=8, help="array size N")
+    ap.add_argument("--tables-only", action="store_true", help="rewrite just qwen-host.bin and qwen-vocab.bin")
     args = ap.parse_args()
     out_dir = os.path.join(HERE, "out")
     os.makedirs(out_dir, exist_ok=True)
 
     tokenizer = Tokenizer.from_dir(os.path.join(HERE, "model"))
+    cfg = json.load(open(os.path.join(HERE, "model", "config.json")))
+    if args.tables_only:
+        write_tables(out_dir, tokenizer, cfg)
+        return
     print(f"calibrating on {args.windows} x {args.length} WikiText-2 train tokens (float model, numpy) ...")
     float_model = Qwen()
     smoothing = calibrate(float_model, wikitext_ids(tokenizer, "train", args.windows, args.length), args.alpha)
@@ -109,6 +145,7 @@ def main():
         host[f"layer{i}.input_norm"] = layer["input_norm"]
         host[f"layer{i}.post_norm"] = layer["post_norm"]
     np.savez(os.path.join(out_dir, "qwen-host.npz"), **host)
+    write_tables(out_dir, tokenizer, cfg)
     tiles = size // (n * n)
     print(f"out/qwen-ddr.bin: {size:,} bytes, {tiles:,} tiles of {n * n} bytes")
     print(f"  per layer {layout[4][2]:,} tiles; output head {layout[-1][3]} x {layout[-1][4]} = "

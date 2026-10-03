@@ -117,13 +117,16 @@ class Tokenizer:
         return ids
 
     def decode(self, ids):
+        return self.decode_bytes(ids).decode("utf-8", errors="replace")
+
+    def decode_bytes(self, ids):
         out = bytearray()
         for i in ids:
             if i in self.special_ids:
                 out += self.decoder[i].encode("utf-8")
             else:
                 out += bytes(self.u2b[c] for c in self.decoder[i])
-        return out.decode("utf-8", errors="replace")
+        return bytes(out)
 
 
 if __name__ == "__main__":
