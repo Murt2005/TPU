@@ -12,6 +12,11 @@ add_fileset QUARTUS_SYNTH QUARTUS_SYNTH "" ""
 set_fileset_property QUARTUS_SYNTH TOP_LEVEL ddr_probe
 add_fileset_file ddr-probe.sv SYSTEM_VERILOG PATH ../../top/ddr-probe.sv
 
+# the port's width (the Makefile's DDR_BITS), as the TPU's
+set ddr_bits [expr {[info exists ::env(TPU_DDR_BITS)] ? $::env(TPU_DDR_BITS) : 128}]
+add_parameter BEAT_BITS INTEGER $ddr_bits
+set_parameter_property BEAT_BITS HDL_PARAMETER true
+
 add_interface clock clock end
 add_interface_port clock clk clk Input 1
 
@@ -45,5 +50,5 @@ add_interface_port m0 avm_address address Output 32
 add_interface_port m0 avm_read read Output 1
 add_interface_port m0 avm_burstcount burstcount Output 8
 add_interface_port m0 avm_waitrequest waitrequest Input 1
-add_interface_port m0 avm_readdata readdata Input 128
+add_interface_port m0 avm_readdata readdata Input $ddr_bits
 add_interface_port m0 avm_readdatavalid readdatavalid Input 1

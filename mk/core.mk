@@ -6,7 +6,8 @@ UB_DEPTH    ?= 16384
 ACC_DEPTH   ?= 1024
 PARAM_DEPTH ?= 256
 LANES       ?= 2
-RTL_SIM_DIR := $(SIM_DIR)/verilator/core_n$(N)$(if $(filter 2,$(LANES)),,_l$(LANES))
+BEAT        ?= 16        # the DDR3 port's beat in bytes: 16 (128-bit) or 32 (256-bit, LANES=4 at N=8)
+RTL_SIM_DIR := $(SIM_DIR)/verilator/core_n$(N)$(if $(filter 2,$(LANES)),,_l$(LANES))$(if $(filter 16,$(BEAT)),,_b$(BEAT))
 RTL_SIM     := $(RTL_SIM_DIR)/tb_isa
 
 # the reference model against independent references (tpu.golden, the host MNIST path)
@@ -20,11 +21,12 @@ rtl-sim: | $(SIM_DIR)
 		--top-module tpu_top \
 		-GARRAY_SIZE=$(N) -GWMEM_ROWS=$(WMEM_ROWS) -GUB_DEPTH=$(UB_DEPTH) \
 		-GACC_DEPTH=$(ACC_DEPTH) -GPARAMETER_DEPTH=$(PARAM_DEPTH) -GWEIGHT_LANES=$(LANES) \
-		-CFLAGS "-std=c++17 -DTB_N=$(N) -DTB_WMEM_ROWS=$(WMEM_ROWS) \
+		-GDDR_BEAT_BITS=$$(( $(BEAT) * 8 )) \
+		-CFLAGS "-std=c++17 -DTB_N=$(N) -DTB_BEAT_BYTES=$(BEAT) -DTB_WMEM_ROWS=$(WMEM_ROWS) \
 		         -DTB_UB_DEPTH=$(UB_DEPTH) -DTB_ACC_DEPTH=$(ACC_DEPTH) \
 		         -DTB_PARAM_DEPTH=$(PARAM_DEPTH)" \
 		$(CORE_RTL) $(TEST_DIR)/verilator/tb-isa.cpp -o tb_isa > /dev/null
-	@echo "rtl-sim: $(RTL_SIM) (N=$(N), LANES=$(LANES))"
+	@echo "rtl-sim: $(RTL_SIM) (N=$(N), LANES=$(LANES), BEAT=$(BEAT))"
 
 # tb_isa with VCD tracing, for the cycle-by-cycle visualizer (software/viz)
 VIZ_SIM_DIR := $(SIM_DIR)/verilator/trace_n$(N)
@@ -36,7 +38,8 @@ viz-sim: | $(SIM_DIR)
 		--top-module tpu_top \
 		-GARRAY_SIZE=$(N) -GWMEM_ROWS=$(WMEM_ROWS) -GUB_DEPTH=$(UB_DEPTH) \
 		-GACC_DEPTH=$(ACC_DEPTH) -GPARAMETER_DEPTH=$(PARAM_DEPTH) -GWEIGHT_LANES=$(LANES) \
-		-CFLAGS "-std=c++17 -DTB_TRACE -DTB_N=$(N) -DTB_WMEM_ROWS=$(WMEM_ROWS) \
+		-GDDR_BEAT_BITS=$$(( $(BEAT) * 8 )) \
+		-CFLAGS "-std=c++17 -DTB_TRACE -DTB_BEAT_BYTES=$(BEAT) -DTB_N=$(N) -DTB_WMEM_ROWS=$(WMEM_ROWS) \
 		         -DTB_UB_DEPTH=$(UB_DEPTH) -DTB_ACC_DEPTH=$(ACC_DEPTH) \
 		         -DTB_PARAM_DEPTH=$(PARAM_DEPTH)" \
 		$(CORE_RTL) $(TEST_DIR)/verilator/tb-isa.cpp -o tb_isa > /dev/null

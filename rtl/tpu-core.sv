@@ -18,7 +18,8 @@ module tpu_core #(
     parameter int DATA_FIFO_DEPTH        = 1024,
     parameter int OUTPUT_FIFO_DEPTH      = 1024,
     parameter int QUEUE_DEPTH            = 8,
-    parameter int WEIGHT_LANES           = 2,              // weight rows into the array per cycle: tiles every max(m, N / this) cycles
+    parameter int WEIGHT_LANES           = 2,
+    parameter int DDR_BEAT_BITS          = 128,            // the DDR3 port: 128 or 256 bits a beat              // weight rows into the array per cycle: tiles every max(m, N / this) cycles
     parameter longint DDR_BYTES          = 64'h4000_0000
 ) (
     input  logic        clk,
@@ -56,15 +57,15 @@ module tpu_core #(
     output logic [15:0] profile_level_out,
     output logic [15:0] profile_dropped_out,
 
-    // DDR3: 128-bit beats, byte addresses
+    // DDR3: DDR_BEAT_BITS beats, byte addresses
     output logic [31:0]  memory_address_out,
     output logic         memory_read_out,
     output logic         memory_write_out,
     output logic [7:0]   memory_burstcount_out,
-    output logic [127:0] memory_writedata_out,
-    output logic [15:0]  memory_byteenable_out,
+    output logic [DDR_BEAT_BITS-1:0]   memory_writedata_out,
+    output logic [DDR_BEAT_BITS/8-1:0] memory_byteenable_out,
     input  logic         memory_waitrequest_in,
-    input  logic [127:0] memory_readdata_in,
+    input  logic [DDR_BEAT_BITS-1:0] memory_readdata_in,
     input  logic         memory_readdatavalid_in
 );
 
@@ -279,11 +280,11 @@ module tpu_core #(
     logic [7:0]   weight_memory_burstcount, load_memory_burstcount;
     logic         weight_memory_waitrequest, load_memory_waitrequest, activate_memory_waitrequest;
     logic         weight_memory_readdatavalid, load_memory_readdatavalid;
-    logic [127:0] activate_memory_writedata;
-    logic [15:0]  activate_memory_byteenable;
+    logic [DDR_BEAT_BITS-1:0]   activate_memory_writedata;
+    logic [DDR_BEAT_BITS/8-1:0] activate_memory_byteenable;
 
     // a "row" for WT is WEIGHT_LANES weight rows: one 16-byte beat at N = 8, lanes = 2
-    ddr_reader #(.ARRAY_SIZE(ARRAY_SIZE * WEIGHT_LANES)) u_weight_reader (
+    ddr_reader #(.ARRAY_SIZE(ARRAY_SIZE * WEIGHT_LANES), .BEAT_BITS(DDR_BEAT_BITS)) u_weight_reader (
         .clk(clk), .reset(reset), .bus_reset(bus_reset),
         .request_ready_out(weight_request_ready), .request_valid_in(weight_request), .request_address_in(weight_request_address),
         .request_beats_in(weight_request_beats), .request_skip_in(4'd0), .request_rows_in(weight_request_rows),
@@ -292,7 +293,7 @@ module tpu_core #(
         .memory_waitrequest_in(weight_memory_waitrequest), .memory_readdata_in(memory_readdata_in), .memory_readdatavalid_in(weight_memory_readdatavalid));
 
     // RD_DDR_UB moves a row a cycle into the UB: a small FIFO is plenty
-    ddr_reader #(.ARRAY_SIZE(ARRAY_SIZE), .FIFO_DEPTH(64)) u_load_reader (
+    ddr_reader #(.ARRAY_SIZE(ARRAY_SIZE), .FIFO_DEPTH(64), .BEAT_BITS(DDR_BEAT_BITS)) u_load_reader (
         .clk(clk), .reset(reset), .bus_reset(bus_reset),
         .request_ready_out(load_request_ready), .request_valid_in(load_request), .request_address_in(load_request_address),
         .request_beats_in(load_request_beats), .request_skip_in(load_request_skip), .request_rows_in(load_request_rows),
@@ -301,7 +302,7 @@ module tpu_core #(
         .memory_waitrequest_in(load_memory_waitrequest), .memory_readdata_in(memory_readdata_in), .memory_readdatavalid_in(load_memory_readdatavalid));
 
     // writes in progress outlive CTRL.RESET, like reads: only the power-on reset clears them
-    ddr_writer u_writer (
+    ddr_writer #(.BEAT_BITS(DDR_BEAT_BITS)) u_writer (
         .clk(clk), .reset(bus_reset),
         .word_valid_in(DDR_word_valid), .word_address_in(DDR_word_address[31:2]), .word_in(activate_output_word),
         .full_out(DDR_writer_full), .idle_out(DDR_writer_idle),
@@ -309,7 +310,7 @@ module tpu_core #(
         .memory_writedata_out(activate_memory_writedata), .memory_byteenable_out(activate_memory_byteenable),
         .memory_waitrequest_in(activate_memory_waitrequest));
 
-    memory_arbiter u_memory_arbiter (
+    memory_arbiter #(.BEAT_BITS(DDR_BEAT_BITS)) u_memory_arbiter (
         .clk(clk), .reset(bus_reset),
         .weight_address_in(weight_memory_address), .weight_read_in(weight_memory_read), .weight_burstcount_in(weight_memory_burstcount),
         .weight_waitrequest_out(weight_memory_waitrequest), .weight_readdatavalid_out(weight_memory_readdatavalid),
@@ -327,7 +328,8 @@ module tpu_core #(
     logic [3:0] engine_idle, engine_blocked;
     logic       performance_beat, performance_weight_stall, performance_sync_stall;
 
-    load_engine #(.ARRAY_SIZE(ARRAY_SIZE), .WMEM_ADDRESS_WIDTH(WMEM_ADDRESS_WIDTH), .UB_ADDRESS_WIDTH(UB_ADDRESS_WIDTH), .PARAMETER_ADDRESS_WIDTH(PARAMETER_ADDRESS_WIDTH)) u_load_engine (
+    load_engine #(.ARRAY_SIZE(ARRAY_SIZE), .WMEM_ADDRESS_WIDTH(WMEM_ADDRESS_WIDTH), .UB_ADDRESS_WIDTH(UB_ADDRESS_WIDTH), .PARAMETER_ADDRESS_WIDTH(PARAMETER_ADDRESS_WIDTH),
+                  .BEAT_BYTES(DDR_BEAT_BITS / 8)) u_load_engine (
         .clk(clk), .reset(reset),
         .queue_valid_in(!queue_empty[ENGINE_LOAD]), .queue_entry_in(queue_head[ENGINE_LOAD]), .queue_pop_out(queue_pop[ENGINE_LOAD]),
         .completed_in(completed), .instruction_done_out(instruction_done[ENGINE_LOAD]),
@@ -340,7 +342,7 @@ module tpu_core #(
         .parameter_write_address_out(parameter_write_address), .parameter_write_data_out(parameter_write_data), .idle_out(engine_idle[ENGINE_LOAD]));
 
     weight_engine #(.ARRAY_SIZE(ARRAY_SIZE), .WMEM_ADDRESS_WIDTH(WMEM_GROUP_WIDTH), .FILL_ROWS(WEIGHT_LANES),
-                    .SLOT_WIDTH(SLOT_WIDTH)) u_weight_engine (
+                    .SLOT_WIDTH(SLOT_WIDTH), .BEAT_BYTES(DDR_BEAT_BITS / 8)) u_weight_engine (
         .clk(clk), .reset(reset),
         .queue_valid_in(!queue_empty[ENGINE_WEIGHT]), .queue_entry_in(queue_head[ENGINE_WEIGHT]), .queue_pop_out(queue_pop[ENGINE_WEIGHT]),
         .completed_in(completed), .instruction_done_out(instruction_done[ENGINE_WEIGHT]),

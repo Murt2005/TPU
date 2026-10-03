@@ -82,7 +82,7 @@ int core_program(const matrix *mx, int m, uint32_t first_block, uint32_t block_c
 
 /* -- the TPU, through a device ---------------------------------------------- */
 enum { INSN_LO, INSN_HI, DATA, OUT, STATUS, LEVELS, CTRL, ERR_SEQ, PERF_CYCLES, PERF_MM_BEATS, PERF_MM_WSTALL,
-       PERF_MM_SYNC, PROFILE_LEVEL, PROFILE_DATA };
+       PERF_MM_SYNC, PROFILE_LEVEL, PROFILE_DATA, BUILD };
 #define CTRL_CLEAR_PROFILE 8
 
 typedef struct { device *dev; uint32_t base; uint64_t image_bytes; int8_t *ub; int32_t *raw; } tpu;
@@ -221,9 +221,10 @@ int core_profile_open(core *c, const char *path) {
     device *d = ((tpu *)c->state)->dev;
     d->write32(d, CTRL, CTRL_CLEAR_PROFILE);
     profile_dropped = 0;
-    uint32_t header[2] = {1, N_ARRAY};
+    uint32_t lanes = (d->read32(d, BUILD) >> 16) & 0xFF;
+    uint32_t header[3] = {2, N_ARRAY, lanes ? lanes : 1};
     fwrite("TPUP", 1, 4, c->profile);
-    fwrite(header, 4, 2, c->profile);
+    fwrite(header, 4, 3, c->profile);
     return 0;
 }
 

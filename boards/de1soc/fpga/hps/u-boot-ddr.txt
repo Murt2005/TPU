@@ -1,7 +1,8 @@
 # U-Boot script (u-boot.scr on the SD card's FAT partition, sourced by callscript
 # before the default boot): the TPU's GHRD with its FPGA-to-SDRAM port live.
 # loads soc_system_ddr.rbf, applies the port configuration from on-chip RAM (U-Boot
-# runs from SDRAM, and applycfg needs it idle), releases f2h_sdram0, and boots
+# runs from SDRAM, and applycfg needs it idle), releases f2h_sdram0 (the Makefile
+# fills in its FIFO ports: 133 for a 128-bit port, 1ff for 256), and boots
 # Linux with mem=256M, leaving DDR3 from 0x10000000 up to the FPGA (752 MB below
 # the console framebuffer at 0x3F000000: Qwen2.5-0.5B's weights fit). without
 # soc_system_ddr.rbf it does nothing and the default boot runs; delete
@@ -14,7 +15,7 @@ if fatload mmc 0:1 0x3000000 soc_system_ddr.rbf; then
     mw ffffd020 e12fff1e; mw ffffd024 ffc2505c
     go ffffd000
     run bridge_enable_handoff
-    mw ffc25080 133
+    mw ffc25080 @PORT_RESETS@
     setenv bootargs console=ttyS0,115200 root=/dev/mmcblk0p2 rw rootwait mem=256M
     bootz ${loadaddr} - ${fdtaddr}
 fi

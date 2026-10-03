@@ -8,7 +8,8 @@ module load_engine #(
     parameter int ARRAY_SIZE              = 8,
     parameter int WMEM_ADDRESS_WIDTH      = 13,
     parameter int UB_ADDRESS_WIDTH        = 14,
-    parameter int PARAMETER_ADDRESS_WIDTH = 8
+    parameter int PARAMETER_ADDRESS_WIDTH = 8,
+    parameter int BEAT_BYTES              = 16
 ) (
     input  logic                               clk,
     input  logic                               reset,
@@ -78,17 +79,20 @@ module load_engine #(
     logic is_last_word;
     assign is_last_word = (word_index == words_per_item - 8'd1);
 
-    // RD_DDR_UB: whole 16-byte beats from the one holding the first entry; the
+    // RD_DDR_UB: whole beats from the one holding the first entry; the
     // entries before it in that beat are skipped (the address is entry-aligned)
     logic        reading_DDR, item_done;
     logic [31:0] DDR_address, DDR_bytes;
     assign reading_DDR             = busy && current_opcode == OPCODE_RD_DDR_UB;
     assign DDR_address             = instruction[31:0];
-    assign DDR_bytes               = 32'(DDR_address[3:0]) + (32'(instruction[43:32]) + 32'd1) * 32'(ARRAY_SIZE);
+    localparam int BEAT_SHIFT = $clog2(BEAT_BYTES);
+    logic [31:0] DDR_offset;                                  // the first entry's byte within its beat
+    assign DDR_offset              = DDR_address & 32'(BEAT_BYTES - 1);
+    assign DDR_bytes               = DDR_offset + (32'(instruction[43:32]) + 32'd1) * 32'(ARRAY_SIZE);
     assign DDR_request_out         = queue_pop_out && opcode == OPCODE_RD_DDR_UB;
-    assign DDR_request_address_out = {DDR_address[31:4], 4'd0};
-    assign DDR_request_beats_out   = (DDR_bytes + 32'd15) >> 4;
-    assign DDR_request_skip_out    = 4'(32'(DDR_address[3:0]) / 32'(ARRAY_SIZE));
+    assign DDR_request_address_out = DDR_address & ~32'(BEAT_BYTES - 1);
+    assign DDR_request_beats_out   = (DDR_bytes + 32'(BEAT_BYTES - 1)) >> BEAT_SHIFT;
+    assign DDR_request_skip_out    = 4'(DDR_offset / 32'(ARRAY_SIZE));
     assign DDR_request_rows_out    = 32'(instruction[43:32]) + 32'd1;
     // ACT owns the UB write port when it writes, as for WR_UB
     assign DDR_row_pop_out         = reading_DDR && DDR_row_valid_in && !UB_write_blocked_in;

@@ -1,11 +1,13 @@
 `timescale 1ns / 1ps
 
-// DDR3 bandwidth probe: a 128-bit Avalon-MM burst-read master on the HPS's
-// FPGA-to-SDRAM port, with a register slave on the lightweight bridge. reads
-// BEATS × 16 bytes from ADDRESS in bursts of BURST beats, at most OUTSTANDING
+// DDR3 bandwidth probe: a BEAT_BITS (128 or 256) Avalon-MM burst-read master on the
+// HPS's FPGA-to-SDRAM port, with a register slave on the lightweight bridge. reads
+// BEATS whole beats from ADDRESS in bursts of BURST beats, at most OUTSTANDING
 // bursts in flight, and reports the cycles, a checksum and the latency from each
 // burst's command to its first beat. read-only: it never writes DDR3
-module ddr_probe (
+module ddr_probe #(
+    parameter int BEAT_BITS = 128
+) (
     input  logic         clk,
     input  logic         reset_n,
 
@@ -21,7 +23,7 @@ module ddr_probe (
     output logic         avm_read,
     output logic [7:0]   avm_burstcount,
     input  logic         avm_waitrequest,
-    input  logic [127:0] avm_readdata,
+    input  logic [BEAT_BITS-1:0] avm_readdata,
     input  logic         avm_readdatavalid
 );
 
@@ -29,8 +31,8 @@ module ddr_probe (
 
     localparam logic [3:0] REGISTER_IDENTITY       = 4'd0;
     localparam logic [3:0] REGISTER_CONTROL        = 4'd1;   // W: bit 0 start, bit 1 abort (a port held in reset never answers). R: bit 0 busy
-    localparam logic [3:0] REGISTER_ADDRESS        = 4'd2;   // byte address, 16-byte aligned
-    localparam logic [3:0] REGISTER_BEATS          = 4'd3;   // 16-byte beats to read, a multiple of BURST
+    localparam logic [3:0] REGISTER_ADDRESS        = 4'd2;   // byte address, beat aligned
+    localparam logic [3:0] REGISTER_BEATS          = 4'd3;   // beats to read, a multiple of BURST
     localparam logic [3:0] REGISTER_BURST          = 4'd4;   // beats per burst, 1..128
     localparam logic [3:0] REGISTER_OUTSTANDING    = 4'd5;   // bursts in flight, 1..15
     localparam logic [3:0] REGISTER_CYCLES         = 4'd6;   // start to last beat
@@ -41,6 +43,8 @@ module ddr_probe (
     localparam logic [3:0] REGISTER_LATENCY_SUM    = 4'd11;  // over every burst
     localparam logic [3:0] REGISTER_WAIT_CYCLES    = 4'd12;  // read held off by waitrequest
     localparam logic [3:0] REGISTER_ISSUE_CYCLES   = 4'd13;  // start to last command accepted
+    localparam logic [3:0] REGISTER_BEAT_BYTES     = 4'd14;  // 16 or 32
+    localparam int         BEAT_SHIFT              = $clog2(BEAT_BITS / 8);
 
     logic reset;
     assign reset = ~reset_n;
@@ -71,7 +75,10 @@ module ddr_probe (
     assign latency = cycles - timestamps[timestamp_read];
 
     logic [31:0] beat_sum;
-    assign beat_sum = avm_readdata[31:0] + avm_readdata[63:32] + avm_readdata[95:64] + avm_readdata[127:96];
+    always_comb begin
+        beat_sum = '0;
+        for (int w = 0; w < BEAT_BITS / 32; w++) beat_sum += avm_readdata[32*w +: 32];
+    end
 
     logic start;
     assign start = avs_write && avs_address == REGISTER_CONTROL && avs_writedata[0] && !busy;
@@ -87,7 +94,7 @@ module ddr_probe (
         end else begin
             if (avs_write && !busy)
                 case (avs_address)
-                    REGISTER_ADDRESS:     start_address     <= {avs_writedata[31:4], 4'd0};
+                    REGISTER_ADDRESS:     start_address     <= avs_writedata & ~32'(BEAT_BITS / 8 - 1);
                     REGISTER_BEATS:       beats             <= avs_writedata;
                     REGISTER_BURST:       burst             <= avs_writedata[7:0];
                     REGISTER_OUTSTANDING: outstanding_limit <= avs_writedata[3:0];
@@ -106,7 +113,7 @@ module ddr_probe (
                 cycles <= cycles + 32'd1;
                 if (avm_read && avm_waitrequest) wait_cycles <= wait_cycles + 32'd1;
                 if (command_accepted) begin
-                    next_address               <= next_address + {20'd0, burst, 4'd0};
+                    next_address               <= next_address + (32'(burst) << BEAT_SHIFT);
                     beats_to_issue             <= beats_to_issue - 32'(burst);
                     timestamps[timestamp_write] <= cycles;
                     timestamp_write            <= timestamp_write + 4'd1;
@@ -147,6 +154,7 @@ module ddr_probe (
                     REGISTER_LATENCY_SUM:   avs_readdata <= latency_sum;
                     REGISTER_WAIT_CYCLES:   avs_readdata <= wait_cycles;
                     REGISTER_ISSUE_CYCLES:  avs_readdata <= issue_cycles;
+                    REGISTER_BEAT_BYTES:    avs_readdata <= 32'(BEAT_BITS / 8);
                     default:                avs_readdata <= 32'd0;
                 endcase
         end

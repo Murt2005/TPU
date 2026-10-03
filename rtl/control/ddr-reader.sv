@@ -1,6 +1,6 @@
 `timescale 1ns / 1ps
 
-// DDR3 rows for an engine: burst reads of 128-bit beats into a prefetch FIFO,
+// DDR3 rows for an engine: burst reads of BEAT_BITS beats into a prefetch FIFO,
 // unpacked into N-byte rows (WT's weight rows, LD's UB entries). a request names
 // whole beats, the rows to skip in its first beat and the rows to deliver; the
 // rest of its last beat is dropped. a new request is taken once the previous
@@ -12,7 +12,8 @@
 // held burst still issues, and every beat of an abandoned request is dropped
 module ddr_reader #(
     parameter int ARRAY_SIZE = 8,
-    parameter int FIFO_DEPTH = 256,          // 16-byte beats
+    parameter int FIFO_DEPTH = 256,          // beats
+    parameter int BEAT_BITS  = 128,          // the port's data width: 128 or 256
     parameter int BURST      = 16,           // beats per burst, at most
     parameter int REQUESTS   = 4             // taken but not yet delivered
 ) (
@@ -22,7 +23,7 @@ module ddr_reader #(
 
     output logic                    request_ready_out,
     input  logic                    request_valid_in,            // taken when ready
-    input  logic [31:0]             request_address_in,          // byte address, 16-byte aligned
+    input  logic [31:0]             request_address_in,          // byte address, beat aligned
     input  logic [31:0]             request_beats_in,
     input  logic [3:0]              request_skip_in,             // rows before the first one delivered
     input  logic [31:0]             request_rows_in,
@@ -35,16 +36,17 @@ module ddr_reader #(
     output logic                    memory_read_out,
     output logic [7:0]              memory_burstcount_out,
     input  logic                    memory_waitrequest_in,
-    input  logic [127:0]            memory_readdata_in,
+    input  logic [BEAT_BITS-1:0]    memory_readdata_in,
     input  logic                    memory_readdatavalid_in
 );
 
     localparam int ROW_BITS      = ARRAY_SIZE * 8;
-    localparam int ROWS_PER_BEAT = 128 / ROW_BITS;
+    localparam int ROWS_PER_BEAT = BEAT_BITS / ROW_BITS;
+    localparam int BEAT_SHIFT    = $clog2(BEAT_BITS / 8);
     localparam int COUNT_WIDTH   = $clog2(FIFO_DEPTH) + 1;
 
     initial begin
-        if (128 % ROW_BITS != 0) $fatal(1, "ddr_reader: a %0d-bit row must divide a 128-bit beat", ROW_BITS);
+        if (BEAT_BITS % ROW_BITS != 0) $fatal(1, "ddr_reader: a %0d-bit row must divide a %0d-bit beat", ROW_BITS, BEAT_BITS);
         if (BURST < 1 || BURST > 128 || BURST > FIFO_DEPTH) $fatal(1, "ddr_reader: BURST=%0d", BURST);
     end
 
@@ -102,7 +104,7 @@ module ddr_reader #(
             next_address   <= request_address_in;
             beats_to_issue <= request_beats_in;
         end else if (command_accepted) begin
-            next_address   <= next_address + {20'd0, burst_beats, 4'd0};
+            next_address   <= next_address + (32'(burst_beats) << BEAT_SHIFT);
             beats_to_issue <= beats_to_issue - 32'(burst_beats);
         end
     end
@@ -117,7 +119,7 @@ module ddr_reader #(
 
     // -- prefetch FIFO and row unpacking ---------------------------------------
     logic         fifo_empty, fifo_full, beat_done, active, row_popped, last_row;
-    logic [127:0] beat;
+    logic [BEAT_BITS-1:0] beat;
     logic [3:0]   row_in_beat, current_row;
     logic [31:0]  rows_left, current_left;
 
@@ -131,7 +133,7 @@ module ddr_reader #(
     assign beat_done     = row_popped && (current_row == 4'(ROWS_PER_BEAT - 1) || last_row);
     assign request_done  = row_popped && last_row;
 
-    block_fifo #(.WIDTH(128), .DEPTH(FIFO_DEPTH)) u_prefetch (
+    block_fifo #(.WIDTH(BEAT_BITS), .DEPTH(FIFO_DEPTH)) u_prefetch (
         .clk(clk), .reset(reset), .write_enable_in(beat_kept), .write_data_in(memory_readdata_in),
         .read_enable_in(beat_done), .read_data_out(beat), .full_out(fifo_full), .empty_out(fifo_empty));
 

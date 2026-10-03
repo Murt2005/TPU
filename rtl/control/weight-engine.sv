@@ -17,7 +17,8 @@ module weight_engine #(
     parameter int WMEM_ADDRESS_WIDTH = 13,          // of a group of FILL_ROWS rows
     parameter int JOBS               = 4,
     parameter int FILL_ROWS          = 1,           // rows a cycle: one WMEM word, one ddr_reader row
-    parameter int SLOT_WIDTH         = 1
+    parameter int SLOT_WIDTH         = 1,
+    parameter int BEAT_BYTES         = 16          // a tile is a whole number of beats
 ) (
     input  logic                          clk,
     input  logic                          reset,
@@ -75,7 +76,8 @@ module weight_engine #(
 
     assign DDR_request_out         = queue_pop_out && from_DDR_now;
     assign DDR_request_address_out = weight_base * 32'(TILE_BYTES);
-    assign DDR_request_beats_out   = 32'(matmul_tile_count) * 32'(TILE_BYTES / 16);
+    initial if (TILE_BYTES % BEAT_BYTES != 0) $fatal(1, "weight_engine: a %0d-byte tile isn't whole %0d-byte beats", TILE_BYTES, BEAT_BYTES);
+    assign DDR_request_beats_out   = 32'(matmul_tile_count) * 32'(TILE_BYTES / BEAT_BYTES);
     assign DDR_request_rows_out    = 32'(matmul_tile_count) * 32'(ARRAY_SIZE / FILL_ROWS);
 
     always_ff @(posedge clk) begin

@@ -4,12 +4,12 @@
  *   ddr_probe poke <addr> <value>                 a 32-bit write
  *   ddr_probe sum <addr> <bytes>                  sum of the 32-bit words, mod 2^32
  *   ddr_probe run <addr> <beats> <burst> <outstanding>
- *                                                 one probe run; prints its 14 registers
+ *                                                 one probe run; prints its 15 registers
  *   ddr_probe load <mbytes>                       ARM memory traffic until killed
  * numbers are hex */
 
 #define PROBE_BASE 0xFF240000u   /* lightweight bridge + 0x40000 */
-#define PROBE_REGISTERS 14
+#define PROBE_REGISTERS 15
 
 static long sys6(long n, long a, long b, long c, long d, long e, long f) {
     register long r7 __asm__("r7") = n;

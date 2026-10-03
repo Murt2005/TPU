@@ -19,8 +19,8 @@ def main():
     ap.add_argument("--title", help="default: the file's name")
     ap.add_argument("--source", default="", help="where it ran, e.g. 'hardware (DE1-SoC)' or 'Verilator sim'")
     a = ap.parse_args()
-    n, programs, events, dropped, marks = read_file(a.profile)
-    data = analyze(n, programs, events, marks, dropped)
+    n, programs, events, dropped, marks, lanes = read_file(a.profile)
+    data = analyze(n, programs, events, marks, dropped, lanes)
     data["source_short"] = a.source
     src = (f"Recorded by the core's instruction profiler (rtl/common/profiler.sv) on {a.source or 'the core'}: "
            f"{len(events):,} events for {len(programs):,} programs. Cycles count from the first event; "

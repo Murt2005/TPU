@@ -58,3 +58,33 @@ labels the page uses for WMEM tiles, UB and ACC regions and the output rows.
 untraced by default (`--trace-load` includes it). The page still shows WMEM's
 contents. Traces stop at `--max-cycles` (20,000), and an 8 × 8 page is
 about 1 MB per 1,000 cycles.
+
+## Profiling whole runs
+
+Cycle-by-cycle pages suit a few thousand cycles. A Qwen token is about 62M, so
+for long runs the core has an **instruction profiler** (`rtl/common/profiler.sv`,
+[`isa.md`](../../docs/isa.md) §4). It logs a timestamped event each time the
+dispatcher issues an instruction, and each time an engine pops or completes one.
+With each completion it records how many cycles that engine was blocked first.
+That comes to a few events per instruction, and it works the same on the board as
+in Verilator. `host/tpu/profile.py` maps the events back onto the programs. The
+page shows:
+
+- a zoomable timeline with host, dispatch, LD, WT, MM and ACT lanes, with MM's
+  bars colored by matrix;
+- breakdowns per matrix, per mark (prompt chunk or token) and per engine;
+- the longest programs.
+
+```sh
+# Qwen on the board, or in Verilator with --core sim:sim/verilator/core_n8/tb_isa:out/qwen-ddr.bin
+qwen-run --tables DIR --core mmio --ids 785,3974,13876,38835 --generate 4 --profile qwen.prof
+python3 software/viz/profile_page.py qwen.prof --source "hardware (DE1-SoC)" -o qwen-profile.html
+
+# any visualize.py workload, on either link
+python3 software/viz/visualize.py mnist --profile mnist-profile.html [--link serial:<port>]
+```
+
+The profiler holds 512 events and the host drains it while it polls for
+`DONE`. A full FIFO drops events, and the page says so. A `WAIT`'s time comes
+from the timestamps. Other blocked counts (weight stalls, DDR3 and data waits
+inside an instruction) are 19 bits wide and saturate at 524,287 cycles.

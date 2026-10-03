@@ -98,7 +98,7 @@ td .meter{display:inline-block;height:8px;border-radius:2px;background:var(--mm)
 <section>
   <div class="eyebrow">Where the cycles go</div>
   <div class="tables">
-    <div><h2>By matrix</h2><p class="note">Every program for that matrix, summed. MM efficiency is the ideal (tiles × max(m, N) plus one N-cycle preload per MATMUL) over the cycles MM held each MATMUL. Host gap is the time before the program's first dispatch with the core idle: the ARM's own work and its pushes.</p><div class="tbox"><table id="tmat"></table></div></div>
+    <div><h2>By matrix</h2><p class="note">Every program for that matrix, summed. MM efficiency is the ideal (tiles × max(m, N / lanes) plus one preload window per MATMUL) over the cycles MM held each MATMUL. Host gap is the time before the program's first dispatch with the core idle: the ARM's own work and its pushes.</p><div class="tbox"><table id="tmat"></table></div></div>
     <div id="markbox"><h2>By mark</h2><p class="note">Marks are what the host was doing (a prompt chunk, a decoded token). Wall time is the ARM's clock between marks; core time is the core's cycles at 50 MHz.</p><div class="tbox scrolly"><table id="tmark"></table></div></div>
     <div><h2>Engines</h2><div class="tbox"><table id="teng"></table></div></div>
     <div><h2>Longest programs</h2><div class="tbox scrolly"><table id="tprog"></table></div></div>

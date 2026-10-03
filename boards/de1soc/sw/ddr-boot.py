@@ -34,7 +34,8 @@ APPLYCFG = [0xE59F101C,       # ldr r1, [pc, #0x1c]     staticcfg's address, bel
             0x1AFFFFFC,       # bne (the ldr)
             0xE12FFF1E,       # bx lr                   rc = staticcfg
             0xFFC2505C]       # staticcfg
-PORT_RESETS = 0x133           # f2h_sdram0: command port 0, read ports 0-1, write ports 0-1
+PORT_RESETS = {128: 0x133,    # f2h_sdram0: command port 0, read ports 0-1, write ports 0-1
+               256: 0x1FF}    #             command port 0, read ports 0-3, write ports 0-3
 BOOTARGS = "console=ttyS0,115200 root=/dev/mmcblk0p2 rw rootwait mem=256M"
 
 
@@ -65,6 +66,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("port", help="the HPS console, /dev/cu.usbserial-<id>0")
     ap.add_argument("rbf", help="the GHRD bitstream to load over JTAG")
+    ap.add_argument("--ddr-bits", type=int, default=256, choices=(128, 256), help="the bitstream's FPGA-to-SDRAM port")
     args = ap.parse_args()
 
     u = UBoot(args.port)
@@ -90,7 +92,8 @@ def main():
     u.run(f"go {ROUTINE:x}", expect="rc = 0x", timeout=5)
     print("SDRAM controller: port configuration applied")
     u.run("run bridge_enable_handoff", expect="axibridge")
-    u.run(f"mw ffc25080 {PORT_RESETS:x}; md ffc25080 1", expect=f"ffc25080: {PORT_RESETS:08x}")
+    resets = PORT_RESETS[args.ddr_bits]
+    u.run(f"mw ffc25080 {resets:x}; md ffc25080 1", expect=f"ffc25080: {resets:08x}")
     print("f2h_sdram0: out of reset")
 
     u.run(f"setenv bootargs {BOOTARGS}")

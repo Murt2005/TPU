@@ -2,13 +2,14 @@
 instruction spans they stand for, and the profile file qwen-run --profile writes.
 
 an event is 128 bits: [39:0] cycle, [40] dispatch, [44:41] pops, [48:45] completions
-(LD, WT, MM, ACT), [127:64] per engine the cycles it was blocked since its previous
-completion. the dispatcher issues in program order and routes by opcode, and every
+(LD, WT, MM, ACT), and from bit 49, 19 bits per engine: the cycles it was blocked
+since its previous completion (saturating at BLOCKED_MAX). a WAIT's own wait
+comes from the timestamps instead (Span.waited), which can't saturate. the dispatcher issues in program order and routes by opcode, and every
 engine pops and completes in its queue's order, so the k-th pop on MM is the k-th
 instruction routed to MM: no instruction ids travel in the events.
 
 a profile file (little-endian):
-  b"TPUP", u32 version (1), u32 N
+  b"TPUP", u32 version, u32 N, and from version 2 u32 weight lanes (version 1: 1)
   then records, each a tag byte:
     b"P" u32 label length, label, u32 count, count x u64   a program, as pushed
     b"E" u32 count, count x 4 x u32                         events, oldest first
@@ -25,9 +26,12 @@ ROUTE = {"WR_WMEM": 0b0001, "WR_UB": 0b0001, "WR_BIAS": 0b0001, "WR_QUANT": 0b00
          "SET_WBASE": 0b0010, "MATMUL": 0b0110, "ACTIVATE": 0b1000, "RD_UB": 0b1000, "SET_OBASE": 0b1000}
 
 
+BLOCKED_MAX = (1 << 19) - 1
+
+
 def decode_event(e):
     return dict(cycle=e & ((1 << 40) - 1), dispatch=e >> 40 & 1, pop=e >> 41 & 0xF, done=e >> 45 & 0xF,
-                blocked=[e >> (64 + 16 * k) & 0xFFFF for k in range(4)])
+                blocked=[e >> (49 + 19 * k) & BLOCKED_MAX for k in range(4)])
 
 
 def route(word):
@@ -48,6 +52,7 @@ class Span:
     start: dict = field(default_factory=dict)
     end: dict = field(default_factory=dict)
     blocked: dict = field(default_factory=dict)
+    waited: dict = field(default_factory=dict)     # a WAIT: cycles from reaching its queue's head to its pop
 
     @property
     def name(self):
@@ -75,11 +80,23 @@ def reconstruct(programs, events):
                 s.end[e] = ev["cycle"]
                 s.blocked[e] = ev["blocked"][e]
                 done[e] += 1
+    # a WAIT reaches the head of its queue once it's dispatched and the engine is
+    # done with what came before: for WT, whose fetch stage runs ahead of its
+    # fill, once the previous instruction is popped
+    for e in range(4):
+        prev = None
+        for s in queues[e]:
+            if s.name == "WAIT" and e in s.start and s.dispatch is not None:
+                ready = s.dispatch + 1
+                if prev is not None:
+                    ready = max(ready, (prev.start if e == 1 else prev.end).get(e, ready))
+                s.waited[e] = max(0, s.start[e] - ready)
+            prev = s
     return spans
 
 
-def write_header(f, n):
-    f.write(b"TPUP" + struct.pack("<II", 1, n))
+def write_header(f, n, lanes=1):
+    f.write(b"TPUP" + struct.pack("<III", 2, n, lanes))
 
 
 def write_program(f, label, words):
@@ -97,12 +114,13 @@ def write_events(f, events, dropped=0):
 
 
 def read_file(path):
-    """-> (N, programs [(label, words)], raw events, dropped, marks [(program index, label, seconds)])"""
+    """-> (N, programs [(label, words)], raw events, dropped, marks [(program index, label, seconds)], lanes)"""
     data = open(path, "rb").read()
     if data[:4] != b"TPUP":
         raise ValueError(f"{path}: not a profile")
     version, n = struct.unpack_from("<II", data, 4)
-    at, programs, events, dropped, marks = 12, [], [], 0, []
+    lanes = struct.unpack_from("<I", data, 12)[0] if version >= 2 else 1
+    at, programs, events, dropped, marks = 16 if version >= 2 else 12, [], [], 0, []
     while at < len(data):
         tag = data[at:at + 1]
         at += 1
@@ -130,7 +148,7 @@ def read_file(path):
             at += 4
         else:
             raise ValueError(f"{path}: bad record at byte {at - 1}")
-    return n, programs, events, dropped, marks
+    return n, programs, events, dropped, marks, lanes
 
 
 class Recorder:
@@ -155,7 +173,7 @@ class Recorder:
 
     def save(self, path):
         with open(path, "wb") as f:
-            write_header(f, self.dev.link.n)
+            write_header(f, self.dev.link.n, self.dev.weight_lanes())
             for label, words in self.programs:
                 write_program(f, label, words)
             write_events(f, self.events, self.dropped)
@@ -166,7 +184,7 @@ OPS = ["WR_WMEM", "WR_UB", "WR_BIAS", "WR_QUANT", "RD_DDR_UB", "SET_WBASE", "SET
        "MATMUL", "ACTIVATE", "RD_UB", "WAIT", "SIGNAL", "NOP"]
 
 
-def analyze(n, programs, events, marks=(), dropped=0):
+def analyze(n, programs, events, marks=(), dropped=0, lanes=1):
     """the page's data: per engine instruction a row [lane, program, index, op,
     start, end, blocked], dispatch times, programs and marks, cycles from the
     first event"""
@@ -181,7 +199,8 @@ def analyze(n, programs, events, marks=(), dropped=0):
                     missing += 1
                     continue
                 rows.append([e, s.program, s.index, OPS.index(s.name) if s.name in OPS else len(OPS) - 1,
-                             s.start[e] - t0, s.end[e] - t0, s.blocked.get(e, 0)])
+                             s.start[e] - t0, s.end[e] - t0,
+                             s.waited[e] if s.name == "WAIT" and e in s.waited else s.blocked.get(e, 0)])
     first = 0
     progs = []
     for p, (label, words) in enumerate(programs):
@@ -191,11 +210,11 @@ def analyze(n, programs, events, marks=(), dropped=0):
         progs.append(dict(label=label, first=first, count=len(words),
                           start=min(disp) if disp else None, end=max(ends) if ends else None,
                           tiles=sum(f["k_tiles"] * f["n_blocks"] for f in mm),
-                          ideal=sum(f["k_tiles"] * f["n_blocks"] * max(f["m"], n) + n for f in mm),
+                          ideal=sum(f["k_tiles"] * f["n_blocks"] * max(f["m"], n // lanes) + n // lanes for f in mm),
                           words=[isa.disasm(w) for w in words]))
         first += len(words)
     end = max((r[5] for r in rows), default=0)
-    return dict(N=n, rows=rows, programs=progs, end=end, events=len(events), dropped=dropped,
+    return dict(N=n, lanes=lanes, rows=rows, programs=progs, end=end, events=len(events), dropped=dropped,
                 missing=missing, marks=[dict(program=p, label=l, seconds=s) for p, l, s in marks], ops=OPS)
 
 

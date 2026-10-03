@@ -1,10 +1,11 @@
 # adds the tpu component to Terasic's rev H GHRD on the lightweight bridge at offset 0
 # (0xFF200000), and hex_pio at 0x10100 (0xFF210100) for the HEX displays
 # (decoded by top/hex-display.sv); both on clk_0 like everything else. also one
-# 128-bit FPGA-to-SDRAM port (f2h_sdram0), shared by the TPU's DDR3 master
+# FPGA-to-SDRAM port (f2h_sdram0, TPU_DDR_BITS wide: 128 or 256), shared by the TPU's DDR3 master
 # (MATMUL wsrc=1, RD_DDR_UB, ACTIVATE dst=DDR) and ddr_probe, the probe's
 # registers at 0x40000 (0xFF240000). U-Boot leaves the port in reset: fpgaportrst
-# (0xFFC25080) needs 0x133 for it (command 0, read 0-1, write 0-1)
+# (0xFFC25080) needs 0x133 for a 128-bit port (command 0, read 0-1, write 0-1) and
+# 0x1FF for 256 bits (command 0, read 0-3, write 0-3)
 package require -exact qsys 16.1
 load_system soc_system.qsys
 add_instance tpu_0 tpu 1.0
@@ -24,7 +25,8 @@ set_connection_parameter_value hps_0.h2f_lw_axi_master/hex_pio.s1 baseAddress 0x
 add_interface hex_pio_external_connection conduit end
 set_interface_property hex_pio_external_connection EXPORT_OF hex_pio.external_connection
 set_instance_parameter_value hps_0 F2SDRAM_Type {{Avalon-MM Bidirectional}}
-set_instance_parameter_value hps_0 F2SDRAM_Width {128}
+set ddr_bits [expr {[info exists ::env(TPU_DDR_BITS)] ? $::env(TPU_DDR_BITS) : 128}]
+set_instance_parameter_value hps_0 F2SDRAM_Width [list $ddr_bits]
 add_connection clk_0.clk hps_0.f2h_sdram0_clock
 add_instance ddr_probe_0 ddr_probe 1.0
 add_connection clk_0.clk ddr_probe_0.clock

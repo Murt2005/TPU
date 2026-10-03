@@ -1,5 +1,5 @@
 # Platform Designer component: tpu_top as an Avalon-MM slave for the HPS
-# lightweight bridge. word-addressed, 12 registers, fixed read latency 1,
+# lightweight bridge. word-addressed, 15 registers, fixed read latency 1,
 # waitrequest only on writes into a full FIFO (see rtl/peripherals/host-bridge.sv).
 # m0: the core's DDR3 master (rtl/control/memory-arbiter.sv): burst reads for MATMUL
 # wsrc=1 and RD_DDR_UB, single-beat writes for ACTIVATE dst=DDR
@@ -22,7 +22,12 @@ foreach f $files {
     add_fileset_file [file tail $f] SYSTEM_VERILOG PATH $f
 }
 
-foreach {name value} {ARRAY_SIZE 8 WMEM_ROWS 8192 UB_DEPTH 16384 ACC_DEPTH 1024 PARAMETER_DEPTH 256} {
+# the DDR3 port's width, set by the Makefile (DDR_BITS): 256 bits feed four weight rows
+# a cycle (a tile every 2 cycles at m = 1), 128 bits two
+set ddr_bits [expr {[info exists ::env(TPU_DDR_BITS)] ? $::env(TPU_DDR_BITS) : 128}]
+set lanes [expr {$ddr_bits == 256 ? 4 : 2}]
+foreach {name value} [list ARRAY_SIZE 8 WMEM_ROWS 8192 UB_DEPTH 16384 ACC_DEPTH 1024 PARAMETER_DEPTH 256 \
+                          WEIGHT_LANES $lanes DDR_BEAT_BITS $ddr_bits] {
     add_parameter $name INTEGER $value
     set_parameter_property $name HDL_PARAMETER true
 }
@@ -61,8 +66,8 @@ add_interface_port m0 avm_address address Output 32
 add_interface_port m0 avm_read read Output 1
 add_interface_port m0 avm_write write Output 1
 add_interface_port m0 avm_burstcount burstcount Output 8
-add_interface_port m0 avm_writedata writedata Output 128
-add_interface_port m0 avm_byteenable byteenable Output 16
+add_interface_port m0 avm_writedata writedata Output $ddr_bits
+add_interface_port m0 avm_byteenable byteenable Output [expr {$ddr_bits / 8}]
 add_interface_port m0 avm_waitrequest waitrequest Input 1
-add_interface_port m0 avm_readdata readdata Input 128
+add_interface_port m0 avm_readdata readdata Input $ddr_bits
 add_interface_port m0 avm_readdatavalid readdatavalid Input 1

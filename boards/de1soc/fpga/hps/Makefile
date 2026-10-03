@@ -7,6 +7,11 @@ QUARTUS_BIN ?= $(HOME)/intelFPGA_lite/23.1std/quartus
 export PATH := $(QUARTUS_BIN)/bin:$(QUARTUS_BIN)/sopc_builder/bin:$(PATH)
 
 HERE  := $(abspath .)
+# the FPGA-to-SDRAM port: 256 bits feed the TPU four weight rows a cycle, 128 bits two.
+# changing it needs `make clean` (the port is set when the GHRD is first edited)
+DDR_BITS    ?= 256
+PORT_RESETS := $(if $(filter 256,$(DDR_BITS)),1ff,133)
+export TPU_DDR_BITS := $(DDR_BITS)
 GHRD  := build/ghrd
 SOF   := $(GHRD)/output_files/soc_system.sof
 RBF   := build/soc_system.rbf
@@ -75,7 +80,8 @@ recv: build/recv
 
 # boot with the FPGA-to-SDRAM port live: u-boot.scr and soc_system_ddr.rbf on the FAT partition
 build/u-boot.scr: u-boot-ddr.txt ../../sw/mk-uboot-scr.py
-	python3 ../../sw/mk-uboot-scr.py $< $@
+	sed 's/@PORT_RESETS@/$(PORT_RESETS)/' $< > build/u-boot-ddr.txt
+	python3 ../../sw/mk-uboot-scr.py build/u-boot-ddr.txt $@
 
 uboot-scr: build/u-boot.scr
 

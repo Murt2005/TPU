@@ -185,10 +185,11 @@ An Avalon-MM slave with 12 word registers, a fixed read latency of 1, and
 **The profiler** (`rtl/common/profiler.sv`) logs one 128-bit event for each
 cycle in which the dispatcher issues or an engine pops or completes an
 instruction, into a 512-entry FIFO: `[39:0]` the cycle, `[40]` dispatch,
-`[44:41]` pops and `[48:45]` completions (LD, WT, MM, ACT), and in
-`[127:64]`, per engine, the cycles it was blocked since its previous
-completion (a `WAIT`, data or DDR3 it waited for, a weight stall; 16 bits,
-saturating). Events carry no instruction ids: the dispatcher issues in order
+`[44:41]` pops and `[48:45]` completions (LD, WT, MM, ACT), and from bit 49,
+19 bits per engine: the cycles it was blocked since its previous completion
+(a `WAIT`, data or DDR3 it waited for, a weight stall), saturating at
+2^19 − 1. A `WAIT`'s own wait also follows from the timestamps, which can't
+saturate. Events carry no instruction ids: the dispatcher issues in order
 and routes by opcode, and every engine pops and completes in its queue's
 order, so `host/tpu/profile.py` maps them back onto the programs. Only
 power-on and `CLEAR_PROFILE` reset it, so one profile spans many programs and

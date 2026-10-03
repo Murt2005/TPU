@@ -24,10 +24,11 @@ from tpu.isa_device import BoardConsole  # noqa: E402
 TOOL = "/mnt/boot/ddr_probe"
 CLOCK_HZ = 50e6
 FPGAPORTRST, STATICCFG = 0xFFC25080, 0xFFC2505C
-PORT_RESETS = 0x133           # command port 0, read ports 0-1, write ports 0-1
+PORT_RESETS = {16: 0x133,     # 128-bit: command port 0, read ports 0-1, write ports 0-1
+               32: 0x1FF}     # 256-bit: command port 0, read ports 0-3, write ports 0-3
 IDENTITY = 0xDD3B0001
 FIELDS = ("identity", "control", "address", "beats", "burst", "outstanding", "cycles", "received",
-          "checksum", "latency_first", "latency_max", "latency_sum", "wait_cycles", "issue_cycles")
+          "checksum", "latency_first", "latency_max", "latency_sum", "wait_cycles", "issue_cycles", "beat_bytes")
 HEX_WORD = r"[0-9a-f]{8}"
 
 
@@ -49,15 +50,16 @@ def probe(console, address, beats, burst, outstanding):
     if r["received"] != beats:
         sys.exit(f"probe received {r['received']} of {beats} beats")
     bursts = beats // burst
-    r["mb_per_s"] = beats * 16 / (r["cycles"] / CLOCK_HZ) / 1e6
-    r["rows_per_cycle"] = beats * 2 / r["cycles"]        # 8-byte weight rows, N = 8
+    beat = r.get("beat_bytes") or 16
+    r["mb_per_s"] = beats * beat / (r["cycles"] / CLOCK_HZ) / 1e6
+    r["rows_per_cycle"] = beats * beat / 8 / r["cycles"]  # 8-byte weight rows, N = 8
     r["latency_mean"] = r["latency_sum"] / bursts
     return r
 
 
-def sweep(console, address, beats, label):
-    print(f"\n{label}: {beats * 16 // 1024} KB per run at {address:#x}, {CLOCK_HZ / 1e6:.0f} MHz, "
-          f"peak {16 * CLOCK_HZ / 1e6:.0f} MB/s")
+def sweep(console, address, beats, label, beat=16):
+    print(f"\n{label}: {beats * beat // 1024} KB per run at {address:#x}, {CLOCK_HZ / 1e6:.0f} MHz, "
+          f"peak {beat * CLOCK_HZ / 1e6:.0f} MB/s")
     print(f"{'burst':>5} {'in flight':>9} {'MB/s':>7} {'rows/cyc':>8} {'lat first':>9} {'lat mean':>8} "
           f"{'lat max':>7} {'waitreq %':>9}")
     best = None
@@ -78,7 +80,7 @@ def main():
     ap.add_argument("port", help="the HPS console, /dev/cu.usbserial-<id>0")
     ap.add_argument("--address", type=lambda s: int(s, 0), default=0x30000000,
                     help="physical address to read (reads only; default 0x30000000)")
-    ap.add_argument("--beats", type=lambda s: int(s, 0), default=1 << 18, help="16-byte beats per run (4 MB)")
+    ap.add_argument("--beats", type=lambda s: int(s, 0), default=1 << 18, help="beats per run (4 MB at 16 bytes, 8 MB at 32)")
     ap.add_argument("--no-load", action="store_true", help="skip the sweep under ARM memory load")
     args = ap.parse_args()
 
@@ -88,27 +90,28 @@ def main():
     identity = peek(console, 0xFF240000)
     if identity != IDENTITY:
         sys.exit(f"no ddr_probe at 0xFF240000 (read {identity:#010x}): wrong bitstream?")
+    beat = peek(console, 0xFF240000 + 4 * 14) or 16      # a 128-bit probe without the register reads 0
     reset_mask, staticcfg = peek(console, FPGAPORTRST), peek(console, STATICCFG)
-    print(f"fpgaportrst {reset_mask:#x}, staticcfg {staticcfg:#x}")
-    if reset_mask & PORT_RESETS != PORT_RESETS:
+    print(f"{8 * beat}-bit port; fpgaportrst {reset_mask:#x}, staticcfg {staticcfg:#x}")
+    if reset_mask & PORT_RESETS[beat] != PORT_RESETS[beat]:
         sys.exit("the FPGA-to-SDRAM port is in reset: apply its configuration and release it in U-Boot "
                  "(releasing it from Linux hangs the HPS)")
 
     # data check: kernel text, which nothing writes while it runs
     check_address, check_beats = 0x00100000, 1 << 16
     r = probe(console, check_address, check_beats, 16, 8)
-    m = re.search(rf"\n({HEX_WORD})\s", console.run(f"{TOOL} sum {check_address:x} {check_beats * 16:x}", 2))
+    m = re.search(rf"\n({HEX_WORD})\s", console.run(f"{TOOL} sum {check_address:x} {check_beats * beat:x}", 2))
     arm_sum = int(m.group(1), 16)
-    print(f"checksum over {check_beats * 16 // 1024} KB at {check_address:#x}: probe {r['checksum']:#010x}, "
+    print(f"checksum over {check_beats * beat // 1024} KB at {check_address:#x}: probe {r['checksum']:#010x}, "
           f"ARM {arm_sum:#010x} {'MATCH' if r['checksum'] == arm_sum else 'MISMATCH'}")
     if r["checksum"] != arm_sum:
         sys.exit(1)
 
-    sweep(console, args.address, args.beats, "Linux idle")
+    sweep(console, args.address, args.beats, "Linux idle", beat)
     if not args.no_load:
         console.run(f"{TOOL} load 40 &", 1)
         try:
-            sweep(console, args.address, args.beats, "ARM streaming 64 MB")
+            sweep(console, args.address, args.beats, "ARM streaming 64 MB", beat)
         finally:
             console.run("kill %1", 1)
 

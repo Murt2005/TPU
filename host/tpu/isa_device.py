@@ -372,7 +372,11 @@ class IsaDevice:
 
     def weight_lanes(self):
         """weight rows the build loads per cycle (BUILD register; a build without it: 1)"""
-        return (self.link.read32(BUILD) >> 16) or 1
+        return (self.link.read32(BUILD) >> 16 & 0xFF) or 1
+
+    def beat_bytes(self):
+        """the DDR3 port's beat: 16 or 32 bytes (BUILD register; a build without it: 16)"""
+        return (self.link.read32(BUILD) >> 24) or 16
 
     def profile_drain(self):
         """the profiler's events (128-bit ints, oldest first) and how many it has dropped"""

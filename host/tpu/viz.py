@@ -107,7 +107,7 @@ def run_workload(build, link_spec, visualize_internals=False, out=None, viz_sim=
         if recorder:
             from .profile import analyze, render_page
             where = "hardware (DE1-SoC)" if on_board else "Verilator sim"
-            data = analyze(link.n, recorder.programs, recorder.events, (), recorder.dropped)
+            data = analyze(link.n, recorder.programs, recorder.events, (), recorder.dropped, dev.weight_lanes())
             data["source_short"] = where
             src = (f"Recorded by the core's instruction profiler on {where}: {len(recorder.events):,} events. "
                    + ("Cycle counts include the console link: the core waits for each word the host sends." if on_board else ""))

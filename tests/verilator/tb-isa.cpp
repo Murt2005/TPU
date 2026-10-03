@@ -22,6 +22,11 @@
 #include <unordered_map>
 #include <vector>
 #include "Vtpu_top.h"
+
+#ifndef TB_BEAT_BYTES
+#define TB_BEAT_BYTES 16         // the DDR3 port's data width: 16 (128-bit) or 32 (256-bit)
+#endif
+static constexpr int BEAT = TB_BEAT_BYTES;
 #include "verilated.h"
 #ifdef TB_TRACE
 #include "verilated_vcd_c.h"
@@ -84,8 +89,8 @@ namespace ddr {
         bool beat = !pending.empty() && pending.front().ready <= now && !(random_timing && rng() % 5 == 0);
         dut->avm_readdatavalid = beat;
         if (beat) {
-            const uint8_t* d = pending.front().data.data() + 16 * sent;
-            for (int lane = 0; lane < 4; lane++) {
+            const uint8_t* d = pending.front().data.data() + BEAT * sent;
+            for (int lane = 0; lane < BEAT / 4; lane++) {
                 uint32_t w = 0;
                 for (int b = 3; b >= 0; b--) w = w << 8 | d[4 * lane + b];
                 dut->avm_readdata[lane] = w;
@@ -103,18 +108,18 @@ namespace ddr {
         held_address = dut->avm_address;
         held_count = dut->avm_burstcount;
         if (command && !dut->avm_waitrequest) {
-            if (dut->avm_address % 16 || dut->avm_burstcount == 0 || dut->avm_burstcount > 128
+            if (dut->avm_address % BEAT || dut->avm_burstcount == 0 || dut->avm_burstcount > 128
                 || (dut->avm_write && dut->avm_burstcount != 1))
                 fail("misaligned address or bad burstcount");
             if (dut->avm_read) {
-                Burst b{std::vector<uint8_t>(16 * dut->avm_burstcount), dut->avm_burstcount,
+                Burst b{std::vector<uint8_t>(BEAT * dut->avm_burstcount), dut->avm_burstcount,
                         now + (random_timing ? 4 + rng() % 30 : latency)};
                 read(dut->avm_address, b.data.data(), b.data.size());
                 pending.push_back(std::move(b));
             } else {
                 std::vector<uint8_t> one(1);
-                for (int i = 0; i < 16; i++)
-                    if (dut->avm_byteenable >> i & 1) {
+                for (int i = 0; i < BEAT; i++)
+                    if ((uint64_t)dut->avm_byteenable >> i & 1) {
                         one[0] = dut->avm_writedata[i / 4] >> (8 * (i % 4));
                         write(dut->avm_address + i, one);
                     }

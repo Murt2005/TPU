@@ -5,7 +5,8 @@
 // while the bus holds its command off, as Avalon requires. read data comes back
 // in issue order, so a FIFO of {client, burst length} routes each beat
 module memory_arbiter #(
-    parameter int PENDING = 32               // read bursts in flight; the port takes 14
+    parameter int PENDING   = 32,            // read bursts in flight; the port takes 14
+    parameter int BEAT_BITS = 128
 ) (
     input  logic         clk,
     input  logic         reset,              // power-on only
@@ -24,16 +25,16 @@ module memory_arbiter #(
 
     input  logic [31:0]  activate_address_in,
     input  logic         activate_write_in,
-    input  logic [127:0] activate_writedata_in,
-    input  logic [15:0]  activate_byteenable_in,
+    input  logic [BEAT_BITS-1:0]   activate_writedata_in,
+    input  logic [BEAT_BITS/8-1:0] activate_byteenable_in,
     output logic         activate_waitrequest_out,
 
     output logic [31:0]  memory_address_out,
     output logic         memory_read_out,
     output logic         memory_write_out,
     output logic [7:0]   memory_burstcount_out,
-    output logic [127:0] memory_writedata_out,
-    output logic [15:0]  memory_byteenable_out,
+    output logic [BEAT_BITS-1:0]   memory_writedata_out,
+    output logic [BEAT_BITS/8-1:0] memory_byteenable_out,
     input  logic         memory_waitrequest_in,
     input  logic         memory_readdatavalid_in
 );
