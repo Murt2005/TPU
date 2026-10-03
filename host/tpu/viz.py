@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import isa
-from .isa_device import IsaDevice, IsaSerialLink, IsaSimLink, open_link
+from .isa_device import CTRL, CTRL_CLEAR_PERF, IsaDevice, IsaSerialLink, IsaSimLink, open_link
 from .isa_model import IsaModel
 from .trace import delta_rows, read_vcd
 
@@ -60,6 +60,17 @@ def _model_outputs(link, wl):
     return [model.run(ph.program, ph.data) for ph in wl.phases]
 
 
+def _run_phase(dev, ph):
+    """one phase, with the perf counters cleared at its start: (out words, perf)"""
+    dev.link.write32(CTRL, CTRL_CLEAR_PERF)
+    out = dev.run(ph.program, ph.data, timeout=600.0)
+    return out, dev.perf()
+
+
+def _perf_line(p):
+    return f"{p['cycles']} cycles, MM beats {p['mm_beats']}, WSTALL {p['mm_wstall']}, SYNC {p['mm_sync']}"
+
+
 def run_workload(build, link_spec, visualize_internals=False, out=None, viz_sim=None,
                  max_cycles=20000, log=print):
     """build(n) -> Workload for an N x N array. link_spec: a tb_isa binary or
@@ -77,12 +88,14 @@ def run_workload(build, link_spec, visualize_internals=False, out=None, viz_sim=
             link.ddr_write(address, data)
         dev.reset()
         t = time.time()
-        outs = [dev.run(ph.program, ph.data, timeout=600.0) for ph in wl.phases]
-        result.update(outputs=outs, perf=dev.perf(), seconds=time.time() - t,
+        runs = [_run_phase(dev, ph) for ph in wl.phases]
+        outs = [o for o, _ in runs]
+        result.update(outputs=outs, perf=[p for _, p in runs], seconds=time.time() - t,
                       match=outs == expected, where="hardware" if on_board else "Verilator sim")
-        log(f"{wl.title}: {'hardware' if on_board else 'Verilator sim'} N={link.n}, "
-            f"outputs {'match' if result['match'] else 'DIFFER from'} the reference model, "
-            f"PERF_CYCLES {result['perf']['cycles']}")
+        log(f"{wl.title}: {result['where']} N={link.n}, outputs "
+            f"{'match' if result['match'] else 'DIFFER from'} the reference model")
+        for ph, p in zip(wl.phases, result["perf"]):
+            log(f"  {ph.name}: {_perf_line(p)}")
     finally:
         link.close()
     if not visualize_internals:
@@ -106,14 +119,15 @@ def run_workload(build, link_spec, visualize_internals=False, out=None, viz_sim=
         traced = [k for k, ph in enumerate(wl.phases) if ph.traced] or list(range(len(wl.phases)))
         first, last = traced[0], traced[-1]
         dev.reset()
-        souts = []
+        souts, sperf = [], []
         for k, ph in enumerate(wl.phases):
             if k == first:
                 sim.trace(vcd)
-            souts.append(dev.run(ph.program, ph.data, timeout=600.0))
+            o, p = _run_phase(dev, ph)
+            souts.append(o)
+            sperf.append(p)
             if k == last:
                 sim.trace(None)
-        sperf = dev.perf()
     finally:
         sim.close()
     keys, rows, t0 = read_vcd(vcd, sim.n)
@@ -136,12 +150,15 @@ def run_workload(build, link_spec, visualize_internals=False, out=None, viz_sim=
         "array": f"{sim.n} × {sim.n}, WMEM {sim.wmem_rows} rows, UB {sim.ub_depth}, ACC {sim.acc_depth}",
         "traced": ", ".join(ph.name for ph in phases) + f" ({len(rows)} cycles)",
         "not traced": ", ".join(ph.name for k, ph in enumerate(wl.phases) if k not in traced) or "nothing",
-        "PERF_CYCLES (sim, whole run)": str(sperf["cycles"]),
-        "MM beats / WSTALL / SYNC (sim)": f"{sperf['mm_beats']} / {sperf['mm_wstall']} / {sperf['mm_sync']}",
     }
+    for k, ph in enumerate(wl.phases):
+        facts[f"perf, {ph.name} (sim)"] = _perf_line(sperf[k])
+        if hw:
+            facts[f"perf, {ph.name} (hardware)"] = _perf_line(hw["perf"][k])
     facts.update(wl.facts)
     if hw:
-        facts["PERF_CYCLES (hardware)"] = f"{hw['perf']['cycles']} (includes the console link's latency)"
+        facts["hardware cycle counts"] = ("include the console link: the core waits on each word the "
+                                          "host sends. MM beats count rows issued, the same on both")
     source = (f"Recorded in a Verilator simulation of tpu_top, the RTL the DE1-SoC bitstream is built "
               f"from, at N = {sim.n}. Every value on the page is a signal from that simulation.")
     if hw:
@@ -160,9 +177,10 @@ def run_workload(build, link_spec, visualize_internals=False, out=None, viz_sim=
         **wl.labels,
     }
     if hw:
-        meta["hardware"] = {"ok": hw["outputs"] == souts and hw["match"],
-                            "summary": f"same outputs, PERF_CYCLES {hw['perf']['cycles']}"
-                            if hw["outputs"] == souts else "outputs differ from the sim"}
+        beats = [p["mm_beats"] for p in hw["perf"]] == [p["mm_beats"] for p in sperf]
+        meta["hardware"] = {"ok": hw["outputs"] == souts and hw["match"] and beats,
+                            "summary": ("same outputs" if hw["outputs"] == souts else "outputs differ from the sim")
+                            + (", same MM beats" if beats else ", MM beats differ")}
     page = render(keys, rows, meta)
     out = Path(out or f"{wl.name}-n{sim.n}-viz.html")
     out.write_text(page)
