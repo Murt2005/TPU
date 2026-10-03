@@ -4,9 +4,10 @@ Getting [Qwen2.5-0.5B](https://huggingface.co/Qwen/Qwen2.5-0.5B) (24 layers,
 hidden 896, 14 query / 2 KV heads, SwiGLU 4,864, vocabulary 151,936, tied
 embedding) to run with every linear layer on the array and its weights streamed
 from DDR3, as the instruction-stream spec plans (its "Scaling to
-Qwen2.5-Coder-0.5B"). Status: phases 1–4 done. The C runtime runs the model
-with every linear layer on the core in Verilator simulation, exact; not yet on
-the board.
+Qwen2.5-Coder-0.5B"). Status: **running on the DE1-SoC**. Every linear layer
+runs on the 8×8 core at 50 MHz with its weights streamed from DDR3, at 0.73
+tokens/s. Every matmul matches the exact reference, and perplexity is 2.5%
+above the float model. `chat.py` is a browser chat with it.
 
 | Phase | What | Status |
 |---|---|---|
@@ -14,7 +15,7 @@ the board.
 | 2 | A numpy reference, the tokenizer, and the DDR3 weight image (`qwen.py`, `tokenizer.py`, `export.py`, `check.py`) | **done** |
 | 3 | Each layer as core programs, checked word for word in Verilator (`core_runtime.py`, `phase3.py`) | **done**: the whole model, every `MATMUL` exact |
 | 4 | The host runtime in C (`runtime/`, `test_runtime.py`), for the Mac and the ARM | **done**: exact against the simulated core |
-| 5 | On the board (needs a larger DDR3 window than `mem=768M` leaves) | next |
+| 5 | On the board (`qwen-run --core mmio`), and a browser chat (`chat.py`) | **done**: 0.73 tokens/s, every matmul exact |
 
 ## Setup
 
@@ -183,14 +184,69 @@ tokens, and about 1.3 s extrapolated to 2,048, as much as the array's
 (the build is scalar float) or attention on the array. Memory isn't a
 concern: 24 MB of the 771 MB Linux has.
 
-## What phase 5 has to do
+## Phase 5: on the board
 
-- **A DDR3 window for the 494 MB image.** `mem=768M` leaves 240 MB, and
-  `mem=256M` would leave 752 MB.
-- **The image in that window.** Copy it to the SD card from the Mac, then
-  have the ARM copy it into DDR3 at each boot (~3 min at the card's speed).
-- **`qwen-run --core mmio`.** Its first runs should log matmuls, checked by
-  `test_runtime.py`'s exact comparison.
+**Setup.**
+- The card boots through `u-boot.scr` with `mem=256M`. Linux keeps 256 MB
+  and uses about 25 MB of it. The FPGA gets 0x10000000–0x3F000000 (752 MB).
+- `/mnt/boot/qwen/` on the FAT partition holds:
+  - `qwen-run`, built with `make arm`
+  - `qwen-host.bin` and `qwen-vocab.bin`
+  - `qwen-ddr.bin`, copied with a card reader, since the console would take
+    over an hour
+- `qwen-run --core mmio:qwen-ddr.bin` copies the image into DDR3 at
+  0x10000000, in 90 s from the card. Later runs use `--core mmio`, since
+  the weights stay until power-off.
+
+**Results, measured 2026-10-02:**
+
+| Check | Result |
+|---|---|
+| the weight image on the card | md5 equal to the Mac's |
+| a prompt and 3 tokens with `--check ref:qwen-ddr.bin` (every matmul also computed by the C reference from the card's file) | 388 matmuls, **0 mismatched** |
+| greedy text | "The capital of France is" → " Paris. It is the largest city in Europe and the 13th largest" |
+| perplexity, the same 2,040 WikiText-2 tokens | **22.97** (C on the Mac: 23.09; numpy core path: 22.92; float: 22.42) |
+| speed, decoding | **1.37 s a token (0.73 tokens/s)**: the core 1.31 s, the ARM 0.06 s |
+| speed, a 5-token prompt (one pass, m = 5) | 1.9 s |
+
+Of the core's 1.31 s, 1.235 s is the array streaming 7.7 M tiles at full
+rate. Weight stalls are about 1,000 cycles a token, 21 µs. The other ~75 ms
+is pushing 97 programs and reading their int32 results back through the
+uncached window.
+
+**Where the time could go next:**
+- **The array is the bound.** At m = 1 every weight byte is read once a
+  token. 16×16 or 100 MHz would halve the time, and the port's 800 MB/s
+  allows it.
+- **The ARM grows with context.** Attention costs about 0.6 ms a token of
+  context, so at 2,048 tokens the host matches the array. NEON or attention
+  on the array would fix it.
+- **Program overhead.** About 75 ms a token. Pre-queued programs released by
+  a doorbell register would cut it.
+
+## A chat in the browser
+
+```sh
+.venv/bin/python software/qwen/chat.py --board /dev/cu.usbserial-<id>0          # weights already in DDR3
+.venv/bin/python software/qwen/chat.py --board /dev/cu.usbserial-<id>0 --load   # after a power cycle (~90 s)
+.venv/bin/python software/qwen/chat.py --ref                                   # no board: the C reference on the Mac
+```
+
+It opens http://localhost:8000. That's a small local web app with only the
+standard library and pyserial, so it runs in the repo's `.venv`.
+- **What it does:** it tokenizes your prompt on the Mac, sends the ids to
+  `qwen-run --serve` on the board over the console, and streams the reply
+  back token by token, with the prompt time and tokens/s under each reply.
+- **Two modes:** **Chat** keeps the conversation as "User: … / Assistant:"
+  lines and stops a reply where the model starts the user's next line.
+  **Complete** continues your text as-is.
+- **The base model completes text rather than following instructions.** It
+  answers short questions ("Name three primary colors." → "Three primary
+  colors are red, blue, and yellow.") but rambles on longer ones.
+  Qwen2.5-0.5B-Instruct has the same shapes and would drop in through
+  `fetch.sh` and `export.py`.
+- **The console is busy while it runs.** `qwen-run --serve` holds it until
+  `chat.py` stops.
 
 ## The core's limits the programs respect
 

@@ -230,3 +230,43 @@ core *core_null(void) {
     c->image_read = null_image_read;
     return c;
 }
+
+/* -- a core checked against another, every matmul ---------------------------- */
+typedef struct { core *primary, *reference; uint64_t *compared, *mismatched; int32_t *want; size_t size; } checked;
+
+static void checked_matmul(core *c, const matrix *mx, const int8_t *xq, int m, int32_t *out) {
+    checked *k = c->state;
+    size_t words = (size_t)m * mx->N;
+    if (words > k->size) { free(k->want); k->want = malloc(4 * words); k->size = words; }
+    k->primary->matmul(k->primary, mx, xq, m, out);
+    k->reference->matmul(k->reference, mx, xq, m, k->want);
+    (*k->compared)++;
+    if (memcmp(out, k->want, 4 * words)) {
+        (*k->mismatched)++;
+        size_t bad = 0;
+        for (size_t i = 0; i < words; i++) bad += out[i] != k->want[i];
+        fprintf(stderr, "MISMATCH %s, m=%d: %zu of %zu words differ\n", mx->name, m, bad, words);
+    }
+    c->programs = k->primary->programs;
+    c->tiles = k->primary->tiles;
+    c->beats = k->primary->beats;
+    c->weight_stalls = k->primary->weight_stalls;
+}
+
+static void checked_image_read(core *c, uint64_t offset, void *dst, size_t n) {
+    checked *k = c->state;
+    k->primary->image_read(k->primary, offset, dst, n);
+}
+
+core *core_checked(core *primary, core *reference, uint64_t *compared, uint64_t *mismatched) {
+    checked *k = calloc(1, sizeof *k);
+    k->primary = primary;
+    k->reference = reference;
+    k->compared = compared;
+    k->mismatched = mismatched;
+    core *c = calloc(1, sizeof *c);
+    c->matmul = checked_matmul;
+    c->image_read = checked_image_read;
+    c->state = k;
+    return c;
+}

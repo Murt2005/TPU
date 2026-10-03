@@ -6,7 +6,7 @@
  * stdin is a tty (the serial console) it goes raw for the session. runs as root:
  * /dev/mem.
  * 'D' writes DDR3 and 'G' reads it back, uncached (O_SYNC), only inside the
- * window Linux was booted without (mem=768M) and below the console framebuffer
+ * window Linux was booted without (mem=256M) and below the console framebuffer
  * at 0x3F000000; anything else ends the session. 'M' (the simulator's DDR3 timing)
  * is read and ignored */
 #include <fcntl.h>
@@ -19,7 +19,7 @@
 
 #define LWH2F_BASE 0xFF200000u
 #define SPAN       0x1000u
-#define DDR_LOW    0x30000000u
+#define DDR_LOW    0x10000000u
 #define DDR_HIGH   0x3F000000u
 
 static int get(void *p, size_t n) {

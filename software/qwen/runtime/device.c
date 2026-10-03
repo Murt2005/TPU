@@ -100,7 +100,7 @@ device *device_sim(const char *binary) {
 
 /* -- the DE1-SoC ---------------------------------------------------------- */
 #define LWH2F_BASE 0xFF200000u
-#define DDR_LOW    0x30000000u       /* booted with mem=768M */
+#define DDR_LOW    0x10000000u       /* booted with mem=256M */
 #define DDR_HIGH   0x3F000000u       /* Terasic's console framebuffer above */
 
 typedef struct { volatile uint32_t *regs; volatile uint8_t *ddr; } mmio;

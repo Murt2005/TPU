@@ -21,6 +21,7 @@ target was retired; it is preserved at the git tag `pico2-ice-final`.
 | Full test suite from the ARM | `tests/isa/test_isa_rtl.py serial:<port>` | **Every functional test passes**: decode errors, 40 random layers, MNIST, requantizer sweeps, 40 random concurrent programs |
 | MNIST on the ARM | `software/mnist/de1soc/` | 10,000 test images: **97.50%**, 10,000/10,000 equal to the reference model; **109.5 µs/image** end to end (m=1), 77.6 µs (m=8) |
 | DDR3 instructions (`MATMUL wsrc=1`, `RD_DDR_UB`, `SET_OBASE`, `ACTIVATE dst=DDR`) | `tests/isa/test_isa_rtl.py serial:<port>`, booted with `boards/de1soc/sw/ddr-boot.py` | **Every test passes** (44), equal to the model word for word: random layers and MNIST with weights streamed from DDR3; MNIST's hidden layer written to DDR3 and read back as the next layer's input; `RD_DDR_UB` at every alignment; `ACTIVATE dst=DDR` read back; 40 random concurrent programs mixing all of them over one DDR3 region; `CTRL.RESET` with reads in flight. A `MATMUL` from DDR3 starts after ~21 cycles of weight stall; extra tiles, and a second `MATMUL` behind it (prefetched), add at most 6 |
+| Qwen2.5-0.5B, every linear layer on the core | `software/qwen/` (`qwen-run --core mmio`, `chat.py`) | **0.73 tokens/s** (1.37 s a token: the core 1.31 s, the ARM 0.06 s); every matmul equal to the exact reference (388 checked); WikiText-2 perplexity 22.97, +2.5% over float |
 | Drawing demo | `software/mnist/draw_demo.py --de1soc` | The digit appears on HEX0; 117 µs on the board, 7.5 ms round trip at 1.5625 Mbaud |
 
 | Build | ALMs | RAM blocks | DSPs | Timing at 50 MHz |
@@ -173,7 +174,7 @@ See [`backlog.md`](backlog.md). Board-specific items:
   block (Cyclone V's 9×9 mode) or partly in logic. 78/87 DSPs are used at
   8×8.
 - **DDR3 (spec phase 5).** All four DDR3 instructions are built and pass on
-  the board (§1). The card boots with the port live and `mem=768M`, through
+  the board (§1). The card boots with the port live and `mem=256M`, through
   `u-boot.scr` ("The FPGA-to-SDRAM port" in the hps README). The bandwidth
   they need is **measured on the board**: a burst-read master
   (`top/ddr-probe.sv`) on a 128-bit FPGA-to-SDRAM port at 50 MHz reads

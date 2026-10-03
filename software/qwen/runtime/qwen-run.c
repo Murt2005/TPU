@@ -1,13 +1,20 @@
 /* qwen-run: Qwen2.5-0.5B with its linear layers on a core
  *
- *   qwen-run --tables DIR --core ref:IMAGE | sim:TB_ISA[:IMAGE] | mmio | null
+ *   qwen-run --tables DIR --core ref:IMAGE | sim:TB_ISA[:IMAGE] | mmio[:IMAGE] | null
+ *            [--check ref:IMAGE]              every matmul also by the exact reference, compared
  *            [--generate N --ids 1,2,3]       greedy continuation of a prompt (token ids)
  *            [--score FILE --window L]        perplexity over FILE (int32 ids)
  *            [--programs FILE]                every program core_program builds (tests)
  *            [--log FILE]                     every matmul's int8 input and int32 output
  *            [--prefill M]                    prompt rows per pass (default 16)
+ *            [--serve]                        answer requests on stdin (chat.py), weights loaded once
  *
- * sim:TB_ISA:IMAGE loads IMAGE into the simulated DDR3 first. ids come from
+ * --serve speaks lines: in "G <max tokens> <id>,<id>,..." (a fresh context each
+ * time) or "Q"; out "READY" once, then per request "T <id>" for each token as
+ * it's made and "E <tokens> <prompt seconds> <generate seconds>" at the end.
+ * generation stops at <|endoftext|> or <|im_end|>
+ *
+ * sim:TB_ISA:IMAGE and mmio:IMAGE load IMAGE into (simulated) DDR3 first. ids come from
  * software/qwen/tokenizer.py; text is printed with the exported vocabulary */
 #include <math.h>
 #include <stdio.h>
@@ -17,9 +24,73 @@
 
 #include "qwen.h"
 
+static int argmax(const float *v, int n) {
+    int best = 0;
+    for (int j = 1; j < n; j++)
+        if (v[j] > v[best]) best = j;
+    return best;
+}
+
+#define EOS_TEXT 151643     /* <|endoftext|> */
+#define EOS_TURN 151645     /* <|im_end|> */
+
+/* chat.py's requests: one prompt in, its tokens out as they're made */
+static void serve(model *md, int prefill) {
+    char *line = malloc(1 << 20);
+    int *ids = malloc(sizeof(int) * (size_t)md->max_ctx);
+    float *logits = malloc(sizeof(float) * (size_t)prefill * md->vocab);
+    printf("READY\n");
+    fflush(stdout);
+    size_t len = 0;
+    for (;;) {
+        int ch = getchar();
+        if (ch == EOF) break;
+        if (ch != '\n' && ch != '\r') {
+            if (len < (1 << 20) - 1) line[len++] = (char)ch;
+            continue;
+        }
+        line[len] = 0;
+        len = 0;
+        if (line[0] == 'Q') break;
+        if (line[0] != 'G') continue;
+        char *p = line + 1;
+        int max_tokens = (int)strtol(p, &p, 10), n = 0;
+        while (*p && n < md->max_ctx) {
+            while (*p == ' ' || *p == ',') p++;
+            if (!*p) break;
+            ids[n++] = (int)strtol(p, &p, 10);
+        }
+        if (n == 0) { printf("E 0 0 0\n"); fflush(stdout); continue; }
+        if (n + max_tokens > md->max_ctx) max_tokens = md->max_ctx - n;
+        md->pos = 0;
+        double t0 = now_seconds();
+        int m = 0;
+        for (int at = 0; at < n; at += prefill) {
+            m = n - at < prefill ? n - at : prefill;
+            model_forward(md, ids + at, m, logits);
+        }
+        double t1 = now_seconds();
+        int next = argmax(logits + (size_t)(m - 1) * md->vocab, md->vocab), made = 0;
+        while (made < max_tokens && next != EOS_TEXT && next != EOS_TURN) {
+            printf("T %d\n", next);
+            fflush(stdout);
+            made++;
+            if (made == max_tokens) break;
+            model_forward(md, &next, 1, logits);
+            next = argmax(logits, md->vocab);
+        }
+        printf("E %d %.3f %.3f\n", made, t1 - t0, now_seconds() - t1);
+        fflush(stdout);
+    }
+    free(line);
+    free(ids);
+    free(logits);
+}
+
 static void usage(void) {
-    fprintf(stderr, "usage: qwen-run --tables DIR --core ref:IMAGE|sim:TB_ISA[:IMAGE]|mmio|null "
-                    "[--generate N --ids a,b,c] [--score FILE --window L] [--programs FILE] [--log FILE]\n");
+    fprintf(stderr, "usage: qwen-run --tables DIR --core ref:IMAGE|sim:TB_ISA[:IMAGE]|mmio[:IMAGE]|null "
+                    "[--check ref:IMAGE] [--generate N --ids a,b,c] [--score FILE --window L] [--programs FILE] "
+                    "[--log FILE] [--prefill M]\n");
     exit(2);
 }
 
@@ -33,12 +104,6 @@ static void print_token(const tables *tb, int id) {
     fflush(stdout);
 }
 
-static int argmax(const float *v, int n) {
-    int best = 0;
-    for (int j = 1; j < n; j++)
-        if (v[j] > v[best]) best = j;
-    return best;
-}
 
 /* the programs for every matrix at m = 1..16, one block range each, as text */
 static void dump_programs(const model *md, const char *path, uint32_t base, uint64_t image_bytes) {
@@ -60,7 +125,8 @@ static void dump_programs(const model *md, const char *path, uint32_t base, uint
 
 int main(int argc, char **argv) {
     const char *dir = NULL, *core_spec = NULL, *ids_text = NULL, *score_path = NULL, *programs = NULL, *log_path = NULL;
-    int generate = 0, window = 256, prefill = 16;
+    const char *check_spec = NULL;
+    int generate = 0, window = 256, prefill = 16, serving = 0;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--tables") && i + 1 < argc) dir = argv[++i];
         else if (!strcmp(argv[i], "--core") && i + 1 < argc) core_spec = argv[++i];
@@ -71,6 +137,8 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--programs") && i + 1 < argc) programs = argv[++i];
         else if (!strcmp(argv[i], "--log") && i + 1 < argc) log_path = argv[++i];
         else if (!strcmp(argv[i], "--prefill") && i + 1 < argc) prefill = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--check") && i + 1 < argc) check_spec = argv[++i];
+        else if (!strcmp(argv[i], "--serve")) serving = 1;
         else usage();
     }
     if (!dir || !core_spec) usage();
@@ -95,7 +163,8 @@ int main(int argc, char **argv) {
         if (!d) return 1;
         base = d->ddr_low;
         c = core_tpu(d, base, image_bytes, load);
-    } else if (!strcmp(core_spec, "mmio")) {
+    } else if (!strncmp(core_spec, "mmio", 4) && (core_spec[4] == 0 || core_spec[4] == ':')) {
+        const char *load = core_spec[4] == ':' ? core_spec + 5 : NULL;
         device *d = device_mmio();
         if (!d) return 1;
         base = d->ddr_low;
@@ -104,14 +173,24 @@ int main(int argc, char **argv) {
                     (unsigned long long)image_bytes, d->ddr_low, d->ddr_high);
             return 1;
         }
-        c = core_tpu(d, base, image_bytes, NULL);
+        double t0 = now_seconds();
+        c = core_tpu(d, base, image_bytes, load);
+        if (load) fprintf(stderr, "%s into DDR3 at %#x: %.1f s\n", load, base, now_seconds() - t0);
     }
     if (!c) usage();
+    uint64_t compared = 0, mismatched = 0;
+    if (check_spec) {
+        if (strncmp(check_spec, "ref:", 4)) usage();
+        core *reference = core_ref(check_spec + 4);
+        if (!reference) return 1;
+        c = core_checked(c, reference, &compared, &mismatched);
+    }
 
     model md;
     if (model_init(&md, &tb, c, 2048)) { fprintf(stderr, "out of memory\n"); return 1; }
     if (programs) { dump_programs(&md, programs, base, image_bytes); return 0; }
     if (log_path) md.log = fopen(log_path, "wb");
+    if (serving) { serve(&md, prefill); return 0; }
     float *logits = malloc(sizeof(float) * (size_t)prefill * md.vocab);
 
     if (ids_text) {
@@ -179,5 +258,10 @@ int main(int argc, char **argv) {
     fprintf(stderr, "core: %llu programs, %llu tiles, %llu MM beats, %llu weight-stall cycles\n",
             (unsigned long long)c->programs, (unsigned long long)c->tiles, (unsigned long long)c->beats,
             (unsigned long long)c->weight_stalls);
+    if (check_spec) {
+        fprintf(stderr, "checked: %llu matmuls against the exact reference, %llu mismatched\n",
+                (unsigned long long)compared, (unsigned long long)mismatched);
+        return mismatched != 0;
+    }
     return 0;
 }

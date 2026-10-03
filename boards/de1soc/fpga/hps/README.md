@@ -14,7 +14,7 @@ CD into `build/` at build time.
 | `add-tpu.tcl`, `patch_top.py` | `qsys-script` edit: add `tpu` at offset 0 of `h2f_lw`, `hex_pio` at `0x10100` and `ddr_probe` at `0x40000`, all on `clk_0`, plus a 128-bit FPGA-to-SDRAM port (`f2h_sdram0`) for the probe; then wire `hex_pio` to `hex_display` in Terasic's `ghrd_top.v` |
 | `Makefile` | extract the GHRD → add the TPU, `hex_pio` and the probe → `qsys-generate` → compile → uncompressed `.rbf`; also builds `isa_mmio`, `setbaud` and `ddr_probe` |
 | `../../sw/isa-mmio.c` | ARM register server speaking `tb_isa`'s protocol, so `IsaDevice` drives the board as it drives Verilator |
-| `u-boot-ddr.txt`, `../../sw/mk-uboot-scr.py` | the boot script (`u-boot.scr`) that loads `soc_system_ddr.rbf` with the FPGA-to-SDRAM port live and `mem=768M` |
+| `u-boot-ddr.txt`, `../../sw/mk-uboot-scr.py` | the boot script (`u-boot.scr`) that loads `soc_system_ddr.rbf` with the FPGA-to-SDRAM port live and `mem=256M` |
 | `../../sw/ddr-boot.py` | the same boot by hand, for a bitstream loaded over JTAG |
 | `../../sw/recv.c` | block-wise receiver for fast console uploads |
 
@@ -58,11 +58,12 @@ receiver="/mnt/boot/recv")`: `recv` (`make recv`) reads in blocks, so the
 port> <rbf>` does the same without touching the SD card: reboot into U-Boot, load the bitstream over JTAG, `run
 mmcload`, apply the configuration from on-chip RAM, `run
 bridge_enable_handoff`, release `f2h_sdram0` (`mw ffc25080 133`), and boot
-with `mem=768M` (`bootz`, not `mmcboot`, which would reset `bootargs`).
-`mem=768M` keeps Linux out of `0x30000000` and up, so the host can put
-weights and activations there. Terasic's console framebuffer sits at
+with `mem=256M` (`bootz`, not `mmcboot`, which would reset `bootargs`).
+`mem=256M` keeps Linux out of `0x10000000` and up (752 MB), so the host can
+put weights and activations there: Qwen2.5-0.5B's 494 MB fit. Linux uses
+about 25 MB of its 256. Terasic's console framebuffer sits at
 `0x3F000000` regardless, so `isa_mmio` reads and writes DDR3 only in
-`[0x30000000, 0x3F000000)`. `ddr-boot.py` saves nothing: after a power
+`[0x10000000, 0x3F000000)`. `ddr-boot.py` saves nothing: after a power
 cycle the card's boot runs again.
 
 Then, from the Mac, `python boards/de1soc/sw/ddr-probe.py <console port>`.

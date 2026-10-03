@@ -67,6 +67,8 @@ struct core {
 core *core_ref(const char *image_path);
 core *core_null(void);
 core *core_tpu(device *dev, uint32_t base, uint64_t image_bytes, const char *load_image);
+/* primary's results, each also computed by reference and compared word for word */
+core *core_checked(core *primary, core *reference, uint64_t *compared, uint64_t *mismatched);
 /* the program for output blocks [first, first + count) of mx on m rows; -1 if it won't fit max words */
 int core_program(const matrix *mx, int m, uint32_t first, uint32_t count, uint32_t base, uint64_t image_bytes,
                  uint64_t *words, int max, int *chunks, int *chunk_blocks, uint32_t *chunk_obase);

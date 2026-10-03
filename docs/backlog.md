@@ -35,15 +35,16 @@ this is convenience.
 `RD_DDR_UB`, `SET_OBASE` and `ACTIVATE dst=DDR` are built, and the card
 boots with the port live (`u-boot.scr`).
 
-**Qwen2.5-0.5B** (`software/qwen/`). Phases 1–4 done:
-- int8 on the core costs +1.74% perplexity with SmoothQuant
-- the numpy reference and the 494 MB DDR3 image check out against PyTorch
-- the whole model runs exactly on the simulated core
-- the C runtime matches it byte for byte, and builds for the ARM
-
-Next, phase 5 on the board: it needs a DDR3 window larger than the 240 MB
-`mem=768M` leaves. Then attention on the ARM (about 1.3 s a token at a
-2,048-token context, scalar) wants NEON, or the array. Sustained FPGA-to-SDRAM bandwidth is
+**Qwen2.5-0.5B** (`software/qwen/`) runs on the board: 0.73 tokens/s, every
+matmul exact, perplexity +2.5% over float, with a browser chat (`chat.py`).
+Next:
+- **The instruct model**, for a real assistant.
+- **Speed:** the array at m = 1 is the bound, so 16×16 or 100 MHz would
+  halve it.
+- **Long contexts:** attention on the ARM grows with context, so NEON or
+  the array.
+- **Program overhead:** a doorbell register for pre-queued programs, about
+  75 ms a token. Sustained FPGA-to-SDRAM bandwidth is
 measured: 800 MB/s on a 128-bit port at 50 MHz, the port's peak, also under
 ARM memory load ([`de1soc.md`](de1soc.md) §7).
 

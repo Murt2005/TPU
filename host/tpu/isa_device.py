@@ -97,7 +97,8 @@ class BoardConsole:
 
     def __init__(self, port, baud=BAUD):
         import serial
-        self._s = serial.Serial(port, baud, timeout=0.2)
+        # a jammed USB-serial driver otherwise blocks a write forever
+        self._s = serial.Serial(port, baud, timeout=0.2, write_timeout=30)
         self._recover()
         self._s.write(b"\x03")                   # abandon any half-typed line
         self._quiet()
@@ -137,6 +138,17 @@ class BoardConsole:
             if not chunk:
                 break
         return out.decode(errors="replace")
+
+    def run_until_prompt(self, cmdline, timeout=600.0):
+        """a long shell command's output: read until the prompt comes back"""
+        self._s.reset_input_buffer()
+        self._s.write(cmdline.encode() + b"\r")
+        out, end = b"", time.time() + timeout
+        while time.time() < end:
+            out += self._s.read(65536)
+            if out.rstrip().endswith(b"#"):
+                return out.decode(errors="replace")
+        raise TimeoutError(f"`{cmdline}`: no prompt within {timeout} s: {out[-300:]!r}")
 
     def set_baud(self, rate):
         """both ends to `rate`; needs setbaud on the board for rates above 921600"""
@@ -260,9 +272,9 @@ class IsaSerialLink(IsaSimLink):
     HPS over its serial console, speaking the same protocol as the Verilator model"""
 
     cycle_exact = False
-    # what Linux leaves alone when booted with mem=768M, below the console
+    # what Linux leaves alone when booted with mem=256M, below the console
     # framebuffer at 0x3F000000 (isa_mmio refuses anything else)
-    ddr_window = (0x30000000, 0x3F000000)
+    ddr_window = (0x10000000, 0x3F000000)
 
     def advance(self, cycles):
         pass                                     # the board's clock runs on its own

@@ -1,7 +1,7 @@
 """Boot the DE1-SoC with the core's FPGA-to-SDRAM port live, without touching the
 SD card: reboot into U-Boot, load a bitstream over JTAG, apply the port's
-configuration, release the port, and boot Linux with mem=768M (DDR3 from
-0x30000000 up is left to the FPGA).
+configuration, release the port, and boot Linux with mem=256M (DDR3 from
+0x10000000 up is left to the FPGA: room for Qwen2.5-0.5B's 494 MB of weights).
 
     python boards/de1soc/sw/ddr-boot.py /dev/cu.usbserial-<id>0 boards/de1soc/fpga/hps/build/soc_system.rbf
 
@@ -35,7 +35,7 @@ APPLYCFG = [0xE59F101C,       # ldr r1, [pc, #0x1c]     staticcfg's address, bel
             0xE12FFF1E,       # bx lr                   rc = staticcfg
             0xFFC2505C]       # staticcfg
 PORT_RESETS = 0x133           # f2h_sdram0: command port 0, read ports 0-1, write ports 0-1
-BOOTARGS = "console=ttyS0,115200 root=/dev/mmcblk0p2 rw rootwait mem=768M"
+BOOTARGS = "console=ttyS0,115200 root=/dev/mmcblk0p2 rw rootwait mem=256M"
 
 
 class UBoot:
