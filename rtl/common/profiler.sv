@@ -9,9 +9,10 @@
 //   [40]      the dispatcher issued an instruction
 //   [44:41]   engines that popped an instruction (LD, WT, MM, ACT)
 //   [48:45]   engines that completed one
-//   [127:64]  per engine, 16 bits: cycles it was blocked since its last completion
-//             (a WAIT unsatisfied, starved of data, a weight stall, DDR3 waits),
-//             saturating; meaningful where the done bit is set
+//   [124:49]  per engine, 19 bits at 49 + 19e: cycles it was blocked since its last
+//             completion (a WAIT unsatisfied, starved of data, a weight stall, DDR3
+//             waits), saturating at 2^19 - 1; meaningful where the done bit is set.
+//             a WAIT's own wait the host can also take from the timestamps
 // only power-on and CLEAR_PROFILE reset it: CTRL.RESET runs before every program
 // and the profile spans many. a full FIFO drops events and counts them
 module profiler #(
@@ -34,7 +35,9 @@ module profiler #(
 
     logic        restart;
     logic [39:0] cycle;
-    logic [15:0] blocked_cycles [4];
+    localparam int BLOCKED_WIDTH = 19;
+    localparam logic [BLOCKED_WIDTH-1:0] BLOCKED_MAX = '1;
+    logic [BLOCKED_WIDTH-1:0] blocked_cycles [4];
     logic        event_now, full, empty, pop_event;
     logic [127:0] event_word, head;
     logic [1:0]  word_index;
@@ -49,7 +52,7 @@ module profiler #(
         event_word[44:41] = pop_in;
         event_word[48:45] = done_in;
         for (int engine = 0; engine < 4; engine++)
-            event_word[64 + 16*engine +: 16] = blocked_cycles[engine] + 16'(blocked_in[engine] && blocked_cycles[engine] != 16'hFFFF);
+            event_word[49 + BLOCKED_WIDTH*engine +: BLOCKED_WIDTH] = blocked_cycles[engine] + BLOCKED_WIDTH'(blocked_in[engine] && blocked_cycles[engine] != BLOCKED_MAX);
     end
 
     block_fifo #(.WIDTH(128), .DEPTH(DEPTH)) u_events (
@@ -74,8 +77,8 @@ module profiler #(
             for (int engine = 0; engine < 4; engine++)
                 if (done_in[engine])
                     blocked_cycles[engine] <= '0;
-                else if (blocked_in[engine] && blocked_cycles[engine] != 16'hFFFF)
-                    blocked_cycles[engine] <= blocked_cycles[engine] + 16'd1;
+                else if (blocked_in[engine] && blocked_cycles[engine] != BLOCKED_MAX)
+                    blocked_cycles[engine] <= blocked_cycles[engine] + BLOCKED_WIDTH'(1);
             if (read_in && !empty)
                 word_index <= word_index + 2'd1;
             // an entry is readable two cycles after its write (block_fifo)

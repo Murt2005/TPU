@@ -2,15 +2,23 @@
 
 import tpu_pkg::*;
 
-// MM engine: overlapped tiles. each window of max(m, N) cycles streams one tile's
-// m activation rows and, in its last N cycles, the next tile's weight rows into
-// weight_next; the next tile's first row flips them in. a missing tile freezes the
-// whole window (WSTALL), which only ever widens the gaps the PEs rely on.
-// control only: tpu_core wires the UB, systolic data setup, mmu and accumulator
+// MM engine: overlapped tiles. each window of max(m, N / WEIGHT_LANES) cycles streams
+// one tile's m activation rows, and starts streaming the next tile's weight rows into
+// weight_next: row r reaches PE row r r cycles after the stream starts, in step with
+// the activation wavefront, so a stream lasts N cycles whatever the window. a stream
+// starts N cycles before its window ends, or at the window's start when the window is
+// shorter; streams that overlap go out on separate lanes of the mmu's weight bus. the
+// next tile's first row flips them in. a tile missing when its stream should start
+// freezes the window (WSTALL), which only ever widens the gaps the PEs rely on; streams
+// already running carry on. control only: tpu_core wires the UB, systolic data
+// setup, mmu and accumulator
 module matmul_engine #(
     parameter int ARRAY_SIZE        = 8,
     parameter int UB_ADDRESS_WIDTH  = 14,
-    parameter int ACC_ADDRESS_WIDTH = 10
+    parameter int ACC_ADDRESS_WIDTH = 10,
+    parameter int WEIGHT_LANES      = 1,                     // weight rows a cycle, at most
+    parameter int SLOTS             = WEIGHT_LANES + 1,      // the weight FIFO's
+    parameter int SLOT_WIDTH        = SLOTS > 2 ? $clog2(SLOTS) : 1
 ) (
     input  logic                         clk,
     input  logic                         reset,
@@ -21,8 +29,9 @@ module matmul_engine #(
     input  logic [63:0]                  completed_in,
     output logic                         instruction_done_out,
 
-    input  logic        [ARRAY_SIZE-1:0][ARRAY_SIZE*8-1:0] tile_in,                      // weight_fifo
-    input  logic                          tile_full_in,
+    input  logic [SLOTS-1:0][ARRAY_SIZE-1:0][ARRAY_SIZE*8-1:0] slots_in,                 // weight_fifo
+    input  logic [SLOTS-1:0]              slot_full_in,
+    input  logic [SLOT_WIDTH-1:0]         drain_slot_in,
     output logic                          tile_take_out,
 
     output logic                          UB_read_enable_out,         // always granted
@@ -30,9 +39,9 @@ module matmul_engine #(
     output logic                          activation_valid_out,       // the UB row read last cycle goes in now
     output logic                          activation_weight_flip_out, // ... and it's a tile's first row: flip
 
-    output logic                          weight_valid_out,           // the next tile's weight row, onto the
-    output logic [$clog2(ARRAY_SIZE)-1:0] weight_row_select_out,      // mmu's row-select bus
-    output logic signed [ARRAY_SIZE-1:0][7:0]              weight_data_out,
+    output logic [WEIGHT_LANES-1:0]                            weight_valid_out,       // a weight row per lane, onto the
+    output logic [WEIGHT_LANES-1:0][$clog2(ARRAY_SIZE)-1:0]    weight_row_select_out,  // mmu's row-select bus
+    output logic signed [WEIGHT_LANES-1:0][ARRAY_SIZE-1:0][7:0] weight_data_out,
 
     output logic                       tag_push_out,                 // accumulator: where each issued row goes
     output logic [ACC_ADDRESS_WIDTH:0] tag_out,
@@ -46,6 +55,14 @@ module matmul_engine #(
 );
 
     localparam int ROW_SELECT_WIDTH = $clog2(ARRAY_SIZE);
+    localparam int MINIMUM_WINDOW   = ARRAY_SIZE / WEIGHT_LANES;
+    localparam int LANE_WIDTH       = WEIGHT_LANES > 1 ? $clog2(WEIGHT_LANES) : 1;
+
+    initial begin
+        if (ARRAY_SIZE % WEIGHT_LANES != 0 || MINIMUM_WINDOW < 2)
+            $fatal(1, "matmul_engine: WEIGHT_LANES=%0d must divide ARRAY_SIZE=%0d and leave windows of 2 cycles or more",
+                   WEIGHT_LANES, ARRAY_SIZE);
+    end
 
     logic [63:0] instruction, wait_snapshot;
     assign instruction   = queue_entry_in[63:0];
@@ -66,23 +83,50 @@ module matmul_engine #(
     logic [8:0]  window_position;
     logic [7:0]  rows_in_flight;                             // rows issued, not yet written to ACC
 
-    logic [8:0] window_length, weight_window_start;
-    assign window_length       = (window_has_activations && activation_rows > 9'(ARRAY_SIZE)) ? activation_rows : 9'(ARRAY_SIZE);
-    assign weight_window_start = window_length - 9'(ARRAY_SIZE);
+    logic [8:0] window_length, stream_start_position;
+    assign window_length         = (window_has_activations && activation_rows > 9'(MINIMUM_WINDOW)) ? activation_rows : 9'(MINIMUM_WINDOW);
+    assign stream_start_position = window_length > 9'(ARRAY_SIZE) ? window_length - 9'(ARRAY_SIZE) : 9'd0;
 
-    logic activation_issue_now, weight_issue_now, window_frozen, window_advance, window_end;
+    // weight streams: up to WEIGHT_LANES at once, one per lane, each N cycles of rows
+    // from one weight FIFO slot. they start in tile order, so they end in it too, and
+    // the oldest stream's slot is always the FIFO's drain slot
+    logic [WEIGHT_LANES-1:0]                       stream_active;
+    logic [WEIGHT_LANES-1:0][ROW_SELECT_WIDTH-1:0] stream_row;
+    logic [WEIGHT_LANES-1:0][SLOT_WIDTH-1:0]       stream_slot;
+    logic [LANE_WIDTH-1:0]                         next_lane;
+    logic [SLOT_WIDTH-1:0]                         next_slot;
+    localparam int RUNNING_WIDTH = $clog2(WEIGHT_LANES + 1);
+    logic [RUNNING_WIDTH-1:0]                      streams_running;
+    always_comb begin
+        streams_running = '0;
+        for (int k = 0; k < WEIGHT_LANES; k++) streams_running += RUNNING_WIDTH'(stream_active[k]);
+        next_slot = SLOT_WIDTH'((32'(drain_slot_in) + 32'(streams_running)) % SLOTS);
+    end
+
+    logic activation_issue_now, stream_due, stream_start, window_frozen, window_advance, window_end;
     assign activation_issue_now = window_has_activations && window_position < activation_rows;
-    assign weight_issue_now     = window_has_weights && window_position >= weight_window_start;
-    assign window_frozen        = weight_issue_now && !tile_full_in;
+    assign stream_due           = state == S_RUN && window_has_weights && window_position == stream_start_position;
+    assign window_frozen        = stream_due && !slot_full_in[next_slot];
     assign window_advance       = state == S_RUN && !window_frozen;
     assign window_end           = window_advance && window_position == window_length - 9'd1;
+    assign stream_start         = stream_due && slot_full_in[next_slot];
 
-    logic                               activation_valid_delayed, activation_weight_flip_delayed;
-    logic                               weight_register_valid;
-    logic        [ROW_SELECT_WIDTH-1:0] weight_register_row;
-    logic signed [ARRAY_SIZE-1:0] [7:0] weight_register_data;
-    logic        [ROW_SELECT_WIDTH-1:0] weight_row_now;
-    assign weight_row_now             = ROW_SELECT_WIDTH'(window_position - weight_window_start);
+    // this cycle's row on each lane: a running stream's next, or row 0 of one starting
+    logic [WEIGHT_LANES-1:0]                       lane_issue, lane_last;
+    logic [WEIGHT_LANES-1:0][ROW_SELECT_WIDTH-1:0] lane_row;
+    logic [WEIGHT_LANES-1:0][SLOT_WIDTH-1:0]       lane_slot;
+    always_comb
+        for (int k = 0; k < WEIGHT_LANES; k++) begin
+            lane_issue[k] = stream_active[k] || (stream_start && next_lane == LANE_WIDTH'(k));
+            lane_row[k]   = stream_active[k] ? stream_row[k] : '0;
+            lane_slot[k]  = stream_active[k] ? stream_slot[k] : next_slot;
+            lane_last[k]  = lane_issue[k] && lane_row[k] == ROW_SELECT_WIDTH'(ARRAY_SIZE - 1);
+        end
+
+    logic                                                  activation_valid_delayed, activation_weight_flip_delayed;
+    logic        [WEIGHT_LANES-1:0]                        weight_register_valid;
+    logic        [WEIGHT_LANES-1:0][ROW_SELECT_WIDTH-1:0]  weight_register_row;
+    logic signed [WEIGHT_LANES-1:0][ARRAY_SIZE-1:0][7:0]   weight_register_data;
     assign activation_valid_out       = activation_valid_delayed;
     assign activation_weight_flip_out = activation_weight_flip_delayed;
     assign weight_valid_out           = weight_register_valid;
@@ -94,7 +138,7 @@ module matmul_engine #(
     assign UB_read_address_out = UB_ADDRESS_WIDTH'(UB_chunk_base + 16'(window_position));
     assign tag_push_out        = UB_read_enable_out;
     assign tag_out             = {(k_tile_index == 13'd0) && !accumulate, ACC_ADDRESS_WIDTH'(ACC_base + 16'(window_position))};
-    assign tile_take_out       = window_advance && weight_issue_now && window_position == window_length - 9'd1;
+    assign tile_take_out       = lane_last != '0;          // a stream sends its last row: its slot can refill
 
     logic wait_satisfied;
     assign wait_satisfied = wait_counts_reached(instruction[51:48], wait_snapshot, completed_in);
@@ -123,20 +167,33 @@ module matmul_engine #(
             rows_in_flight                 <= '0;
             activation_valid_delayed       <= 1'b0;
             activation_weight_flip_delayed <= 1'b0;
-            weight_register_valid          <= 1'b0;
+            weight_register_valid          <= '0;
             weight_register_row            <= '0;
             weight_register_data           <= '0;
+            stream_active                  <= '0;
+            stream_row                     <= '0;
+            stream_slot                    <= '0;
+            next_lane                      <= '0;
             instruction_done_out           <= 1'b0;
         end else begin
             instruction_done_out           <= 1'b0;
             activation_valid_delayed       <= UB_read_enable_out;
             activation_weight_flip_delayed <= window_position == 9'd0;
 
-            // weight row registered to line up with the UB read latency
-            weight_register_valid <= window_advance && weight_issue_now;
-            weight_register_row   <= weight_row_now;
-            for (int column = 0; column < ARRAY_SIZE; column++)
-                weight_register_data[column] <= tile_in[weight_row_now][8*column +: 8];
+            // weight rows registered to line up with the UB read latency
+            for (int k = 0; k < WEIGHT_LANES; k++) begin
+                weight_register_valid[k] <= lane_issue[k];
+                weight_register_row[k]   <= lane_row[k];
+                for (int column = 0; column < ARRAY_SIZE; column++)
+                    weight_register_data[k][column] <= slots_in[lane_slot[k]][lane_row[k]][8*column +: 8];
+                if (lane_issue[k]) begin
+                    stream_active[k] <= !lane_last[k];
+                    stream_row[k]    <= lane_row[k] + ROW_SELECT_WIDTH'(1);
+                    stream_slot[k]   <= lane_slot[k];
+                end
+            end
+            if (stream_start)
+                next_lane <= next_lane == LANE_WIDTH'(WEIGHT_LANES - 1) ? '0 : next_lane + LANE_WIDTH'(1);
 
             rows_in_flight <= rows_in_flight + 8'(tag_push_out) - 8'(row_written_in);
 
@@ -181,7 +238,7 @@ module matmul_engine #(
                             state <= S_DRAIN;
                     end
                 end
-                S_DRAIN: if (rows_in_flight == 8'd0) begin
+                S_DRAIN: if (rows_in_flight == 8'd0 && stream_active == '0) begin
                     instruction_done_out <= 1'b1;
                     state                <= S_IDLE;
                 end

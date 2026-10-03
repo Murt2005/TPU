@@ -6,7 +6,7 @@ import time
 
 INSN_LO, INSN_HI, DATA, OUT, STATUS, LEVELS, CTRL, ERR_SEQ = range(8)
 PERF_CYCLES, PERF_MM_BEATS, PERF_MM_WSTALL, PERF_MM_SYNC = range(8, 12)
-PROFILE_LEVEL, PROFILE_DATA = 12, 13
+PROFILE_LEVEL, PROFILE_DATA, BUILD = 12, 13, 14
 
 CTRL_RESET, CTRL_CLEAR_DONE, CTRL_CLEAR_PERF, CTRL_CLEAR_PROFILE = 1, 2, 4, 8
 
@@ -369,6 +369,10 @@ class IsaDevice:
         return {name: self.link.read32(reg) for name, reg in
                 (("cycles", PERF_CYCLES), ("mm_beats", PERF_MM_BEATS),
                  ("mm_wstall", PERF_MM_WSTALL), ("mm_sync", PERF_MM_SYNC))}
+
+    def weight_lanes(self):
+        """weight rows the build loads per cycle (BUILD register; a build without it: 1)"""
+        return (self.link.read32(BUILD) >> 16) or 1
 
     def profile_drain(self):
         """the profiler's events (128-bit ints, oldest first) and how many it has dropped"""

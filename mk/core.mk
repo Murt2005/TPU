@@ -5,7 +5,8 @@ WMEM_ROWS   ?= 8192
 UB_DEPTH    ?= 16384
 ACC_DEPTH   ?= 1024
 PARAM_DEPTH ?= 256
-RTL_SIM_DIR := $(SIM_DIR)/verilator/core_n$(N)
+LANES       ?= 2
+RTL_SIM_DIR := $(SIM_DIR)/verilator/core_n$(N)$(if $(filter 2,$(LANES)),,_l$(LANES))
 RTL_SIM     := $(RTL_SIM_DIR)/tb_isa
 
 # the reference model against independent references (tpu.golden, the host MNIST path)
@@ -18,12 +19,12 @@ rtl-sim: | $(SIM_DIR)
 	@$(VERILATOR) --cc --exe --build -j $(JOBS) -Wall --Mdir $(RTL_SIM_DIR) verilator.vlt \
 		--top-module tpu_top \
 		-GARRAY_SIZE=$(N) -GWMEM_ROWS=$(WMEM_ROWS) -GUB_DEPTH=$(UB_DEPTH) \
-		-GACC_DEPTH=$(ACC_DEPTH) -GPARAMETER_DEPTH=$(PARAM_DEPTH) \
+		-GACC_DEPTH=$(ACC_DEPTH) -GPARAMETER_DEPTH=$(PARAM_DEPTH) -GWEIGHT_LANES=$(LANES) \
 		-CFLAGS "-std=c++17 -DTB_N=$(N) -DTB_WMEM_ROWS=$(WMEM_ROWS) \
 		         -DTB_UB_DEPTH=$(UB_DEPTH) -DTB_ACC_DEPTH=$(ACC_DEPTH) \
 		         -DTB_PARAM_DEPTH=$(PARAM_DEPTH)" \
 		$(CORE_RTL) $(TEST_DIR)/verilator/tb-isa.cpp -o tb_isa > /dev/null
-	@echo "rtl-sim: $(RTL_SIM) (N=$(N))"
+	@echo "rtl-sim: $(RTL_SIM) (N=$(N), LANES=$(LANES))"
 
 # tb_isa with VCD tracing, for the cycle-by-cycle visualizer (software/viz)
 VIZ_SIM_DIR := $(SIM_DIR)/verilator/trace_n$(N)
@@ -34,7 +35,7 @@ viz-sim: | $(SIM_DIR)
 	@$(VERILATOR) --cc --exe --build -j $(JOBS) -Wall --trace --Mdir $(VIZ_SIM_DIR) verilator.vlt \
 		--top-module tpu_top \
 		-GARRAY_SIZE=$(N) -GWMEM_ROWS=$(WMEM_ROWS) -GUB_DEPTH=$(UB_DEPTH) \
-		-GACC_DEPTH=$(ACC_DEPTH) -GPARAMETER_DEPTH=$(PARAM_DEPTH) \
+		-GACC_DEPTH=$(ACC_DEPTH) -GPARAMETER_DEPTH=$(PARAM_DEPTH) -GWEIGHT_LANES=$(LANES) \
 		-CFLAGS "-std=c++17 -DTB_TRACE -DTB_N=$(N) -DTB_WMEM_ROWS=$(WMEM_ROWS) \
 		         -DTB_UB_DEPTH=$(UB_DEPTH) -DTB_ACC_DEPTH=$(ACC_DEPTH) \
 		         -DTB_PARAM_DEPTH=$(PARAM_DEPTH)" \
@@ -66,12 +67,12 @@ ST_SLOTS ?= 0
 
 selftest-rom:
 	@mkdir -p $(dir $(ST_HEX))
-	@python3 $(ST_DIR)/gen_selftest.py $(ST_HEX) --n $(N)
+	@python3 $(ST_DIR)/gen_selftest.py $(ST_HEX) --n $(N) --lanes $(LANES)
 
 selftest-sim: selftest-rom | $(SIM_DIR)
 	@mkdir -p $(dir $(ST_SIM))
 	@$(VERILATOR) --cc --exe --build -j $(JOBS) -Wall --Mdir $(dir $(ST_SIM)) verilator.vlt \
-		--top-module tpu_selftest -GARRAY_SIZE=$(N) -GROM_FILE='"$(abspath $(ST_HEX))"' \
+		--top-module tpu_selftest -GARRAY_SIZE=$(N) -GWEIGHT_LANES=$(LANES) -GROM_FILE='"$(abspath $(ST_HEX))"' \
 		-CFLAGS -std=c++17 $(CORE_RTL) $(HPS_DIR)/replay.sv $(HPS_DIR)/tpu-selftest.sv \
 		$(TEST_DIR)/verilator/tb-isa-selftest.cpp -o tb_isa_selftest > /dev/null
 	@$(ST_SIM) $(ST_SLOTS)

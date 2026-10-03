@@ -18,6 +18,7 @@ module tpu_core #(
     parameter int DATA_FIFO_DEPTH        = 1024,
     parameter int OUTPUT_FIFO_DEPTH      = 1024,
     parameter int QUEUE_DEPTH            = 8,
+    parameter int WEIGHT_LANES           = 2,              // weight rows into the array per cycle: tiles every max(m, N / this) cycles
     parameter longint DDR_BYTES          = 64'h4000_0000
 ) (
     input  logic        clk,
@@ -76,6 +77,9 @@ module tpu_core #(
     localparam int ACC_ADDRESS_WIDTH       = $clog2(ACC_DEPTH);
     localparam int PARAMETER_ADDRESS_WIDTH = $clog2(PARAMETER_DEPTH);
     localparam int ROW_SELECT_WIDTH        = $clog2(ARRAY_SIZE);
+    localparam int WEIGHT_SLOTS            = WEIGHT_LANES + 1;
+    localparam int SLOT_WIDTH              = WEIGHT_SLOTS > 2 ? $clog2(WEIGHT_SLOTS) : 1;
+    localparam int WMEM_GROUP_WIDTH        = $clog2(WMEM_ROWS / WEIGHT_LANES);   // WMEM holds WEIGHT_LANES rows a word
 
     // -- host FIFOs, with occupancy counts for LEVELS ------------------------
     logic        instruction_empty;
@@ -143,25 +147,31 @@ module tpu_core #(
             if (instruction_done[engine]) completed[16*engine +: 16] <= completed[16*engine +: 16] + 16'd1;
     end
 
-    // -- WMEM and the parameter tables (registered reads, so they map to block RAM)
-    logic [ARRAY_SIZE*8-1:0]  WMEM [WMEM_ROWS];
+    // -- WMEM and the parameter tables (registered reads, so they map to block RAM).
+    // WMEM is WEIGHT_LANES banks, row r in bank r % WEIGHT_LANES, so WT reads a group
+    // of rows a cycle; LD writes one row at a time
+    logic [ARRAY_SIZE*8-1:0]  WMEM [WEIGHT_LANES][WMEM_ROWS / WEIGHT_LANES];
     logic [ARRAY_SIZE*32-1:0] bias_table  [PARAMETER_DEPTH];
     logic [ARRAY_SIZE*32-1:0] quantization_table [PARAMETER_DEPTH];
 
     logic                               WMEM_write_enable, load_UB_write_enable, bias_write_enable, quantization_write_enable;
-    logic [WMEM_ADDRESS_WIDTH-1:0]      WMEM_write_address, WMEM_read_address;
+    logic [WMEM_ADDRESS_WIDTH-1:0]      WMEM_write_address;
+    logic [WMEM_GROUP_WIDTH-1:0]        WMEM_read_address;
     logic [UB_ADDRESS_WIDTH-1:0]        load_UB_write_address;
     logic [ARRAY_SIZE*8-1:0]            load_row_data;
     logic [PARAMETER_ADDRESS_WIDTH-1:0] parameter_write_address, parameter_read_address;
     logic [ARRAY_SIZE*32-1:0]           parameter_write_data;
-    logic [ARRAY_SIZE*8-1:0]            WMEM_read_data;
+    logic [WEIGHT_LANES*ARRAY_SIZE*8-1:0] WMEM_read_data;
     logic [ARRAY_SIZE*32-1:0]           bias_read_data, quantization_read_data;
 
     always_ff @(posedge clk) begin
-        if (WMEM_write_enable)  WMEM[WMEM_write_address]     <= load_row_data;
+        for (int bank = 0; bank < WEIGHT_LANES; bank++) begin
+            if (WMEM_write_enable && 32'(WMEM_write_address) % WEIGHT_LANES == bank)
+                WMEM[bank][WMEM_GROUP_WIDTH'(32'(WMEM_write_address) / WEIGHT_LANES)] <= load_row_data;
+            WMEM_read_data[ARRAY_SIZE*8*bank +: ARRAY_SIZE*8] <= WMEM[bank][WMEM_read_address];
+        end
         if (bias_write_enable)  bias_table[parameter_write_address]  <= parameter_write_data;
         if (quantization_write_enable) quantization_table[parameter_write_address] <= parameter_write_data;
-        WMEM_read_data         <= WMEM[WMEM_read_address];
         bias_read_data         <= bias_table[parameter_read_address];
         quantization_read_data <= quantization_table[parameter_read_address];
     end
@@ -179,23 +189,26 @@ module tpu_core #(
         .read_data_out(UB_read_data));
 
     // -- weight FIFO: WT fills, MM drains ------------------------------------------
-    logic                                     fill_ready, fill_slot_next, fill_advance, fill_write_enable, fill_slot;
+    logic                                     fill_ready, fill_advance, fill_write_enable;
+    logic [SLOT_WIDTH-1:0]                    fill_slot_next, fill_slot, drain_slot;
     logic [7:0]                               fill_row;
-    logic [ARRAY_SIZE*8-1:0]                  fill_data;
-    logic [ARRAY_SIZE-1:0] [ARRAY_SIZE*8-1:0] tile;
-    logic                                     tile_full, tile_take;
+    logic [WEIGHT_LANES*ARRAY_SIZE*8-1:0]     fill_data;
+    logic [WEIGHT_SLOTS-1:0][ARRAY_SIZE-1:0][ARRAY_SIZE*8-1:0] weight_slots;
+    logic [WEIGHT_SLOTS-1:0]                  slot_full;
+    logic                                     tile_take;
 
-    weight_fifo #(.ARRAY_SIZE(ARRAY_SIZE)) u_weight_fifo (
+    weight_fifo #(.ARRAY_SIZE(ARRAY_SIZE), .FILL_ROWS(WEIGHT_LANES), .SLOTS(WEIGHT_SLOTS)) u_weight_fifo (
         .clk(clk), .reset(reset),
         .fill_ready_out(fill_ready), .fill_slot_next_out(fill_slot_next), .fill_advance_in(fill_advance),
         .fill_write_enable_in(fill_write_enable), .fill_slot_in(fill_slot), .fill_row_in(fill_row), .fill_data_in(fill_data),
-        .tile_out(tile), .tile_full_out(tile_full), .tile_take_in(tile_take));
+        .tile_out(), .tile_full_out(), .tile_take_in(tile_take),
+        .slots_out(weight_slots), .slot_full_out(slot_full), .drain_slot_out(drain_slot));
 
     // -- UB rows -> systolic data setup -> mmu -> accumulators ----------------------
     logic                               activation_valid, activation_weight_flip;
-    logic                               weight_valid;
-    logic        [ROW_SELECT_WIDTH-1:0] weight_row_select;
-    logic signed [ARRAY_SIZE-1:0] [7:0] weight_data;
+    logic        [WEIGHT_LANES-1:0]                       weight_valid;
+    logic        [WEIGHT_LANES-1:0][ROW_SELECT_WIDTH-1:0] weight_row_select;
+    logic signed [WEIGHT_LANES-1:0][ARRAY_SIZE-1:0][7:0]  weight_data;
     logic                               tag_push, row_written;
     logic        [ACC_ADDRESS_WIDTH:0]  row_tag;
 
@@ -221,7 +234,7 @@ module tpu_core #(
             array_weight_flip[row] = skewed_row[row][8];
         end
 
-    mmu #(.ARRAY_SIZE(ARRAY_SIZE)) u_mmu (
+    mmu #(.ARRAY_SIZE(ARRAY_SIZE), .WEIGHT_LANES(WEIGHT_LANES)) u_mmu (
         .clk(clk), .reset(reset),
         .activation_in(array_activation), .weight_flip_in(array_weight_flip), .activation_valid_in(skewed_valid),
         .weight_valid_in(weight_valid), .weight_row_select_in(weight_row_select), .weight_in(weight_data),
@@ -253,7 +266,7 @@ module tpu_core #(
     // -- DDR3: WT's and LD's readers, ACT's writer, one master ------------------------
     logic                    weight_request_ready, weight_request, weight_row_valid, weight_row_pop;
     logic [31:0]             weight_request_address, weight_request_beats, weight_request_rows;
-    logic [ARRAY_SIZE*8-1:0] weight_row_data;
+    logic [WEIGHT_LANES*ARRAY_SIZE*8-1:0] weight_row_data;
     logic                    load_request_ready, load_request, load_row_valid, load_row_pop;
     logic [31:0]             load_request_address, load_request_beats, load_request_rows;
     logic [3:0]              load_request_skip;
@@ -269,7 +282,8 @@ module tpu_core #(
     logic [127:0] activate_memory_writedata;
     logic [15:0]  activate_memory_byteenable;
 
-    ddr_reader #(.ARRAY_SIZE(ARRAY_SIZE)) u_weight_reader (
+    // a "row" for WT is WEIGHT_LANES weight rows: one 16-byte beat at N = 8, lanes = 2
+    ddr_reader #(.ARRAY_SIZE(ARRAY_SIZE * WEIGHT_LANES)) u_weight_reader (
         .clk(clk), .reset(reset), .bus_reset(bus_reset),
         .request_ready_out(weight_request_ready), .request_valid_in(weight_request), .request_address_in(weight_request_address),
         .request_beats_in(weight_request_beats), .request_skip_in(4'd0), .request_rows_in(weight_request_rows),
@@ -325,7 +339,8 @@ module tpu_core #(
         .row_write_data_out(load_row_data), .bias_write_enable_out(bias_write_enable), .quantization_write_enable_out(quantization_write_enable),
         .parameter_write_address_out(parameter_write_address), .parameter_write_data_out(parameter_write_data), .idle_out(engine_idle[ENGINE_LOAD]));
 
-    weight_engine #(.ARRAY_SIZE(ARRAY_SIZE), .WMEM_ADDRESS_WIDTH(WMEM_ADDRESS_WIDTH)) u_weight_engine (
+    weight_engine #(.ARRAY_SIZE(ARRAY_SIZE), .WMEM_ADDRESS_WIDTH(WMEM_GROUP_WIDTH), .FILL_ROWS(WEIGHT_LANES),
+                    .SLOT_WIDTH(SLOT_WIDTH)) u_weight_engine (
         .clk(clk), .reset(reset),
         .queue_valid_in(!queue_empty[ENGINE_WEIGHT]), .queue_entry_in(queue_head[ENGINE_WEIGHT]), .queue_pop_out(queue_pop[ENGINE_WEIGHT]),
         .completed_in(completed), .instruction_done_out(instruction_done[ENGINE_WEIGHT]),
@@ -337,11 +352,12 @@ module tpu_core #(
         .fill_write_enable_out(fill_write_enable), .fill_slot_out(fill_slot), .fill_row_out(fill_row), .fill_data_out(fill_data),
         .blocked_out(engine_blocked[ENGINE_WEIGHT]), .idle_out(engine_idle[ENGINE_WEIGHT]));
 
-    matmul_engine #(.ARRAY_SIZE(ARRAY_SIZE), .UB_ADDRESS_WIDTH(UB_ADDRESS_WIDTH), .ACC_ADDRESS_WIDTH(ACC_ADDRESS_WIDTH)) u_matmul_engine (
+    matmul_engine #(.ARRAY_SIZE(ARRAY_SIZE), .UB_ADDRESS_WIDTH(UB_ADDRESS_WIDTH), .ACC_ADDRESS_WIDTH(ACC_ADDRESS_WIDTH),
+                    .WEIGHT_LANES(WEIGHT_LANES), .SLOTS(WEIGHT_SLOTS)) u_matmul_engine (
         .clk(clk), .reset(reset),
         .queue_valid_in(!queue_empty[ENGINE_MATMUL]), .queue_entry_in(queue_head[ENGINE_MATMUL]), .queue_pop_out(queue_pop[ENGINE_MATMUL]),
         .completed_in(completed), .instruction_done_out(instruction_done[ENGINE_MATMUL]),
-        .tile_in(tile), .tile_full_in(tile_full), .tile_take_out(tile_take),
+        .slots_in(weight_slots), .slot_full_in(slot_full), .drain_slot_in(drain_slot), .tile_take_out(tile_take),
         .UB_read_enable_out(matmul_UB_read_enable), .UB_read_address_out(matmul_UB_read_address), .activation_valid_out(activation_valid), .activation_weight_flip_out(activation_weight_flip),
         .weight_valid_out(weight_valid), .weight_row_select_out(weight_row_select), .weight_data_out(weight_data),
         .tag_push_out(tag_push), .tag_out(row_tag), .row_written_in(row_written),

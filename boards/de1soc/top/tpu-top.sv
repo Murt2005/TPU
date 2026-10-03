@@ -8,6 +8,7 @@ module tpu_top #(
     parameter int UB_DEPTH        = 16384,
     parameter int ACC_DEPTH       = 1024,
     parameter int PARAMETER_DEPTH = 256,
+    parameter int WEIGHT_LANES    = 2,
     parameter longint DDR_BYTES   = 64'h4000_0000
 ) (
     input  logic        clk,
@@ -72,10 +73,11 @@ module tpu_top #(
         .performance_cycles_in(performance_cycles), .performance_matmul_beats_in(performance_matmul_beats),
         .performance_matmul_weight_stalls_in(performance_matmul_weight_stalls), .performance_matmul_sync_stalls_in(performance_matmul_sync_stalls),
         .clear_profile_out(clear_profile), .profile_read_out(profile_read), .profile_word_in(profile_word),
-        .profile_level_in(profile_level), .profile_dropped_in(profile_dropped));
+        .profile_level_in(profile_level), .profile_dropped_in(profile_dropped),
+        .build_in({16'(WEIGHT_LANES), 16'(ARRAY_SIZE)}));
 
     tpu_core #(.ARRAY_SIZE(ARRAY_SIZE), .WMEM_ROWS(WMEM_ROWS), .UB_DEPTH(UB_DEPTH), .ACC_DEPTH(ACC_DEPTH),
-               .PARAMETER_DEPTH(PARAMETER_DEPTH), .DDR_BYTES(DDR_BYTES)) u_core (
+               .PARAMETER_DEPTH(PARAMETER_DEPTH), .DDR_BYTES(DDR_BYTES), .WEIGHT_LANES(WEIGHT_LANES)) u_core (
         .clk(clk), .reset(rst | core_reset), .bus_reset(rst),
         .instruction_push_in(instruction_push), .instruction_word_in(instruction_word), .instruction_full_out(instruction_full),
         .data_push_in(data_push), .data_word_in(data_word), .data_full_out(data_full),

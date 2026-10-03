@@ -55,6 +55,8 @@ def main(binary):
     link = open_link(binary)
     dev = IsaDevice(link)
     n = link.n
+    lanes = dev.weight_lanes()
+    window = n // lanes                       # a tile's shortest window: max(m, N / lanes) cycles
     print(f"tb_isa: N={n} WMEM={link.wmem_rows} UB={link.ub_depth} ACC={link.acc_depth} "
           f"PARAM={link.param_depth}")
 
@@ -434,12 +436,12 @@ def main(binary):
             dev.reset()
             dev.run([isa.set_wbase(0), isa.matmul(m, kt, 1, 0, 0), isa.signal(2)])
             runs.append(dev.perf())
-        period = max(m, n)
+        period = max(m, window)
         dc = runs[1]["cycles"] - runs[0]["cycles"]
         counts_ok = (runs[1]["mm_wstall"] == runs[0]["mm_wstall"]
                      and runs[1]["mm_beats"] == 2 * tiles * m)
         if link.cycle_exact:
-            check(f"one tile per max(m, N) = {period} cycles in steady state, m={m}: "
+            check(f"one tile per max(m, N/{lanes}) = {period} cycles in steady state, m={m}: "
                   f"{tiles} more tiles take {dc} cycles, no extra WSTALL",
                   abs(dc - tiles * period) <= 8 and counts_ok, f"{runs}")
         else:   # the rate itself is checked on the board by the self-test ROM
@@ -457,11 +459,11 @@ def main(binary):
                 dev.run([isa.set_wbase(link.ddr_window[0] // (n * n)), isa.matmul(m, kt, 1, 0, 0, wsrc=1),
                          isa.signal(2)])
                 runs.append(dev.perf())
-            period = max(m, n)
+            period = max(m, window)
             dc = runs[1]["cycles"] - runs[0]["cycles"]
             counts_ok = (runs[1]["mm_wstall"] == runs[0]["mm_wstall"]
                          and runs[1]["mm_beats"] == 2 * tiles * m)
-            check(f"weights from DDR3: one tile per max(m, N) = {period} cycles, m={m}: "
+            check(f"weights from DDR3: one tile per max(m, N/{lanes}) = {period} cycles, m={m}: "
                   f"{tiles} more tiles take {dc} cycles, no extra WSTALL",
                   abs(dc - tiles * period) <= 8 and counts_ok, f"{runs}")
         else:
@@ -537,13 +539,21 @@ def main(binary):
                 for s, e in routed)
     check(f"profiler: {len(rec.events)} events, none dropped, every one of {len(routed)} engine instructions "
           f"dispatched, popped and completed in order", rec.dropped == 0 and whole)
-    mm_blocked = sum(s.blocked.get(2, 0) for s in spans)
-    want = sum(p["mm_wstall"] + p["mm_sync"] for p in perfs)
-    check(f"profiler: MM's blocked cycles ({mm_blocked}) == PERF_MM_WSTALL + PERF_MM_SYNC ({want})", mm_blocked == want)
+    stalls = sum(s.blocked.get(2, 0) for s in spans if s.name == "MATMUL")
+    want = sum(p["mm_wstall"] for p in perfs)
+    check(f"profiler: MATMULs' blocked cycles on MM ({stalls}) == PERF_MM_WSTALL ({want})", stalls == want)
+    waited = sum(s.waited.get(2, 0) for s in spans if s.name == "WAIT")
+    want = sum(p["mm_sync"] for p in perfs)
+    check(f"profiler: MM's WAITs from the timestamps ({waited}) == PERF_MM_SYNC ({want})", waited == want)
+    counted = [s.blocked[2] for s in spans if s.name == "WAIT" and 2 in s.blocked]
+    exact = [s.blocked[2] == s.waited[2] for s in spans if s.name == "WAIT" and 2 in s.blocked
+             and s.blocked[2] < profile.BLOCKED_MAX]
+    check(f"profiler: each unsaturated MM WAIT's blocked count equals its wait from the timestamps "
+          f"({sum(exact)} of {len(counted)})", all(exact))
     mm_spans = [s for s in spans if s.name == "MATMUL"]
-    short = [(s.end[2] - s.start[2], f["k_tiles"] * f["n_blocks"] * max(m, n))
-             for s, (m, f) in zip(mm_spans, matmuls) if s.end[2] - s.start[2] < f["k_tiles"] * f["n_blocks"] * max(m, n)]
-    check(f"profiler: every MATMUL on MM spans at least its tiles x max(m, N) cycles", not short, f"{short}")
+    short = [(s.end[2] - s.start[2], f["k_tiles"] * f["n_blocks"] * max(m, window))
+             for s, (m, f) in zip(mm_spans, matmuls) if s.end[2] - s.start[2] < f["k_tiles"] * f["n_blocks"] * max(m, window)]
+    check(f"profiler: every MATMUL on MM spans at least its tiles x max(m, N/lanes) cycles", not short, f"{short}")
 
     # -- status ---------------------------------------------------------------
     link.read32(OUT)

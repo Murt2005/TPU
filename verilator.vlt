@@ -10,6 +10,8 @@ lint_off -rule IMPORTSTAR -file "*rtl/tpu-core.sv"
 
 // FIFO full flags the accumulator never needs (depths are sized so they can't fill)
 lint_off -rule PINCONNECTEMPTY -file "*rtl/datapath/accumulator.sv"
+// the core's MM reads every weight-FIFO slot; the single-tile view is for the block test
+lint_off -rule PINCONNECTEMPTY -file "*rtl/tpu-core.sv" -match "*'tile_*"
 
 // each engine decodes only the instruction fields it executes
 lint_off -rule UNUSEDSIGNAL -file "*rtl/control/*-engine.sv" -match "*'instruction'*"

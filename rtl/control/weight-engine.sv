@@ -3,7 +3,7 @@
 import tpu_pkg::*;
 
 // WT engine: SET_WBASE, and the weight half of MATMUL: tiles into the weight FIFO's
-// slots, one row per cycle, back to back across tiles while a slot is free. rows
+// slots, FILL_ROWS rows per cycle, back to back across tiles while a slot is free. rows
 // come from WMEM, or with wsrc=1 from DDR3 through ddr_reader: tile t is the N*N
 // bytes at DDR3 byte t*N*N.
 // two stages. fetch pops the queue, settles WAITs and WBASE, and hands a wsrc=1
@@ -14,8 +14,10 @@ import tpu_pkg::*;
 // MATMUL before it. a WAIT still holds back the reads of every MATMUL after it
 module weight_engine #(
     parameter int ARRAY_SIZE         = 8,
-    parameter int WMEM_ADDRESS_WIDTH = 13,
-    parameter int JOBS               = 4
+    parameter int WMEM_ADDRESS_WIDTH = 13,          // of a group of FILL_ROWS rows
+    parameter int JOBS               = 4,
+    parameter int FILL_ROWS          = 1,           // rows a cycle: one WMEM word, one ddr_reader row
+    parameter int SLOT_WIDTH         = 1
 ) (
     input  logic                          clk,
     input  logic                          reset,
@@ -27,7 +29,7 @@ module weight_engine #(
     output logic                          instruction_done_out,
 
     output logic [WMEM_ADDRESS_WIDTH-1:0] WMEM_read_address_out,
-    input  logic [ARRAY_SIZE*8-1:0]       WMEM_read_data_in,     // one cycle after the address
+    input  logic [FILL_ROWS*ARRAY_SIZE*8-1:0] WMEM_read_data_in, // one cycle after the address
 
     input  logic                          DDR_request_ready_in,  // ddr_reader
     output logic                          DDR_request_out,
@@ -35,16 +37,16 @@ module weight_engine #(
     output logic [31:0]                   DDR_request_beats_out,
     output logic [31:0]                   DDR_request_rows_out,
     input  logic                          DDR_row_valid_in,
-    input  logic [ARRAY_SIZE*8-1:0]       DDR_row_data_in,
+    input  logic [FILL_ROWS*ARRAY_SIZE*8-1:0] DDR_row_data_in,  // FILL_ROWS weight rows
     output logic                          DDR_row_pop_out,
 
     input  logic                          fill_ready_in,         // weight_fifo
-    input  logic                          fill_slot_next_in,
+    input  logic [SLOT_WIDTH-1:0]         fill_slot_next_in,
     output logic                          fill_advance_out,
     output logic                          fill_write_enable_out,
-    output logic                          fill_slot_out,
+    output logic [SLOT_WIDTH-1:0]         fill_slot_out,
     output logic [7:0]                    fill_row_out,
-    output logic [ARRAY_SIZE*8-1:0]       fill_data_out,
+    output logic [FILL_ROWS*ARRAY_SIZE*8-1:0] fill_data_out,
 
     output logic                          blocked_out,           // has work it can't advance (profiler)
     output logic                          idle_out
@@ -74,7 +76,7 @@ module weight_engine #(
     assign DDR_request_out         = queue_pop_out && from_DDR_now;
     assign DDR_request_address_out = weight_base * 32'(TILE_BYTES);
     assign DDR_request_beats_out   = 32'(matmul_tile_count) * 32'(TILE_BYTES / 16);
-    assign DDR_request_rows_out    = 32'(matmul_tile_count) * 32'(ARRAY_SIZE);
+    assign DDR_request_rows_out    = 32'(matmul_tile_count) * 32'(ARRAY_SIZE / FILL_ROWS);
 
     always_ff @(posedge clk) begin
         if (reset)
@@ -97,23 +99,25 @@ module weight_engine #(
     logic [31:0] tiles_left;                                // tiles still to issue
     logic [31:0] tile_index;
     logic [7:0]  row_in_tile;
-    logic        read_pending, read_slot, read_is_last_row;
+    logic        read_pending, read_is_last_row;
+    logic [SLOT_WIDTH-1:0] read_slot;
     logic [7:0]  read_row;
     logic        from_DDR, read_from_DDR;                    // this MATMUL's source; the pending read's
-    logic [ARRAY_SIZE*8-1:0] DDR_row;
+    logic [FILL_ROWS*ARRAY_SIZE*8-1:0] DDR_row;
+    localparam logic [7:0] LAST_GROUP = 8'(ARRAY_SIZE - FILL_ROWS);
 
     logic issuing_read;
     assign issuing_read = tiles_left != 0 && fill_ready_in && (!from_DDR || DDR_row_valid_in);
     assign job_pop      = !jobs_empty && tiles_left == 0 && !read_pending;
 
     assign DDR_row_pop_out       = issuing_read && from_DDR;
-    assign fill_advance_out      = issuing_read && row_in_tile == 8'(ARRAY_SIZE - 1);
+    assign fill_advance_out      = issuing_read && row_in_tile == LAST_GROUP;
     assign fill_write_enable_out = read_pending;
     assign fill_slot_out         = read_slot;
     assign fill_row_out          = read_row;
     assign fill_data_out         = read_from_DDR ? DDR_row : WMEM_read_data_in;
 
-    assign WMEM_read_address_out = WMEM_ADDRESS_WIDTH'(tile_index * ARRAY_SIZE + 32'(row_in_tile));
+    assign WMEM_read_address_out = WMEM_ADDRESS_WIDTH'((tile_index * ARRAY_SIZE + 32'(row_in_tile)) / FILL_ROWS);
     assign idle_out              = !queue_valid_in && jobs_empty && tiles_left == 0 && !read_pending;
     // a WAIT (or the DDR3 reader) holding fetch, or a free slot waiting on DDR3 rows; a full
     // tile buffer is MM's pace, not a stall
@@ -126,7 +130,7 @@ module weight_engine #(
             tile_index           <= '0;
             row_in_tile          <= '0;
             read_pending         <= 1'b0;
-            read_slot            <= 1'b0;
+            read_slot            <= '0;
             read_is_last_row     <= 1'b0;
             read_row             <= '0;
             from_DDR             <= 1'b0;
@@ -153,18 +157,18 @@ module weight_engine #(
             if (DDR_row_pop_out) DDR_row <= DDR_row_data_in;
             read_slot        <= fill_slot_next_in;
             read_row         <= row_in_tile;
-            read_is_last_row <= issuing_read && row_in_tile == 8'(ARRAY_SIZE - 1) && tiles_left == 32'd1;
+            read_is_last_row <= issuing_read && row_in_tile == LAST_GROUP && tiles_left == 32'd1;
             if (issuing_read) begin
-                if (row_in_tile == 8'(ARRAY_SIZE - 1)) begin
+                if (row_in_tile == LAST_GROUP) begin
                     row_in_tile <= '0;
                     tile_index  <= tile_index + 32'd1;
                     tiles_left  <= tiles_left - 32'd1;
                 end else begin
-                    row_in_tile <= row_in_tile + 8'd1;
+                    row_in_tile <= row_in_tile + 8'(FILL_ROWS);
                 end
             end
 
-            if (read_pending && read_row == 8'(ARRAY_SIZE - 1) && read_is_last_row)
+            if (read_pending && read_row == LAST_GROUP && read_is_last_row)
                 instruction_done_out <= 1'b1;
         end
     end

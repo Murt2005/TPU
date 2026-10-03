@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """replay's ROM: the core's tests as a register transcript, every
-expected word from the reference model. usage: gen_selftest.py [out.hex] [--n 8]"""
+expected word from the reference model. usage: gen_selftest.py [out.hex] [--n 8] [--lanes 2]"""
 import argparse
 import sys
 from pathlib import Path
@@ -76,7 +76,7 @@ class Transcript:
         self._e(OP_RD, LEVELS, DATA_DEPTH << 10 | INSN_DEPTH)
 
 
-def build(n):
+def build(n, lanes=2):
     t = Transcript(n)
     rng = np.random.default_rng(2026)
 
@@ -137,7 +137,7 @@ def build(n):
         t.perf("MNIST 8 images")
 
     # steady-state rate: kt and 2kt tiles of one MATMUL; the extra tiles must cost
-    # exactly tiles * max(m, N) cycles (+-1: WAIT_DONE polls every 2 cycles), no WSTALL
+    # exactly tiles * max(m, N / lanes) cycles (+-1: WAIT_DONE polls every 2 cycles), no WSTALL
     tiles = 8
     for j, m in enumerate((1, n, 2 * n + 3)):
         t.mark(0x50 + j, f"tile rate, m={m}: {tiles} vs {2 * tiles} tiles")
@@ -151,7 +151,7 @@ def build(n):
             t.run([isa.set_wbase(0), isa.matmul(m, kt, 1, 0, 0), isa.signal(2)], [])
             runs.append(t.perf(f"m={m}, {kt} tiles"))
         (c1, b1, s1), (c2, b2, s2) = runs
-        t.check(c2, c1, tiles * max(m, n), tol=1)
+        t.check(c2, c1, tiles * max(m, n // lanes), tol=1)
         t.check(s2, s1, 0)
         t.check(b1, b1, tiles * m)
         t.check(b2, b2, 2 * tiles * m)
@@ -176,8 +176,9 @@ def main():
     ap.add_argument("out", nargs="?", default=str(Path(__file__).with_name("isa_selftest.hex")))
     ap.add_argument("--n", type=int, default=8)
     ap.add_argument("--depth", type=int, default=16384)
+    ap.add_argument("--lanes", type=int, default=2, help="the build's WEIGHT_LANES")
     a = ap.parse_args()
-    t = build(a.n)
+    t = build(a.n, a.lanes)
     if len(t.entries) > a.depth:
         sys.exit(f"transcript is {len(t.entries)} entries, ROM holds {a.depth}")
     with open(a.out, "w") as f:

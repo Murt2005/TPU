@@ -1,6 +1,6 @@
 `timescale 1ns / 1ps
 
-// instruction-stream host bridge: 14-register Avalon-MM slave, read latency 1,
+// instruction-stream host bridge: 15-register Avalon-MM slave, read latency 1,
 // waitrequest only on writes into a full FIFO
 module host_bridge (
     input  logic        clk,
@@ -43,7 +43,8 @@ module host_bridge (
     output logic        profile_read_out,
     input  logic [31:0] profile_word_in,
     input  logic [15:0] profile_level_in,
-    input  logic [15:0] profile_dropped_in
+    input  logic [15:0] profile_dropped_in,
+    input  logic [31:0] build_in                             // {weight lanes, N}: constant
 );
 
     localparam logic [3:0] REGISTER_INSTRUCTION_LOW  = 4'd0;
@@ -60,6 +61,7 @@ module host_bridge (
     localparam logic [3:0] REGISTER_SYNC_STALLS      = 4'd11;
     localparam logic [3:0] REGISTER_PROFILE_LEVEL    = 4'd12;
     localparam logic [3:0] REGISTER_PROFILE_DATA     = 4'd13;
+    localparam logic [3:0] REGISTER_BUILD            = 4'd14;
 
     logic [31:0] instruction_low;
     logic        underflow;
@@ -105,6 +107,7 @@ module host_bridge (
                     REGISTER_SYNC_STALLS:    avs_readdata <= performance_matmul_sync_stalls_in;
                     REGISTER_PROFILE_LEVEL:  avs_readdata <= {profile_dropped_in, profile_level_in};
                     REGISTER_PROFILE_DATA:   avs_readdata <= profile_word_in;
+                    REGISTER_BUILD:          avs_readdata <= build_in;
                     default:                 avs_readdata <= 32'd0;
                 endcase
             end

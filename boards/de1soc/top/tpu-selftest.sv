@@ -8,6 +8,7 @@
 module tpu_selftest #(
     parameter int ARRAY_SIZE = 8,
     parameter int ROM_DEPTH  = 16384,
+    parameter int WEIGHT_LANES = 2,
     parameter     ROM_FILE   = "isa_selftest.hex"
 ) (
     input  logic       CLOCK_50,
@@ -43,7 +44,7 @@ module tpu_selftest #(
     logic        avs_read, avs_write, avs_waitrequest;
     logic [31:0] avs_readdata, avs_writedata;
 
-    tpu_top #(.ARRAY_SIZE(ARRAY_SIZE)) u_tpu (
+    tpu_top #(.ARRAY_SIZE(ARRAY_SIZE), .WEIGHT_LANES(WEIGHT_LANES)) u_tpu (
         .clk(clk), .reset_n(!run_reset),
         .avs_address(avs_address), .avs_read(avs_read), .avs_readdata(avs_readdata),
         .avs_write(avs_write), .avs_writedata(avs_writedata), .avs_waitrequest(avs_waitrequest),
