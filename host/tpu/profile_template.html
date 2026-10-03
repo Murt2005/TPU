@@ -103,7 +103,7 @@ td .meter{display:inline-block;height:8px;border-radius:2px;background:var(--mm)
     <div><h2>Engines</h2><div class="tbox"><table id="teng"></table></div></div>
     <div><h2>Longest programs</h2><div class="tbox scrolly"><table id="tprog"></table></div></div>
   </div>
-  <p class="note">Scroll on the timeline to zoom at the cursor, drag to pan, double-click to see the whole run; click a table row to zoom there. Bars thinner than a pixel merge into per-pixel occupancy. An outlined box is a WAIT: the engine idles until the engines it names have finished. The amber strip on a solid bar is time the engine stalled inside that instruction, such as a MATMUL's weight stalls.</p>
+  <p class="note">Scroll on the timeline to zoom at the cursor, drag to pan, double-click to see the whole run; click a table row to zoom there. Bars thinner than a pixel merge into per-pixel occupancy. A WAIT draws nothing: the engine idles until the engines it names have finished, and hovering the gap shows which WAIT it is. The amber strip on a solid bar is time the engine stalled inside that instruction, such as a MATMUL's weight stalls.</p>
 </section>
 </div>
 <div class="tip" id="tip" hidden></div>
@@ -152,7 +152,7 @@ $('chips').innerHTML=h; $('srcnote').textContent=D.source||''; document.title=D.
 
 // ---- legend ----
 $('legend').innerHTML=[['var(--host)','host: core idle between programs'],['var(--ld)','LD'],['var(--wt)','WT'],['var(--act)','ACT'],['var(--sync)','stalled inside an instruction']]
-  .map(([c,l])=>`<span><i style="background:${c}"></i>${l}</span>`).join('')+`<span><i style="border:1.5px solid var(--sync);background:none"></i>WAIT: waiting for another engine</span>`+KINDS.map(k=>`<span><i style="background:${KCOL(k)}"></i>MM: ${esc(k)}</span>`).join('');
+  .map(([c,l])=>`<span><i style="background:${c}"></i>${l}</span>`).join('')+`<span>empty: idle, or a WAIT for another engine (hover for it)</span>`+KINDS.map(k=>`<span><i style="background:${KCOL(k)}"></i>MM: ${esc(k)}</span>`).join('');
 
 // ---- the timeline ----
 const LANES=['host','dispatch','LD','WT','MM','ACT'], LH=36, TOP=34, LX=76;
@@ -179,8 +179,7 @@ function drawTL(){
   hitList=[];
   const bins=LANES.map(()=>new Float32Array(Math.ceil(w)+2)), binsB=LANES.map(()=>new Float32Array(Math.ceil(w)+2)), binCol=LANES.map(()=>Array(Math.ceil(w)+2).fill(null));
   const put=(lane,s,t,color,blocked,hit,outline)=>{ if(t<v0||s>v1) return; const X0=sx(s), X1=sx(t), y=TOP+lane*LH+5, hh=LH-10;
-    if(outline){ const a=Math.max(LX,X0), b=Math.min(W-12,X1); if(b-a>=1.5){ x.strokeStyle=col(color); x.lineWidth=1; x.strokeRect(a+.5,y+.5,b-a-1,hh-1); }
-      if(hit) hitList.push([lane,a-1,b+1,hit]); return; }
+    if(outline){ if(hit) hitList.push([lane,Math.max(LX,X0)-1,Math.min(W-12,X1)+1,hit]); return; }   // a WAIT: drawn as nothing, still hoverable
     if(X1-X0>=1.5){ x.fillStyle=col(color); x.globalAlpha=.85; x.fillRect(Math.max(LX,X0),y,Math.min(W-12,X1)-Math.max(LX,X0),hh); x.globalAlpha=1;
       if(blocked>0){ const bw=Math.min(X1-X0,blocked*w/(v1-v0)); x.fillStyle=col('var(--sync)'); x.fillRect(Math.max(LX,X1-bw),y,Math.min(W-12,X1)-Math.max(LX,X1-bw),hh*.35); }
       if(hit) hitList.push([lane,Math.max(LX,X0),Math.min(W-12,X1),hit]); }
