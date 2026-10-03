@@ -44,6 +44,7 @@ module load_engine #(
     output logic [PARAMETER_ADDRESS_WIDTH-1:0] parameter_write_address_out,
     output logic [ARRAY_SIZE*32-1:0]           parameter_write_data_out,
 
+    output logic                               blocked_out,                   // has work it can't advance (profiler)
     output logic                               idle_out
 );
 
@@ -114,6 +115,8 @@ module load_engine #(
     assign queue_pop_out  = queue_valid_in && !busy && (opcode != OPCODE_WAIT || wait_satisfied)
                             && (opcode != OPCODE_RD_DDR_UB || DDR_request_ready_in);
     assign idle_out       = !busy && !queue_valid_in;
+    // a WAIT not yet satisfied, the DDR3 reader not ready, or mid-instruction with no word or row to take
+    assign blocked_out    = (queue_valid_in && !busy && !queue_pop_out) || (busy && !data_pop_out && !DDR_row_pop_out);
 
     always_ff @(posedge clk) begin
         if (reset) begin

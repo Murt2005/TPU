@@ -46,6 +46,7 @@ module weight_engine #(
     output logic [7:0]                    fill_row_out,
     output logic [ARRAY_SIZE*8-1:0]       fill_data_out,
 
+    output logic                          blocked_out,           // has work it can't advance (profiler)
     output logic                          idle_out
 );
 
@@ -114,6 +115,10 @@ module weight_engine #(
 
     assign WMEM_read_address_out = WMEM_ADDRESS_WIDTH'(tile_index * ARRAY_SIZE + 32'(row_in_tile));
     assign idle_out              = !queue_valid_in && jobs_empty && tiles_left == 0 && !read_pending;
+    // a WAIT (or the DDR3 reader) holding fetch, or a free slot waiting on DDR3 rows; a full
+    // tile buffer is MM's pace, not a stall
+    assign blocked_out           = (queue_valid_in && !jobs_full && !queue_pop_out)
+                                   || (tiles_left != 0 && fill_ready_in && from_DDR && !DDR_row_valid_in);
 
     always_ff @(posedge clk) begin
         if (reset) begin

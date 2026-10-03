@@ -41,6 +41,7 @@ module matmul_engine #(
     output logic                       performance_beat_out,
     output logic                       performance_weight_stall_out,
     output logic                       performance_sync_stall_out,
+    output logic                       blocked_out,                  // has work it can't advance (profiler)
     output logic                       idle_out
 );
 
@@ -103,6 +104,7 @@ module matmul_engine #(
     assign performance_beat_out         = UB_read_enable_out;
     assign performance_weight_stall_out = state == S_RUN && window_frozen;
     assign performance_sync_stall_out   = queue_valid_in && state == S_IDLE && opcode == OPCODE_WAIT && !wait_satisfied;
+    assign blocked_out                  = performance_weight_stall_out || performance_sync_stall_out;
 
     always_ff @(posedge clk) begin
         if (reset) begin

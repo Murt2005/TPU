@@ -55,6 +55,9 @@ module tpu_top #(
     logic [15:0] tag;
     logic [9:0]  instruction_free;
     logic [10:0] data_free, output_count;
+    logic        clear_profile, profile_read;
+    logic [31:0] profile_word;
+    logic [15:0] profile_level, profile_dropped;
 
     host_bridge u_bridge (
         .clk(clk), .reset(rst),
@@ -67,7 +70,9 @@ module tpu_top #(
         .done_in(done), .error_in(error), .error_code_in(error_code), .error_sequence_in(error_sequence), .tag_in(tag), .idle_in(idle),
         .instruction_free_in(instruction_free), .data_free_in(data_free), .output_count_in(output_count),
         .performance_cycles_in(performance_cycles), .performance_matmul_beats_in(performance_matmul_beats),
-        .performance_matmul_weight_stalls_in(performance_matmul_weight_stalls), .performance_matmul_sync_stalls_in(performance_matmul_sync_stalls));
+        .performance_matmul_weight_stalls_in(performance_matmul_weight_stalls), .performance_matmul_sync_stalls_in(performance_matmul_sync_stalls),
+        .clear_profile_out(clear_profile), .profile_read_out(profile_read), .profile_word_in(profile_word),
+        .profile_level_in(profile_level), .profile_dropped_in(profile_dropped));
 
     tpu_core #(.ARRAY_SIZE(ARRAY_SIZE), .WMEM_ROWS(WMEM_ROWS), .UB_DEPTH(UB_DEPTH), .ACC_DEPTH(ACC_DEPTH),
                .PARAMETER_DEPTH(PARAMETER_DEPTH), .DDR_BYTES(DDR_BYTES)) u_core (
@@ -80,6 +85,8 @@ module tpu_top #(
         .instruction_free_out(instruction_free), .data_free_out(data_free), .output_count_out(output_count),
         .performance_cycles_out(performance_cycles), .performance_matmul_beats_out(performance_matmul_beats),
         .performance_matmul_weight_stalls_out(performance_matmul_weight_stalls), .performance_matmul_sync_stalls_out(performance_matmul_sync_stalls),
+        .clear_profile_in(clear_profile), .profile_read_in(profile_read), .profile_word_out(profile_word),
+        .profile_level_out(profile_level), .profile_dropped_out(profile_dropped),
         .memory_address_out(avm_address), .memory_read_out(avm_read), .memory_write_out(avm_write),
         .memory_burstcount_out(avm_burstcount), .memory_writedata_out(avm_writedata), .memory_byteenable_out(avm_byteenable),
         .memory_waitrequest_in(avm_waitrequest), .memory_readdata_in(avm_readdata), .memory_readdatavalid_in(avm_readdatavalid));

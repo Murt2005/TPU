@@ -13,7 +13,7 @@ set_module_property EDITABLE false
 
 set rtl ../../../../rtl
 set files [list \
-    $rtl/common/tpu-pkg.sv $rtl/common/fifo.sv $rtl/common/block-fifo.sv $rtl/datapath/systolic-data-setup.sv $rtl/datapath/pe.sv $rtl/datapath/mmu.sv $rtl/datapath/weight-fifo.sv $rtl/datapath/unified-buffer.sv $rtl/datapath/accumulator.sv $rtl/datapath/bias.sv $rtl/datapath/activation.sv $rtl/control/dispatch.sv $rtl/control/load-engine.sv $rtl/control/weight-engine.sv $rtl/control/matmul-engine.sv $rtl/control/activate-engine.sv $rtl/control/ddr-reader.sv $rtl/control/ddr-writer.sv $rtl/control/memory-arbiter.sv $rtl/tpu-core.sv $rtl/peripherals/host-bridge.sv \
+    $rtl/common/tpu-pkg.sv $rtl/common/fifo.sv $rtl/common/block-fifo.sv $rtl/common/profiler.sv $rtl/datapath/systolic-data-setup.sv $rtl/datapath/pe.sv $rtl/datapath/mmu.sv $rtl/datapath/weight-fifo.sv $rtl/datapath/unified-buffer.sv $rtl/datapath/accumulator.sv $rtl/datapath/bias.sv $rtl/datapath/activation.sv $rtl/control/dispatch.sv $rtl/control/load-engine.sv $rtl/control/weight-engine.sv $rtl/control/matmul-engine.sv $rtl/control/activate-engine.sv $rtl/control/ddr-reader.sv $rtl/control/ddr-writer.sv $rtl/control/memory-arbiter.sv $rtl/tpu-core.sv $rtl/peripherals/host-bridge.sv \
     ../../top/tpu-top.sv]
 
 add_fileset QUARTUS_SYNTH QUARTUS_SYNTH "" ""

@@ -6,8 +6,9 @@ import time
 
 INSN_LO, INSN_HI, DATA, OUT, STATUS, LEVELS, CTRL, ERR_SEQ = range(8)
 PERF_CYCLES, PERF_MM_BEATS, PERF_MM_WSTALL, PERF_MM_SYNC = range(8, 12)
+PROFILE_LEVEL, PROFILE_DATA = 12, 13
 
-CTRL_RESET, CTRL_CLEAR_DONE, CTRL_CLEAR_PERF = 1, 2, 4
+CTRL_RESET, CTRL_CLEAR_DONE, CTRL_CLEAR_PERF, CTRL_CLEAR_PROFILE = 1, 2, 4, 8
 
 
 class IsaSimLink:
@@ -339,6 +340,16 @@ class IsaDevice:
                 (("cycles", PERF_CYCLES), ("mm_beats", PERF_MM_BEATS),
                  ("mm_wstall", PERF_MM_WSTALL), ("mm_sync", PERF_MM_SYNC))}
 
+    def profile_drain(self):
+        """the profiler's events (128-bit ints, oldest first) and how many it has dropped"""
+        v = self.link.read32(PROFILE_LEVEL)
+        level, dropped = v & 0xFFFF, v >> 16
+        events = []
+        for _ in range(level):
+            w = [self.link.read32(PROFILE_DATA) for _ in range(4)]
+            events.append(w[0] | w[1] << 32 | w[2] << 64 | w[3] << 96)
+        return events, dropped
+
     def push_program(self, words):
         for w in words:
             self.link.write32(INSN_LO, w & 0xFFFFFFFF)
@@ -352,11 +363,12 @@ class IsaDevice:
         n = self.levels()["out_count"]
         return [self.link.read32(OUT) for _ in range(n)]
 
-    def run(self, program, data=(), timeout=60.0, advance=0):
+    def run(self, program, data=(), timeout=60.0, advance=0, poll=None):
         """push a program ending in SIGNAL plus its data, then collect output
         until DONE. the instruction FIFO must hold the whole program (512).
         advance: clocks to run a simulated core between status polls, for long
-        programs (it overshoots DONE, so cycle counts include up to that much)"""
+        programs (it overshoots DONE, so cycle counts include up to that much).
+        poll: called between status reads (the profiler drains there)"""
         if len(program) > 512:
             raise ValueError("phase 1 driver: program must fit the 512-entry instruction FIFO")
         self.link.write32(CTRL, CTRL_CLEAR_DONE)
@@ -366,6 +378,8 @@ class IsaDevice:
         t0 = time.time()
         while True:
             out += self.drain()
+            if poll:
+                poll()
             if advance:
                 self.link.advance(advance)
             st = self.status()

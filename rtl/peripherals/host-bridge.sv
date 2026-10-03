@@ -1,6 +1,6 @@
 `timescale 1ns / 1ps
 
-// instruction-stream host bridge: 12-register Avalon-MM slave, read latency 1,
+// instruction-stream host bridge: 14-register Avalon-MM slave, read latency 1,
 // waitrequest only on writes into a full FIFO
 module host_bridge (
     input  logic        clk,
@@ -38,7 +38,12 @@ module host_bridge (
     input  logic [31:0] performance_cycles_in,
     input  logic [31:0] performance_matmul_beats_in,
     input  logic [31:0] performance_matmul_weight_stalls_in,
-    input  logic [31:0] performance_matmul_sync_stalls_in
+    input  logic [31:0] performance_matmul_sync_stalls_in,
+    output logic        clear_profile_out,
+    output logic        profile_read_out,
+    input  logic [31:0] profile_word_in,
+    input  logic [15:0] profile_level_in,
+    input  logic [15:0] profile_dropped_in
 );
 
     localparam logic [3:0] REGISTER_INSTRUCTION_LOW  = 4'd0;
@@ -53,6 +58,8 @@ module host_bridge (
     localparam logic [3:0] REGISTER_MATMUL_BEATS     = 4'd9;
     localparam logic [3:0] REGISTER_WEIGHT_STALLS    = 4'd10;
     localparam logic [3:0] REGISTER_SYNC_STALLS      = 4'd11;
+    localparam logic [3:0] REGISTER_PROFILE_LEVEL    = 4'd12;
+    localparam logic [3:0] REGISTER_PROFILE_DATA     = 4'd13;
 
     logic [31:0] instruction_low;
     logic        underflow;
@@ -71,6 +78,8 @@ module host_bridge (
     assign core_reset_out        = write_accepted && avs_address == REGISTER_CONTROL && avs_writedata[0];
     assign clear_done_out        = write_accepted && avs_address == REGISTER_CONTROL && avs_writedata[1];
     assign clear_performance_out = write_accepted && avs_address == REGISTER_CONTROL && avs_writedata[2];
+    assign clear_profile_out     = write_accepted && avs_address == REGISTER_CONTROL && avs_writedata[3];
+    assign profile_read_out      = avs_read && avs_address == REGISTER_PROFILE_DATA;
 
     always_ff @(posedge clk) begin
         if (reset) begin
@@ -94,6 +103,8 @@ module host_bridge (
                     REGISTER_MATMUL_BEATS:   avs_readdata <= performance_matmul_beats_in;
                     REGISTER_WEIGHT_STALLS:  avs_readdata <= performance_matmul_weight_stalls_in;
                     REGISTER_SYNC_STALLS:    avs_readdata <= performance_matmul_sync_stalls_in;
+                    REGISTER_PROFILE_LEVEL:  avs_readdata <= {profile_dropped_in, profile_level_in};
+                    REGISTER_PROFILE_DATA:   avs_readdata <= profile_word_in;
                     default:                 avs_readdata <= 32'd0;
                 endcase
             end

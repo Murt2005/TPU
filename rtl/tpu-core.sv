@@ -49,6 +49,11 @@ module tpu_core #(
     output logic [31:0] performance_matmul_beats_out,
     output logic [31:0] performance_matmul_weight_stalls_out,
     output logic [31:0] performance_matmul_sync_stalls_out,
+    input  logic        clear_profile_in,                   // the profiler (rtl/common/profiler.sv)
+    input  logic        profile_read_in,
+    output logic [31:0] profile_word_out,
+    output logic [15:0] profile_level_out,
+    output logic [15:0] profile_dropped_out,
 
     // DDR3: 128-bit beats, byte addresses
     output logic [31:0]  memory_address_out,
@@ -305,7 +310,7 @@ module tpu_core #(
         .memory_readdatavalid_in(memory_readdatavalid_in));
 
     // -- engines -------------------------------------------------------------------
-    logic [3:0] engine_idle;
+    logic [3:0] engine_idle, engine_blocked;
     logic       performance_beat, performance_weight_stall, performance_sync_stall;
 
     load_engine #(.ARRAY_SIZE(ARRAY_SIZE), .WMEM_ADDRESS_WIDTH(WMEM_ADDRESS_WIDTH), .UB_ADDRESS_WIDTH(UB_ADDRESS_WIDTH), .PARAMETER_ADDRESS_WIDTH(PARAMETER_ADDRESS_WIDTH)) u_load_engine (
@@ -315,7 +320,7 @@ module tpu_core #(
         .data_valid_in(!data_empty), .UB_write_blocked_in(activate_UB_write_enable), .data_in(data_head), .data_pop_out(data_pop),
         .DDR_request_ready_in(load_request_ready), .DDR_request_out(load_request), .DDR_request_address_out(load_request_address),
         .DDR_request_beats_out(load_request_beats), .DDR_request_skip_out(load_request_skip), .DDR_request_rows_out(load_request_rows),
-        .DDR_row_valid_in(load_row_valid), .DDR_row_data_in(load_DDR_row), .DDR_row_pop_out(load_row_pop),
+        .DDR_row_valid_in(load_row_valid), .DDR_row_data_in(load_DDR_row), .DDR_row_pop_out(load_row_pop), .blocked_out(engine_blocked[ENGINE_LOAD]),
         .WMEM_write_enable_out(WMEM_write_enable), .WMEM_write_address_out(WMEM_write_address), .UB_write_enable_out(load_UB_write_enable), .UB_write_address_out(load_UB_write_address),
         .row_write_data_out(load_row_data), .bias_write_enable_out(bias_write_enable), .quantization_write_enable_out(quantization_write_enable),
         .parameter_write_address_out(parameter_write_address), .parameter_write_data_out(parameter_write_data), .idle_out(engine_idle[ENGINE_LOAD]));
@@ -330,7 +335,7 @@ module tpu_core #(
         .DDR_row_valid_in(weight_row_valid), .DDR_row_data_in(weight_row_data), .DDR_row_pop_out(weight_row_pop),
         .fill_ready_in(fill_ready), .fill_slot_next_in(fill_slot_next), .fill_advance_out(fill_advance),
         .fill_write_enable_out(fill_write_enable), .fill_slot_out(fill_slot), .fill_row_out(fill_row), .fill_data_out(fill_data),
-        .idle_out(engine_idle[ENGINE_WEIGHT]));
+        .blocked_out(engine_blocked[ENGINE_WEIGHT]), .idle_out(engine_idle[ENGINE_WEIGHT]));
 
     matmul_engine #(.ARRAY_SIZE(ARRAY_SIZE), .UB_ADDRESS_WIDTH(UB_ADDRESS_WIDTH), .ACC_ADDRESS_WIDTH(ACC_ADDRESS_WIDTH)) u_matmul_engine (
         .clk(clk), .reset(reset),
@@ -341,7 +346,7 @@ module tpu_core #(
         .weight_valid_out(weight_valid), .weight_row_select_out(weight_row_select), .weight_data_out(weight_data),
         .tag_push_out(tag_push), .tag_out(row_tag), .row_written_in(row_written),
         .performance_beat_out(performance_beat), .performance_weight_stall_out(performance_weight_stall), .performance_sync_stall_out(performance_sync_stall),
-        .idle_out(engine_idle[ENGINE_MATMUL]));
+        .blocked_out(engine_blocked[ENGINE_MATMUL]), .idle_out(engine_idle[ENGINE_MATMUL]));
 
     activate_engine #(.ARRAY_SIZE(ARRAY_SIZE), .UB_ADDRESS_WIDTH(UB_ADDRESS_WIDTH), .ACC_ADDRESS_WIDTH(ACC_ADDRESS_WIDTH), .PARAMETER_ADDRESS_WIDTH(PARAMETER_ADDRESS_WIDTH)) u_activate_engine (
         .clk(clk), .reset(reset),
@@ -353,9 +358,21 @@ module tpu_core #(
         .UB_write_enable_out(activate_UB_write_enable), .UB_write_address_out(activate_UB_write_address), .UB_write_data_out(activate_UB_write_data),
         .UB_read_enable_out(activate_UB_read_enable), .UB_read_address_out(activate_UB_read_address), .UB_read_blocked_in(matmul_UB_read_enable), .UB_read_data_in(UB_read_data),
         .output_push_out(output_push), .output_word_out(activate_output_word), .output_full_in(output_full),
-        .DDR_word_valid_out(DDR_word_valid), .DDR_word_address_out(DDR_word_address), .DDR_full_in(DDR_writer_full), .DDR_idle_in(DDR_writer_idle), .idle_out(engine_idle[ENGINE_ACTIVATE]));
+        .DDR_word_valid_out(DDR_word_valid), .DDR_word_address_out(DDR_word_address), .DDR_full_in(DDR_writer_full), .DDR_idle_in(DDR_writer_idle),
+        .blocked_out(engine_blocked[ENGINE_ACTIVATE]), .idle_out(engine_idle[ENGINE_ACTIVATE]));
 
     assign idle_out = instruction_empty && engine_idle == 4'hF && !fence_pending;
+
+    // -- profiler: every dispatch, pop and completion, timestamped ----------------
+    logic [3:0] queue_popped;
+    always_comb
+        for (int engine = 0; engine < 4; engine++)
+            queue_popped[engine] = queue_pop[engine] && !queue_empty[engine];
+
+    profiler u_profiler (
+        .clk(clk), .reset(bus_reset), .clear_in(clear_profile_in),
+        .dispatch_in(instruction_pop), .pop_in(queue_popped), .done_in(instruction_done), .blocked_in(engine_blocked),
+        .read_in(profile_read_in), .word_out(profile_word_out), .level_out(profile_level_out), .dropped_out(profile_dropped_out));
 
     // -- performance counters --------------------------------------------------
     always_ff @(posedge clk) begin

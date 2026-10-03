@@ -208,7 +208,7 @@ through it, so weights, which are reused many times, are never re-fetched betwee
 uses. Its blocks, as this design builds them:
 
 - **Host interface.** In the TPUv1, PCIe to a host and DDR3 for weights. Here
-  it's a 12-register Avalon-MM bridge on the DE1-SoC's lightweight HPS→FPGA
+  it's a 14-register Avalon-MM bridge on the DE1-SoC's lightweight HPS→FPGA
   bridge. The board's ARM pushes 64-bit instructions and 32-bit data words into
   FIFOs and reads results from an out FIFO.
 - **Instructions and the dispatcher.** 64-bit instructions (`WR_WMEM`, `WR_UB`,
@@ -250,7 +250,7 @@ data layouts.
 TPU/
 ├── rtl/
 │   ├── core/          the TPU: dispatch + four engines, and the TPUv1 datapath files
-│   └── peripherals/   host_bridge: the 12-register Avalon-MM host interface
+│   └── peripherals/   host_bridge: the 14-register Avalon-MM host interface
 ├── boards/de1soc/     top/ (tpu_top, the self-test, hex_display) · fpga/ (selftest/, hps/
 │                      = Terasic's GHRD + the TPU) · sw/ (ARM: isa_mmio, setbaud)
 ├── host/              the `tpu` Python package: encoder, reference model, compiler,

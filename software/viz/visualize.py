@@ -129,13 +129,14 @@ def main():
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--trace-load", action="store_true", help="trace the weight load too")
     ap.add_argument("--max-cycles", type=int, default=20000)
+    ap.add_argument("--profile", metavar="PAGE", help="record the instruction profiler and write its page")
     a = ap.parse_args()
     build = {"mlp": build_mlp, "matmul": build_matmul, "mnist": build_mnist}[a.workload](a)
     link = a.link or str(viz_sim_path(a.n))
     if not a.link and not Path(link).exists():
         sys.exit(f"{link} not found: build it with `make viz-sim N={a.n}`")
     r = run_workload(build, link, visualize_internals=a.visualize_internals, out=a.out,
-                     viz_sim=a.viz_sim, max_cycles=a.max_cycles)
+                     viz_sim=a.viz_sim, max_cycles=a.max_cycles, profile_out=a.profile)
     ok = r["match"] and r.get("sim_match", True)
     sys.exit(0 if ok else 1)
 

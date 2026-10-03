@@ -16,7 +16,7 @@ build flows are in [`de1soc.md`](de1soc.md), and measured numbers in
  │                                          0xFF200000          0xFF210100   │
  │  FPGA (Cyclone V)                             │                   │       │
  │   ┌───────────── tpu_top ─────────────────────▼───┐          hex_pio      │
- │   │ host_bridge (12 registers, Avalon-MM slave)    │          → HEX0..5    │
+ │   │ host_bridge (14 registers, Avalon-MM slave)    │          → HEX0..5    │
  │   │      │ instructions, data in, results out      │                       │
  │   │ ┌────▼──────────────── tpu_core ─────────────┐ │                       │
  │   │ │ dispatch → LD │ WT │ MM │ ACT  (control)   │ │                       │
@@ -187,7 +187,7 @@ packing ([`backlog.md`](backlog.md)).
 
 | File | Does |
 |---|---|
-| `rtl/peripherals/host-bridge.sv` | the 12-register Avalon-MM slave ([`isa.md`](isa.md) §4): fixed read latency 1, `waitrequest` only on writes into a full FIFO, single clock domain |
+| `rtl/peripherals/host-bridge.sv` | the 14-register Avalon-MM slave ([`isa.md`](isa.md) §4): fixed read latency 1, `waitrequest` only on writes into a full FIFO, single clock domain |
 | `boards/de1soc/top/tpu-top.sv` | `host_bridge` + `tpu_core` + a 256-cycle power-on reset, so the core doesn't depend on `reset_n` pulsing; exports the core's DDR3 master (`avm_*`) |
 | `boards/de1soc/top/tpu-selftest.sv`, `replay.sv` | the FPGA-only self-test: a ROM-fed Avalon master replays a register transcript into `tpu_top` and reports on LEDs/HEX |
 | `boards/de1soc/top/hex-display.sv` | the HEX decoder behind the GHRD's `hex_pio` (5-bit code per digit) |

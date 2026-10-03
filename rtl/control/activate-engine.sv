@@ -52,6 +52,7 @@ module activate_engine #(
     input  logic                               DDR_full_in,
     input  logic                               DDR_idle_in,
 
+    output logic                               blocked_out,                // has work it can't advance (profiler)
     output logic                               idle_out
 );
 
@@ -104,6 +105,10 @@ module activate_engine #(
     assign wait_satisfied = wait_counts_reached(instruction[51:48], wait_snapshot, completed_in);
     assign queue_pop_out  = queue_valid_in && state == S_IDLE && (opcode != OPCODE_WAIT || wait_satisfied);
     assign idle_out       = state == S_IDLE && !queue_valid_in;
+    // a WAIT not yet satisfied, MM holding the ACC or UB read port, a full out FIFO or DDR3 writer
+    assign blocked_out    = (queue_valid_in && state == S_IDLE && !queue_pop_out)
+                            || (state == S_READ && (is_read_UB ? UB_read_blocked_in : ACC_read_blocked_in))
+                            || (state == S_EMIT && !word_emitted) || (state == S_DRAIN && !DDR_idle_in);
 
     always_ff @(posedge clk) begin
         if (reset) begin

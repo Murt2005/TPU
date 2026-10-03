@@ -16,7 +16,7 @@ TEST_DIR   := tests
 SIM_DIR    := sim
 
 # the core, in compile order: tpu_pkg first (everything imports it)
-CORE_RTL := $(COMMON_DIR)/tpu-pkg.sv $(COMMON_DIR)/fifo.sv $(COMMON_DIR)/block-fifo.sv \
+CORE_RTL := $(COMMON_DIR)/tpu-pkg.sv $(COMMON_DIR)/fifo.sv $(COMMON_DIR)/block-fifo.sv $(COMMON_DIR)/profiler.sv \
             $(DATAPATH_DIR)/systolic-data-setup.sv $(DATAPATH_DIR)/pe.sv $(DATAPATH_DIR)/mmu.sv \
             $(DATAPATH_DIR)/weight-fifo.sv $(DATAPATH_DIR)/unified-buffer.sv $(DATAPATH_DIR)/accumulator.sv \
             $(DATAPATH_DIR)/bias.sv $(DATAPATH_DIR)/activation.sv \

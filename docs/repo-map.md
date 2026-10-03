@@ -30,6 +30,7 @@ Everything under `rtl/` is board-neutral. See
 | `tpu-core.sv` | host FIFOs, dispatcher, engine queues, WMEM and the parameter tables, the datapath wiring, status and perf counters |
 | `common/tpu-pkg.sv` | opcodes, engines, error codes, legal-bit masks, `wait_counts_reached` (mirrors `host/tpu/isa.py`) |
 | `common/fifo.sv` | the generic show-ahead FIFO (host FIFOs, engine queues, the accumulator's column and tag FIFOs) |
+| `common/profiler.sv` | the instruction profiler: a timestamped event per dispatch, pop and completion, read through `PROFILE_DATA` |
 | `control/dispatch.sv` | in-order decode, range checks, routing, `WAIT` snapshots, the `SIGNAL` fence |
 | `control/load-engine.sv`, `weight-engine.sv`, `matmul-engine.sv`, `activate-engine.sv` | the four engines (control only) |
 | `datapath/unified-buffer.sv` | the UB memory and its port priorities |
@@ -38,7 +39,7 @@ Everything under `rtl/` is board-neutral. See
 | `datapath/weight-fifo.sv` | the two-slot tile buffer between WMEM and the array |
 | `datapath/accumulator.sv` | column de-skew, row tags, the ACC memory, read-modify-write |
 | `datapath/bias.sv`, `activation.sv` | bias add; ReLU and the requantizer |
-| `peripherals/host-bridge.sv` | the 12-register Avalon-MM slave the host drives ([`isa.md`](isa.md) §4) |
+| `peripherals/host-bridge.sv` | the 14-register Avalon-MM slave the host drives ([`isa.md`](isa.md) §4) |
 
 ## `boards/de1soc/` — the board
 
@@ -67,6 +68,8 @@ Everything under `rtl/` is board-neutral. See
 | `tpu/golden.py` | reference numerics: exact int matmul, wrap, requant |
 | `tpu/trace.py` | a `make viz-sim` VCD → one record per clock cycle (the signals the page draws) |
 | `tpu/viz.py` | `run_workload(..., visualize_internals=True)`: run, check against the model, trace in Verilator, write the page |
+| `tpu/profile.py` | the profiler's events → instruction spans; the profile file format, `Recorder`, the page's data |
+| `tpu/profile_template.html` | the profile page: zoomable engine timeline, breakdowns per matrix, mark and engine |
 | `tpu/viz_template.html` | the cycle-by-cycle page: timeline, the whole core at one clock edge, events, program |
 
 ## `tests/`
@@ -102,6 +105,7 @@ See [`mnist.md`](mnist.md).
 | Path | What |
 |---|---|
 | `visualize.py` | workloads (`mlp`, `matmul`, `mnist`) with `--visualize-internals`; `make viz` |
+| `profile_page.py` | a profile file (`qwen-run --profile`, `Recorder.save`) → the profile page |
 | `README.md` | how to run it, what the page shows, sim vs board |
 
 ## `docs/`

@@ -7,6 +7,7 @@
  *            [--programs FILE]                every program core_program builds (tests)
  *            [--log FILE]                     every matmul's int8 input and int32 output
  *            [--prefill M]                    prompt rows per pass (default 16)
+ *            [--profile FILE]                 the core's instruction profile (host/tpu/profile.py; sim, mmio)
  *            [--serve]                        answer requests on stdin (chat.py), weights loaded once
  *
  * --serve speaks lines: in "G <max tokens> <id>,<id>,..." (a fresh context each
@@ -153,7 +154,7 @@ static void serve(model *md, int prefill) {
 static void usage(void) {
     fprintf(stderr, "usage: qwen-run --tables DIR --core ref:IMAGE|sim:TB_ISA[:IMAGE]|mmio[:IMAGE]|null "
                     "[--check ref:IMAGE] [--generate N --ids a,b,c] [--score FILE --window L] [--programs FILE] "
-                    "[--log FILE] [--prefill M]\n");
+                    "[--log FILE] [--prefill M] [--profile FILE]\n");
     exit(2);
 }
 
@@ -188,7 +189,7 @@ static void dump_programs(const model *md, const char *path, uint32_t base, uint
 
 int main(int argc, char **argv) {
     const char *dir = NULL, *core_spec = NULL, *ids_text = NULL, *score_path = NULL, *programs = NULL, *log_path = NULL;
-    const char *check_spec = NULL;
+    const char *check_spec = NULL, *profile_path = NULL;
     int generate = 0, window = 256, prefill = 16, serving = 0;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--tables") && i + 1 < argc) dir = argv[++i];
@@ -201,6 +202,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--log") && i + 1 < argc) log_path = argv[++i];
         else if (!strcmp(argv[i], "--prefill") && i + 1 < argc) prefill = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--check") && i + 1 < argc) check_spec = argv[++i];
+        else if (!strcmp(argv[i], "--profile") && i + 1 < argc) profile_path = argv[++i];
         else if (!strcmp(argv[i], "--serve")) serving = 1;
         else usage();
     }
@@ -242,6 +244,11 @@ int main(int argc, char **argv) {
         if (load) fprintf(stderr, "%s into DDR3 at %#x: %.1f s\n", load, base, now_seconds() - t0);
     }
     if (!c) usage();
+    core *profiled = c;
+    if (profile_path && core_profile_open(c, profile_path)) {
+        fprintf(stderr, "--profile: needs --core sim or mmio, and a writable %s\n", profile_path);
+        return 1;
+    }
     uint64_t compared = 0, mismatched = 0;
     if (check_spec) {
         if (strncmp(check_spec, "ref:", 4)) usage();
@@ -268,6 +275,9 @@ int main(int argc, char **argv) {
         for (int at = 0; at < n; at += prefill) {
             int m = n - at < prefill ? n - at : prefill;
             md.host_seconds = md.core_seconds = 0;
+            char mark[64];
+            snprintf(mark, sizeof mark, "prompt %d-%d", at, at + m - 1);
+            core_profile_mark(profiled, mark, now_seconds());
             model_forward(&md, ids + at, m, logits);
             if (at + m == n) {
                 fprintf(stderr, "\n[prompt %d tokens: %.2f s; host %.2f s, core %.2f s]\n", n, now_seconds() - t0,
@@ -279,6 +289,8 @@ int main(int argc, char **argv) {
                     printf("[%d]", next);
                     md.host_seconds = md.core_seconds = 0;
                     double t1 = now_seconds();
+                    snprintf(mark, sizeof mark, "token %d", step);
+                    core_profile_mark(profiled, mark, t1);
                     model_forward(&md, &next, 1, logits);
                     fprintf(stderr, " (%.2f s: host %.2f, core %.2f)", now_seconds() - t1, md.host_seconds,
                             md.core_seconds);
@@ -319,6 +331,8 @@ int main(int argc, char **argv) {
         printf("perplexity %.4f over %llu tokens\n", exp(nll / scored), (unsigned long long)scored);
     }
     if (md.log) fclose(md.log);
+    core_profile_mark(profiled, "end", now_seconds());
+    core_profile_close(profiled);
     fprintf(stderr, "core: %llu programs, %llu tiles, %llu MM beats, %llu weight-stall cycles\n",
             (unsigned long long)c->programs, (unsigned long long)c->tiles, (unsigned long long)c->beats,
             (unsigned long long)c->weight_stalls);

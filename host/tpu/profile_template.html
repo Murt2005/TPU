@@ -1,0 +1,258 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>__TITLE__</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..100,600..800&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+/* Layout: summary chips, then a full-width bench with the zoomable engine timeline and its overview strip, then the breakdown tables. Tokens from the TPU walkthrough pages and the cycle-by-cycle viewer. */
+:root{
+  --bg:#eef1f4; --panel:#ffffff; --ink:#16212b; --muted:#5a6773; --line:#cdd5dc; --soft:#f5f7f9;
+  --accent:#0b6e99; --accent-soft:#d9ecf5; --pulse:#a85c06; --pulse-soft:#f7e6cf;
+  --good:#2f7d4f; --good-soft:#dcefe3; --warn:#9a6b00; --warn-soft:#f6ecd0; --bad:#b8475a; --bad-soft:#f6dfe3;
+  --ld:#23806e; --wt:#7b4fb0; --mm:#1f66a8; --act:#b8601a; --host:#8a96a1; --sync:#c79a2b;
+  --k1:#1f66a8; --k2:#0d9488; --k3:#7c3aed; --k4:#db2777; --k5:#a16207; --k6:#4338ca;
+  --f-display:"Archivo","Arial Narrow",Arial,sans-serif;
+  --f-body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0e1419; --panel:#151d24; --ink:#dde6ee; --muted:#8c9aa7; --line:#2b3743; --soft:#111920;
+  --accent:#5ab5e2; --accent-soft:#16384a; --pulse:#efa446; --pulse-soft:#3d2c14;
+  --good:#6cc392; --good-soft:#173527; --warn:#e2b24f; --warn-soft:#3a2f12; --bad:#e57a8b; --bad-soft:#3e1f26;
+  --ld:#4cc2a8; --wt:#b48ce6; --mm:#5ea8ea; --act:#e8954f; --host:#6d7a86; --sync:#e2b24f;
+  --k1:#5ea8ea; --k2:#2dd4bf; --k3:#a78bfa; --k4:#f472b6; --k5:#d4a24c; --k6:#818cf8; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0e1419; --panel:#151d24; --ink:#dde6ee; --muted:#8c9aa7; --line:#2b3743; --soft:#111920;
+  --accent:#5ab5e2; --accent-soft:#16384a; --pulse:#efa446; --pulse-soft:#3d2c14;
+  --good:#6cc392; --good-soft:#173527; --warn:#e2b24f; --warn-soft:#3a2f12; --bad:#e57a8b; --bad-soft:#3e1f26;
+  --ld:#4cc2a8; --wt:#b48ce6; --mm:#5ea8ea; --act:#e8954f; --host:#6d7a86; --sync:#e2b24f;
+  --k1:#5ea8ea; --k2:#2dd4bf; --k3:#a78bfa; --k4:#f472b6; --k5:#d4a24c; --k6:#818cf8; color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 var(--f-body);padding-inline:16px;padding-block:0 64px}
+.wrap{max-width:1100px;margin:0 auto}
+h1,h2{font-family:var(--f-display);font-stretch:80%;line-height:1.1;text-wrap:balance;margin:0}
+h1{font-size:clamp(2rem,5vw,3.1rem);font-weight:800;letter-spacing:-.01em}
+h2{font-size:1.5rem;font-weight:700}
+.eyebrow{font:500 .75rem/1.2 var(--f-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+header{padding-block:36px 18px;border-bottom:2px solid var(--ink);display:grid;gap:12px}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{font:500 .8rem var(--f-mono);border:1px solid var(--line);background:var(--panel);padding:3px 8px;border-radius:3px}
+.chip b{color:var(--accent);font-weight:600}
+.chip.no{border-color:var(--bad);background:var(--bad-soft)} .chip.no b{color:var(--bad)}
+.note{font-size:.88rem;color:var(--muted);max-width:78ch}
+button{font:500 .8rem var(--f-mono);color:var(--ink);background:var(--soft);border:1px solid var(--line);border-radius:3px;padding:4px 8px;cursor:pointer}
+button:hover{border-color:var(--accent)}
+button:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+select{font:500 .8rem var(--f-mono);color:var(--ink);background:var(--soft);border:1px solid var(--line);border-radius:3px;padding:3px 6px;max-width:100%}
+.bench{background:var(--panel);border:1px solid var(--line);border-radius:4px;margin:20px 0}
+.bench.wide{width:min(1460px,calc(100vw - 32px));margin-left:calc(50% - min(730px,50vw - 16px))}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px 14px;border-bottom:1px solid var(--line)}
+.bar .lbl{font:.72rem var(--f-mono);color:var(--muted)}
+.range{font:600 .9rem var(--f-mono);font-variant-numeric:tabular-nums;margin-left:auto}
+.cv{position:relative;padding:6px 0 0}
+canvas{display:block;width:100%}
+#tl{cursor:grab;height:300px} #tl.drag{cursor:grabbing}
+#ov{height:46px;cursor:pointer;border-top:1px solid var(--line)}
+.tip{position:fixed;pointer-events:none;background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:7px 9px;font:12px/1.45 var(--f-mono);color:var(--ink);box-shadow:0 2px 10px rgba(0,0,0,.15);max-width:440px;z-index:5}
+.legend{display:flex;flex-wrap:wrap;gap:6px 14px;padding:8px 14px;font:.78rem var(--f-mono);color:var(--muted);border-top:1px solid var(--line)}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.legend i{display:inline-block;width:14px;height:11px;border-radius:2px}
+section{padding-block:22px 4px}
+.tables{display:grid;grid-template-columns:minmax(0,1fr);gap:20px}
+.tbox{overflow-x:auto;background:var(--panel);border:1px solid var(--line);border-radius:4px}
+table{border-collapse:collapse;width:100%;font:12.5px var(--f-mono);font-variant-numeric:tabular-nums}
+th,td{padding:5px 9px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+th{font:600 .68rem var(--f-mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);background:var(--soft);position:sticky;top:0}
+tbody tr{cursor:pointer} tbody tr:hover td{background:var(--accent-soft)}
+td .meter{display:inline-block;height:8px;border-radius:2px;background:var(--mm);vertical-align:middle;margin-right:6px;opacity:.75}
+.scrolly{max-height:420px;overflow:auto}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+<div class="wrap">
+<header>
+  <div class="eyebrow" id="eyebrow"></div>
+  <h1 id="title"></h1>
+  <div class="chips" id="chips"></div>
+  <p class="note" id="srcnote"></p>
+</header>
+</div>
+
+<div class="bench wide" id="bench" tabindex="0">
+  <div class="bar">
+    <button id="all">Whole run</button>
+    <label class="lbl" for="markSel">mark</label><select id="markSel"></select>
+    <label class="lbl" for="progSel">program</label><select id="progSel"></select>
+    <button id="zin" aria-label="Zoom in">+</button><button id="zout" aria-label="Zoom out">−</button>
+    <span class="range" id="range"></span>
+  </div>
+  <div class="cv"><canvas id="tl" aria-label="Engine timeline: host, dispatch, LD, WT, MM and ACT lanes. Scroll to zoom, drag to pan, hover for an instruction."></canvas></div>
+  <canvas id="ov" aria-label="Overview of the whole run; click to centre the view there."></canvas>
+  <div class="legend" id="legend"></div>
+</div>
+
+<div class="wrap">
+<section>
+  <div class="eyebrow">Where the cycles go</div>
+  <div class="tables">
+    <div><h2>By matrix</h2><p class="note">Every program for that matrix, summed. MM efficiency is the ideal (tiles × max(m, N) plus one N-cycle preload per MATMUL) over the cycles MM held each MATMUL. Host gap is the time before the program's first dispatch with the core idle: the ARM's own work and its pushes.</p><div class="tbox"><table id="tmat"></table></div></div>
+    <div id="markbox"><h2>By mark</h2><p class="note">Marks are what the host was doing (a prompt chunk, a decoded token). Wall time is the ARM's clock between marks; core time is the core's cycles at 50 MHz.</p><div class="tbox scrolly"><table id="tmark"></table></div></div>
+    <div><h2>Engines</h2><div class="tbox"><table id="teng"></table></div></div>
+    <div><h2>Longest programs</h2><div class="tbox scrolly"><table id="tprog"></table></div></div>
+  </div>
+  <p class="note">Scroll on the timeline to zoom at the cursor, drag to pan, double-click to see the whole run; click a table row to zoom there. Bars thinner than a pixel merge into per-pixel occupancy. The amber part of a bar is the time that engine was blocked before completing it: a WAIT's is the wait itself, a MATMUL's its weight stalls.</p>
+</section>
+</div>
+<div class="tip" id="tip" hidden></div>
+
+<script type="application/json" id="data">__DATA__</script>
+<script>
+(function(){
+const D=JSON.parse(document.getElementById('data').textContent);
+const $=id=>document.getElementById(id);
+const N=D.N, R=D.rows, P=D.programs, OPS=D.ops, HZ=50e6;
+const ENG=['LD','WT','MM','ACT'];
+const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const nf=v=>Math.round(v).toLocaleString('en-US');
+const pct=(a,b)=>b?(100*a/b).toFixed(1)+'%':'—';
+const fmtT=c=>{const s=c/HZ; return s>=1?s.toFixed(3)+' s':s>=1e-3?(s*1e3).toFixed(2)+' ms':(s*1e6).toFixed(1)+' µs';};
+const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;');
+// matrix kind from a label like "layer3.qkv m=1 from 0"
+const kindOf=l=>{const n=l.split(' ')[0]; const d=n.indexOf('.'); return d>=0?n.slice(d+1):n;};
+const KINDS=[...new Set(P.map(p=>kindOf(p.label)))];
+const KCOL=k=>`var(--k${(KINDS.indexOf(k)%6)+1})`;
+const progKind=P.map(p=>kindOf(p.label));
+const op=i=>OPS[i];
+
+// ---- per program: host gap before it (core idle from the previous program's end) ----
+P.forEach((p,i)=>{ const prev=i?P[i-1].end:null; p.gap=(p.start!=null&&prev!=null)?Math.max(0,p.start-prev):0; });
+const hostBars=P.filter(p=>p.gap>0).map((p,i)=>[p.start-p.gap,p.start,P.indexOf(p)]);
+
+// ---- engine stats ----
+const eng=ENG.map(()=>({busy:0,blocked:0,count:0}));
+const progStats=P.map(()=>({mm:0,mmBlocked:0,ld:0,act:0,wt:0,sync:0}));
+R.forEach(([e,p,i,o,s,t,b])=>{ eng[e].count++; eng[e].blocked+=b; if(op(o)!=='WAIT') eng[e].busy+=t-s; const ps=progStats[p];
+  if(op(o)==='MATMUL'&&e===2){ps.mm+=t-s; ps.mmBlocked+=b;} if(op(o)==='WAIT') ps.sync+=b; if(e===0&&op(o)!=='WAIT') ps.ld+=t-s; if(e===3&&op(o)!=='WAIT') ps.act+=t-s; if(e===1&&op(o)==='MATMUL') ps.wt+=t-s; });
+const T0=0, T1=Math.max(1,D.end);
+const totalGap=P.reduce((a,p)=>a+p.gap,0);
+
+// ---- header ----
+$('eyebrow').textContent=`TPU · instruction profile · ${D.source_short||''}`;
+$('title').textContent=D.title;
+const tilesAll=P.reduce((a,p)=>a+p.tiles,0), idealAll=P.reduce((a,p)=>a+p.ideal,0);
+const mmAll=progStats.reduce((a,p)=>a+p.mm,0);
+let ch=[[nf(T1),' cycles ('+fmtT(T1)+' at 50 MHz)'],[nf(P.length),' programs'],[nf(R.length),' engine instructions'],[nf(tilesAll),' tiles'],
+  [pct(eng[2].busy,T1),' MM busy'],[pct(idealAll,mmAll),' MM efficiency'],[pct(totalGap,T1),' core idle between programs']];
+let h=ch.map(([b,s])=>`<span class="chip"><b>${b}</b>${s}</span>`).join('');
+if(D.dropped||D.missing) h+=`<span class="chip no"><b>incomplete</b> ${D.dropped} events dropped, ${D.missing} instructions without a completion</span>`;
+$('chips').innerHTML=h; $('srcnote').textContent=D.source||''; document.title=D.title;
+
+// ---- legend ----
+$('legend').innerHTML=[['var(--host)','host: core idle between programs'],['var(--ld)','LD'],['var(--wt)','WT'],['var(--act)','ACT'],['var(--sync)','blocked (WAIT, stall)']]
+  .map(([c,l])=>`<span><i style="background:${c}"></i>${l}</span>`).join('')+KINDS.map(k=>`<span><i style="background:${KCOL(k)}"></i>MM: ${esc(k)}</span>`).join('');
+
+// ---- the timeline ----
+const LANES=['host','dispatch','LD','WT','MM','ACT'], LH=36, TOP=34, LX=76;
+let v0=T0, v1=T1;
+const tl=$('tl'), ov=$('ov'), tip=$('tip');
+tl.style.height=(TOP+LANES.length*LH+30)+'px';
+function size(c){ const r=c.getBoundingClientRect(), dpr=window.devicePixelRatio||1; c.width=Math.round(r.width*dpr); c.height=Math.round(r.height*dpr); const x=c.getContext('2d'); x.setTransform(dpr,0,0,dpr,0,0); return [x,r.width,r.height]; }
+const dispatchT=[]; // dispatch times aren't per row; approximate from program starts for the dispatch lane
+function laneOf(e){ return 2+e; }
+function colorOf(r){ const o=op(r[3]); if(r[0]===2&&o==='MATMUL') return KCOL(progKind[r[1]]); return ['var(--ld)','var(--wt)','var(--mm)','var(--act)'][r[0]]; }
+const resolved={}; const col=c=>resolved[c]||(resolved[c]=c.startsWith('var(')?css(c.slice(4,-1)):c);
+let hitList=[];
+function drawTL(){
+  const [x,W,H]=size(tl); const w=W-LX-12, sx=t=>LX+(t-v0)*w/(v1-v0);
+  x.clearRect(0,0,W,H); x.font='11px '+css('--f-mono');
+  LANES.forEach((n,k)=>{ const y=TOP+k*LH; x.fillStyle=col('var(--muted)'); x.fillText(n,8,y+LH/2+4); x.strokeStyle=col('var(--line)'); x.beginPath(); x.moveTo(LX,y+LH-.5); x.lineTo(W-12,y+LH-.5); x.stroke(); });
+  // ticks
+  const span=v1-v0, raw=span/8, mag=10**Math.floor(Math.log10(Math.max(1,raw))), step=[1,2,5,10].map(m=>m*mag).find(s=>s>=raw);
+  x.fillStyle=col('var(--muted)'); x.strokeStyle=col('var(--line)');
+  for(let t=Math.ceil(v0/step)*step;t<=v1;t+=step){ const X=sx(t); x.beginPath(); x.moveTo(X,TOP-4); x.lineTo(X,TOP+LANES.length*LH); x.stroke(); x.fillText(span>2e6?fmtT(t):nf(t),X+3,TOP+LANES.length*LH+14); }
+  // marks
+  x.fillStyle=col('var(--ink)');
+  (D.marks||[]).forEach(m=>{ const p=P[m.program]; if(!p||p.start==null) return; const X=sx(p.start-p.gap); if(X<LX||X>W) return; x.fillRect(X,8,1.5,TOP+LANES.length*LH-8); x.fillText(m.label,X+4,18); });
+  hitList=[];
+  const bins=LANES.map(()=>new Float32Array(Math.ceil(w)+2)), binsB=LANES.map(()=>new Float32Array(Math.ceil(w)+2)), binCol=LANES.map(()=>Array(Math.ceil(w)+2).fill(null));
+  const put=(lane,s,t,color,blocked,hit)=>{ if(t<v0||s>v1) return; const X0=sx(s), X1=sx(t), y=TOP+lane*LH+5, hh=LH-10;
+    if(X1-X0>=1.5){ x.fillStyle=col(color); x.globalAlpha=.85; x.fillRect(Math.max(LX,X0),y,Math.min(W-12,X1)-Math.max(LX,X0),hh); x.globalAlpha=1;
+      if(blocked>0){ const bw=Math.min(X1-X0,blocked*w/(v1-v0)); x.fillStyle=col('var(--sync)'); x.fillRect(Math.max(LX,X1-bw),y,Math.min(W-12,X1)-Math.max(LX,X1-bw),hh*.35); }
+      if(hit) hitList.push([lane,Math.max(LX,X0),Math.min(W-12,X1),hit]); }
+    else { const a=Math.max(0,Math.floor(X0-LX)), b=Math.min(bins[lane].length-1,Math.floor(X1-LX)); for(let i=a;i<=b;i++){ const frac=Math.min(1,(Math.min(X1,LX+i+1)-Math.max(X0,LX+i))||(X1-X0)); bins[lane][i]+=frac; binsB[lane][i]+=frac*Math.min(1,blocked/Math.max(1,t-s)); if(!binCol[lane][i]) binCol[lane][i]=color; }
+      if(hit) hitList.push([lane,X0-1,X1+1,hit]); } };
+  hostBars.forEach(([s,t,p])=>put(0,s,t,'var(--host)',0,{host:p}));
+  P.forEach((p,i)=>{ if(p.start!=null) put(1,p.start,p.start+Math.max(1,p.count),'var(--muted)',0,{prog:i}); });
+  R.forEach((r,k)=>{ const o=op(r[3]); if(o==='WAIT'){ if(r[6]>0) put(laneOf(r[0]),r[4]-r[6],r[4],'var(--sync)',0,{row:k}); return; } put(laneOf(r[0]),r[4],Math.max(r[5],r[4]+1),colorOf(r),r[6],{row:k}); });
+  bins.forEach((b,lane)=>{ const y=TOP+lane*LH+5, hh=LH-10; for(let i=0;i<b.length;i++){ if(!b[i]) continue; const occ=Math.min(1,b[i]); x.fillStyle=col(binCol[lane][i]||'var(--mm)'); x.globalAlpha=.25+.6*occ; x.fillRect(LX+i,y+hh*(1-occ),1,hh*occ); x.globalAlpha=1;
+    if(binsB[lane][i]>0){ x.fillStyle=col('var(--sync)'); x.fillRect(LX+i,y,1,hh*.35*Math.min(1,binsB[lane][i])); } } });
+  $('range').textContent=`${nf(v0)} – ${nf(v1)} · ${fmtT(v1-v0)}`;
+  drawOV();
+}
+let ovCache=null;
+function drawOV(){
+  const [x,W,H]=size(ov); const w=W-LX-12, sx=t=>LX+(t-T0)*w/(T1-T0);
+  if(!ovCache||ovCache.w!==w){ const mm=new Float32Array(Math.ceil(w)+1), hg=new Float32Array(Math.ceil(w)+1);
+    R.forEach(r=>{ if(r[0]!==2||op(r[3])!=='MATMUL') return; const a=Math.floor((r[4]-T0)*w/(T1-T0)), b=Math.floor((r[5]-T0)*w/(T1-T0)); for(let i=a;i<=b&&i<mm.length;i++) mm[i]+=1; });
+    hostBars.forEach(([s,t])=>{ const a=Math.floor(s*w/(T1-T0)), b=Math.floor(t*w/(T1-T0)); for(let i=a;i<=b&&i<hg.length;i++) hg[i]+=1; });
+    ovCache={w,mm,hg}; }
+  x.clearRect(0,0,W,H); x.font='10px '+css('--f-mono'); x.fillStyle=col('var(--muted)'); x.fillText('overview',8,H/2+3);
+  for(let i=0;i<ovCache.mm.length;i++){ if(ovCache.mm[i]){ x.fillStyle=col('var(--mm)'); x.globalAlpha=.7; x.fillRect(LX+i,6,1,(H-12)*.6);} if(ovCache.hg[i]){ x.fillStyle=col('var(--host)'); x.globalAlpha=.7; x.fillRect(LX+i,6+(H-12)*.62,1,(H-12)*.38);} }
+  x.globalAlpha=1; x.strokeStyle=col('var(--ink)'); x.lineWidth=1.5; x.strokeRect(sx(v0),3,Math.max(2,sx(v1)-sx(v0)),H-6);
+}
+function setView(a,b){ const span=Math.max(20,b-a); a=Math.max(T0,Math.min(a,T1-span)); v0=a; v1=Math.min(T1,a+span); drawTL(); }
+tl.addEventListener('wheel',ev=>{ ev.preventDefault(); const r=tl.getBoundingClientRect(), w=r.width-LX-12; const t=v0+(ev.clientX-r.left-LX)*(v1-v0)/w; const f=Math.exp(ev.deltaY*0.0015); setView(t-(t-v0)*f,t+(v1-t)*f); },{passive:false});
+let drag=null;
+tl.addEventListener('mousedown',ev=>{ drag={x:ev.clientX,v0,v1}; tl.classList.add('drag'); });
+window.addEventListener('mouseup',()=>{ drag=null; tl.classList.remove('drag'); });
+window.addEventListener('mousemove',ev=>{ if(drag){ const w=tl.getBoundingClientRect().width-LX-12, dt=(ev.clientX-drag.x)*(drag.v1-drag.v0)/w; setView(drag.v0-dt,drag.v1-dt); tip.hidden=true; return; } });
+tl.addEventListener('dblclick',()=>setView(T0,T1));
+tl.addEventListener('mousemove',ev=>{ if(drag) return; const r=tl.getBoundingClientRect(), X=ev.clientX-r.left, Y=ev.clientY-r.top; const lane=Math.floor((Y-TOP)/LH);
+  const hit=hitList.filter(h=>h[0]===lane&&X>=h[1]&&X<=h[2]).pop(); if(!hit){ tip.hidden=true; return; }
+  tip.innerHTML=describe(hit[3]); tip.hidden=false; const tx=Math.min(window.innerWidth-450,ev.clientX+14); tip.style.left=tx+'px'; tip.style.top=(ev.clientY+14)+'px'; });
+tl.addEventListener('mouseleave',()=>tip.hidden=true);
+ov.addEventListener('click',ev=>{ const r=ov.getBoundingClientRect(), w=r.width-LX-12; const t=T0+(ev.clientX-r.left-LX)*(T1-T0)/w; const span=v1-v0; setView(t-span/2,t+span/2); });
+function describe(h){
+  if(h.host!=null){ const p=P[h.host]; return `<b>host</b> · core idle ${nf(p.gap)} cycles (${fmtT(p.gap)})<br>before program ${h.host+1}: ${esc(p.label)}`; }
+  if(h.prog!=null){ const p=P[h.prog]; return `<b>program ${h.prog+1}</b> · ${esc(p.label)}<br>${p.count} instructions, ${nf(p.tiles)} tiles<br>${nf(p.start)} → ${nf(p.end)} (${fmtT(p.end-p.start)})`; }
+  const r=R[h.row], p=P[r[1]], txt=p.words?p.words[r[2]]:op(r[3]);
+  return `<b>${ENG[r[0]]}</b> · program ${r[1]+1} (${esc(p.label)}) #${r[2]+1}<br>${esc(txt)}<br>popped ${nf(r[4])}, completed ${nf(r[5])}: ${nf(r[5]-r[4])} cycles<br>blocked ${nf(r[6])} cycles before completing${r[6]===65535?' (saturated)':''}`;
+}
+$('all').onclick=()=>setView(T0,T1);
+$('zin').onclick=()=>{ const c=(v0+v1)/2, s=(v1-v0)/4; setView(c-s,c+s); };
+$('zout').onclick=()=>{ const c=(v0+v1)/2, s=(v1-v0); setView(c-s,c+s); };
+const zoomProg=(a,b)=>{ const s=P[a].start-P[a].gap, e=P[b].end; const pad=(e-s)*.03+20; setView(s-pad,e+pad); };
+$('markSel').innerHTML='<option value="">—</option>'+(D.marks||[]).map((m,i)=>`<option value="${i}">${esc(m.label)}</option>`).join('');
+$('markSel').onchange=e=>{ const i=e.target.value; if(i==='') return; const m=D.marks[i], nx=D.marks[+i+1]; const a=m.program, b=Math.max(a,(nx?nx.program:P.length)-1); if(P[a]&&P[a].start!=null) zoomProg(a,b); };
+$('progSel').innerHTML='<option value="">—</option>'+P.map((p,i)=>`<option value="${i}">${i+1}: ${esc(p.label)}</option>`).join('');
+$('progSel').onchange=e=>{ const i=e.target.value; if(i!==''&&P[i].start!=null) zoomProg(+i,+i); };
+window.addEventListener('resize',()=>{ ovCache=null; drawTL(); });
+$('bench').addEventListener('keydown',e=>{ const s=v1-v0; if(e.key==='ArrowRight') setView(v0+s*.2,v1+s*.2); if(e.key==='ArrowLeft') setView(v0-s*.2,v1-s*.2); });
+
+// ---- tables ----
+function table(id,head,rows,onclick){ const t=$(id); t.innerHTML=`<thead><tr>${head.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.map((r,i)=>`<tr data-i="${i}">${r.cells.map(c=>`<td>${c}</td>`).join('')}</tr>`).join('')}</tbody>`;
+  if(onclick) t.querySelector('tbody').onclick=ev=>{ const tr=ev.target.closest('tr'); if(tr) onclick(rows[+tr.dataset.i]); }; }
+const meter=(f,col)=>`<span class="meter" style="width:${Math.round(60*Math.min(1,f))}px;background:${col||'var(--mm)'}"></span>`;
+{ const by={}; P.forEach((p,i)=>{ const k=progKind[i]; const s=by[k]||(by[k]={k,n:0,span:0,mm:0,ideal:0,blk:0,sync:0,gap:0,ld:0,act:0,tiles:0,first:i,last:i}); const ps=progStats[i];
+    s.n++; s.span+=(p.end??0)-(p.start??0); s.mm+=ps.mm; s.ideal+=p.ideal; s.blk+=ps.mmBlocked; s.sync+=ps.sync; s.gap+=p.gap; s.ld+=ps.ld; s.act+=ps.act; s.tiles+=p.tiles; s.last=i; });
+  const rows=Object.values(by).sort((a,b)=>(b.span+b.gap)-(a.span+a.gap)), tot=rows.reduce((a,s)=>a+s.span+s.gap,0);
+  table('tmat',['matrix','programs','tiles','time','share','MM held','MM efficiency','weight stalls','LD','ACT','WAIT blocked','host gap'],
+    rows.map(s=>({first:s.first,last:s.last,cells:[`<span style="color:${KCOL(s.k)}">■</span> ${esc(s.k)}`,nf(s.n),nf(s.tiles),fmtT(s.span+s.gap),meter((s.span+s.gap)/tot)+pct(s.span+s.gap,tot),nf(s.mm),pct(s.ideal,s.mm),nf(s.blk),nf(s.ld),nf(s.act),nf(s.sync),nf(s.gap)]})),
+    r=>zoomProg(r.first,r.last)); }
+if(!(D.marks||[]).length) $('markbox').hidden=true;
+{ const M=D.marks||[]; const rows=M.map((m,i)=>{ const a=m.program, b=(i+1<M.length?M[i+1].program:P.length)-1; if(b<a||!P[a]||P[a].start==null) return null;
+    const s=P[a].start-P[a].gap, e=P[b].end; let mm=0,gap=0; for(let j=a;j<=b;j++){ mm+=progStats[j].mm; gap+=P[j].gap; }
+    const wall=i+1<M.length?M[i+1].seconds-m.seconds:null;
+    return {first:a,last:b,cells:[esc(m.label),nf(b-a+1),fmtT(e-s),wall!=null?wall.toFixed(3)+' s':'—',pct(mm,e-s),pct(gap,e-s)]}; }).filter(Boolean);
+  table('tmark',['mark','programs','core time','wall time','MM busy','core idle'],rows,r=>zoomProg(r.first,r.last)); }
+table('teng',['engine','instructions','busy','busy share','blocked'],eng.map((s,e)=>({cells:[ENG[e],nf(s.count),nf(s.busy),meter(s.busy/T1,['var(--ld)','var(--wt)','var(--mm)','var(--act)'][e])+pct(s.busy,T1),nf(s.blocked)]})));
+{ const idx=P.map((p,i)=>i).filter(i=>P[i].start!=null).sort((a,b)=>(P[b].end-P[b].start)-(P[a].end-P[a].start)).slice(0,40);
+  table('tprog',['program','label','instructions','tiles','time','MM efficiency','host gap'],idx.map(i=>({first:i,last:i,cells:[i+1,esc(P[i].label),P[i].count,nf(P[i].tiles),fmtT(P[i].end-P[i].start),pct(P[i].ideal,progStats[i].mm),nf(P[i].gap)]})),r=>zoomProg(r.first,r.last)); }
+
+drawTL();
+window.__profCheck={rows:R.length,programs:P.length};
+})();
+</script>

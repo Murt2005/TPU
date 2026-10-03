@@ -173,12 +173,27 @@ An Avalon-MM slave with 12 word registers, a fixed read latency of 1, and
 | 3 | `OUT` | R | pops an out word. Empty reads return 0 and set `UNDERFLOW` |
 | 4 | `STATUS` | R | `{TAG[31:16], ERR_CODE[15:8], 0, UNDERFLOW[3], IDLE[2], ERR[1], DONE[0]}` |
 | 5 | `LEVELS` | R | `{output_count[31:21], data_free[20:10], instruction_free[9:0]}` |
-| 6 | `CTRL` | W | bit 0 `RESET`: flush queues and FIFOs, clear ERR; memories keep their contents. Bit 1 `CLEAR_DONE` (and `UNDERFLOW`). Bit 2 `CLEAR_PERF` |
+| 6 | `CTRL` | W | bit 0 `RESET`: flush queues and FIFOs, clear ERR; memories keep their contents. Bit 1 `CLEAR_DONE` (and `UNDERFLOW`). Bit 2 `CLEAR_PERF`. Bit 3 `CLEAR_PROFILE`: empty the profiler, restart its clock |
 | 7 | `ERR_SEQ` | R | index of the faulting instruction |
 | 8 | `PERF_CYCLES` | R | free-running cycles since `CLEAR_PERF` |
 | 9 | `PERF_MM_BEATS` | R | activation rows MM has issued |
 | 10 | `PERF_MM_WSTALL` | R | cycles MM waited for a weight tile |
 | 11 | `PERF_MM_SYNC` | R | cycles an MM `WAIT` blocked |
+| 12 | `PROFILE_LEVEL` | R | `{dropped[31:16], events[15:0]}`: whole events the profiler holds, and events lost to a full FIFO since `CLEAR_PROFILE` |
+| 13 | `PROFILE_DATA` | R | the oldest event, 32 bits at a time, low word first; the fourth read pops it |
+
+**The profiler** (`rtl/common/profiler.sv`) logs one 128-bit event for each
+cycle in which the dispatcher issues or an engine pops or completes an
+instruction, into a 512-entry FIFO: `[39:0]` the cycle, `[40]` dispatch,
+`[44:41]` pops and `[48:45]` completions (LD, WT, MM, ACT), and in
+`[127:64]`, per engine, the cycles it was blocked since its previous
+completion (a `WAIT`, data or DDR3 it waited for, a weight stall; 16 bits,
+saturating). Events carry no instruction ids: the dispatcher issues in order
+and routes by opcode, and every engine pops and completes in its queue's
+order, so `host/tpu/profile.py` maps them back onto the programs. Only
+power-on and `CLEAR_PROFILE` reset it, so one profile spans many programs and
+their `CTRL.RESET`s. `qwen-run --profile` and `tpu.profile.Recorder` drain it
+while they poll for `DONE`.
 
 A run: write `CTRL.CLEAR_DONE`, push the instructions, push the data words in
 the order the LD instructions consume them, poll `STATUS` until `DONE` (or

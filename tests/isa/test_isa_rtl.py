@@ -518,6 +518,33 @@ def main(binary):
                   extra < tiles, f"{stalls}")
     link.ddr_timing(True)
 
+    # -- the profiler: every instruction's dispatch, pop and completion ----------
+    from tpu import profile
+    prng = np.random.default_rng(11)
+    rec = profile.Recorder(dev)
+    perfs, matmuls = [], []
+    for m, k, cols, split in ((5, 5 * n, 3 * n, 2), (2 * n, 3 * n, 2 * n, None)):
+        x, w = prng.integers(-128, 128, (m, k)), prng.integers(-128, 128, (k, cols))
+        prog, data, _ = layer_program(n, x, w, prng.integers(-1000, 1000, cols), k_split=split)
+        dev.reset()
+        rec.run(prog, data, label=f"m={m} k={k}")
+        perfs.append(dev.perf())
+        matmuls += [(m, isa.decode(word)[1]) for word in prog if isa.decode(word)[0] == "MATMUL"]
+    rec.drain()
+    spans = profile.reconstruct(rec.programs, [profile.decode_event(e) for e in rec.events])
+    routed = [(s, e) for s in spans for e in range(4) if profile.route(s.word) >> e & 1]
+    whole = all(e in s.start and e in s.end and s.dispatch is not None and s.dispatch < s.start[e] <= s.end[e]
+                for s, e in routed)
+    check(f"profiler: {len(rec.events)} events, none dropped, every one of {len(routed)} engine instructions "
+          f"dispatched, popped and completed in order", rec.dropped == 0 and whole)
+    mm_blocked = sum(s.blocked.get(2, 0) for s in spans)
+    want = sum(p["mm_wstall"] + p["mm_sync"] for p in perfs)
+    check(f"profiler: MM's blocked cycles ({mm_blocked}) == PERF_MM_WSTALL + PERF_MM_SYNC ({want})", mm_blocked == want)
+    mm_spans = [s for s in spans if s.name == "MATMUL"]
+    short = [(s.end[2] - s.start[2], f["k_tiles"] * f["n_blocks"] * max(m, n))
+             for s, (m, f) in zip(mm_spans, matmuls) if s.end[2] - s.start[2] < f["k_tiles"] * f["n_blocks"] * max(m, n)]
+    check(f"profiler: every MATMUL on MM spans at least its tiles x max(m, N) cycles", not short, f"{short}")
+
     # -- status ---------------------------------------------------------------
     link.read32(OUT)
     st = dev.status()

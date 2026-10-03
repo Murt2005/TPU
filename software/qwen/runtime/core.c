@@ -81,13 +81,46 @@ int core_program(const matrix *mx, int m, uint32_t first_block, uint32_t block_c
 }
 
 /* -- the TPU, through a device ---------------------------------------------- */
-enum { INSN_LO, INSN_HI, DATA, OUT, STATUS, LEVELS, CTRL, ERR_SEQ, PERF_CYCLES, PERF_MM_BEATS, PERF_MM_WSTALL };
+enum { INSN_LO, INSN_HI, DATA, OUT, STATUS, LEVELS, CTRL, ERR_SEQ, PERF_CYCLES, PERF_MM_BEATS, PERF_MM_WSTALL,
+       PERF_MM_SYNC, PROFILE_LEVEL, PROFILE_DATA };
+#define CTRL_CLEAR_PROFILE 8
 
 typedef struct { device *dev; uint32_t base; uint64_t image_bytes; int8_t *ub; int32_t *raw; } tpu;
 
 /* the instruction FIFO holds 512 words: a matrix too wide for one program at
  * this m (the head at m > 5) runs as several, each from its own first block */
 #define PROGRAM_CHUNKS 96
+
+/* -- the profiler ------------------------------------------------------------ */
+static uint32_t profile_dropped;
+
+/* every whole event the FIFO holds, as one E record */
+static void profile_drain(core *c, device *d) {
+    if (!c->profile) return;
+    uint32_t v = d->read32(d, PROFILE_LEVEL), level = v & 0xFFFF;
+    if (v >> 16 != profile_dropped) {
+        uint32_t lost = (v >> 16) - profile_dropped;
+        profile_dropped = v >> 16;
+        fputc('D', c->profile);
+        fwrite(&lost, 4, 1, c->profile);
+    }
+    if (!level) return;
+    fputc('E', c->profile);
+    fwrite(&level, 4, 1, c->profile);
+    for (uint32_t i = 0; i < 4 * level; i++) {
+        uint32_t w = d->read32(d, PROFILE_DATA);
+        fwrite(&w, 4, 1, c->profile);
+    }
+}
+
+static void profile_program(core *c, const char *label, const uint64_t *words, uint32_t count) {
+    uint32_t len = (uint32_t)strlen(label);
+    fputc('P', c->profile);
+    fwrite(&len, 4, 1, c->profile);
+    fwrite(label, 1, len, c->profile);
+    fwrite(&count, 4, 1, c->profile);
+    fwrite(words, 8, count, c->profile);
+}
 
 static void tpu_matmul(core *c, const matrix *mx, const int8_t *xq, int m, int32_t *out) {
     tpu *t = c->state;
@@ -108,6 +141,12 @@ static void tpu_matmul(core *c, const matrix *mx, const int8_t *xq, int m, int32
         if (count < 0) { fprintf(stderr, "%s: m=%d doesn't fit a program\n", mx->name, m); exit(1); }
         d->write32(d, CTRL, 1 | 4);                  /* RESET, CLEAR_PERF */
         d->write32(d, CTRL, 2);                      /* CLEAR_DONE */
+        if (c->profile) {
+            char label[64];
+            snprintf(label, sizeof label, "%s m=%d", mx->name, m);
+            if (first) snprintf(label + strlen(label), sizeof label - strlen(label), " from %u", first);
+            profile_program(c, label, words, (uint32_t)count);
+        }
         for (int i = 0; i < count; i++) {
             d->write32(d, INSN_LO, (uint32_t)words[i]);
             d->write32(d, INSN_HI, (uint32_t)(words[i] >> 32));
@@ -121,7 +160,9 @@ static void tpu_matmul(core *c, const matrix *mx, const int8_t *xq, int m, int32
                 exit(1);
             }
             if (st & 1) break;
+            profile_drain(c, d);                     /* 512 events: keep up with long programs */
         }
+        profile_drain(c, d);
         c->beats += d->read32(d, PERF_MM_BEATS);
         c->weight_stalls += d->read32(d, PERF_MM_WSTALL);
         size_t words_out = (obase[chunks - 1] - outputs) / 4 + (size_t)blocks[chunks - 1] * m * N_ARRAY;
@@ -171,6 +212,33 @@ core *core_tpu(device *dev, uint32_t base, uint64_t image_bytes, const char *loa
     c->image_read = tpu_image_read;
     c->state = t;
     return c;
+}
+
+int core_profile_open(core *c, const char *path) {
+    if (c->matmul != tpu_matmul) return -1;
+    c->profile = fopen(path, "wb");
+    if (!c->profile) return -1;
+    device *d = ((tpu *)c->state)->dev;
+    d->write32(d, CTRL, CTRL_CLEAR_PROFILE);
+    profile_dropped = 0;
+    uint32_t header[2] = {1, N_ARRAY};
+    fwrite("TPUP", 1, 4, c->profile);
+    fwrite(header, 4, 2, c->profile);
+    return 0;
+}
+
+void core_profile_mark(core *c, const char *label, double seconds) {
+    if (!c->profile) return;
+    uint32_t len = (uint32_t)strlen(label);
+    fputc('M', c->profile);
+    fwrite(&len, 4, 1, c->profile);
+    fwrite(label, 1, len, c->profile);
+    fwrite(&seconds, 8, 1, c->profile);
+}
+
+void core_profile_close(core *c) {
+    if (c->profile) fclose(c->profile);
+    c->profile = NULL;
 }
 
 /* -- the reference: exact int8 x int8 -> int32 from the image's tiles ------- */

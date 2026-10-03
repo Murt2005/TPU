@@ -60,10 +60,13 @@ def _model_outputs(link, wl):
     return [model.run(ph.program, ph.data) for ph in wl.phases]
 
 
-def _run_phase(dev, ph):
+def _run_phase(dev, ph, recorder=None):
     """one phase, with the perf counters cleared at its start: (out words, perf)"""
     dev.link.write32(CTRL, CTRL_CLEAR_PERF)
-    out = dev.run(ph.program, ph.data, timeout=600.0)
+    if recorder:
+        out = recorder.run(ph.program, ph.data, label=ph.name, timeout=600.0)
+    else:
+        out = dev.run(ph.program, ph.data, timeout=600.0)
     return out, dev.perf()
 
 
@@ -72,9 +75,10 @@ def _perf_line(p):
 
 
 def run_workload(build, link_spec, visualize_internals=False, out=None, viz_sim=None,
-                 max_cycles=20000, log=print):
+                 max_cycles=20000, profile_out=None, log=print):
     """build(n) -> Workload for an N x N array. link_spec: a tb_isa binary or
-    serial:<port>. returns a dict: outputs per phase, whether they match the
+    serial:<port>. profile_out: also record the instruction profiler and write
+    its page there (tpu/profile.py). returns a dict: outputs per phase, whether they match the
     reference model, perf counters, and the page's path when one was written"""
     link = open_link(link_spec)
     on_board = isinstance(link, IsaSerialLink)
@@ -87,8 +91,12 @@ def run_workload(build, link_spec, visualize_internals=False, out=None, viz_sim=
         for address, data in wl.ddr:
             link.ddr_write(address, data)
         dev.reset()
+        recorder = None
+        if profile_out:
+            from .profile import Recorder
+            recorder = Recorder(dev)
         t = time.time()
-        runs = [_run_phase(dev, ph) for ph in wl.phases]
+        runs = [_run_phase(dev, ph, recorder) for ph in wl.phases]
         outs = [o for o, _ in runs]
         result.update(outputs=outs, perf=[p for _, p in runs], seconds=time.time() - t,
                       match=outs == expected, where="hardware" if on_board else "Verilator sim")
@@ -96,6 +104,16 @@ def run_workload(build, link_spec, visualize_internals=False, out=None, viz_sim=
             f"{'match' if result['match'] else 'DIFFER from'} the reference model")
         for ph, p in zip(wl.phases, result["perf"]):
             log(f"  {ph.name}: {_perf_line(p)}")
+        if recorder:
+            from .profile import analyze, render_page
+            where = "hardware (DE1-SoC)" if on_board else "Verilator sim"
+            data = analyze(link.n, recorder.programs, recorder.events, (), recorder.dropped)
+            data["source_short"] = where
+            src = (f"Recorded by the core's instruction profiler on {where}: {len(recorder.events):,} events. "
+                   + ("Cycle counts include the console link: the core waits for each word the host sends." if on_board else ""))
+            Path(profile_out).write_text(render_page(data, f"Profile: {wl.title}", src))
+            log(f"profile: {profile_out} ({len(recorder.events)} events, {recorder.dropped} dropped)")
+            result["profile"] = str(profile_out)
     finally:
         link.close()
     if not visualize_internals:
