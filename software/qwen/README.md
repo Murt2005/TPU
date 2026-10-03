@@ -244,6 +244,10 @@ standard library and pyserial, so it runs in the repo's `.venv`.
   kept, and `chat.py` sends `S` to `qwen-run --serve`, which stops before
   the next token instead of running on to the limit.
 - **Quitting:** Ctrl-C quits `chat.py`, and `qwen-run` on the board with it.
+- **LED9 blinks once per token** on the board, about 0.1 s each. `qwen-run
+  --serve` writes bit 8 of the GHRD's `led_pio` (0xFF210040, which drives
+  LEDR[9:1]). It goes on as a token is sent and off two layers into the next
+  one, so the blink costs no time.
 - **The base model completes text rather than following instructions.** It
   answers short questions ("Name three primary colors." → "Three primary
   colors are red, blue, and yellow.") but rambles on longer ones.

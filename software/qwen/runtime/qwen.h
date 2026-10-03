@@ -84,6 +84,7 @@ typedef struct {
     core *core;
     void *log;                      /* FILE *: every matmul's int8 input and int32 output */
     double host_seconds, core_seconds;
+    void (*layer_hook)(int layer);  /* called as each layer starts, if set */
 } model;
 
 int model_init(model *md, const tables *tb, core *c, int max_ctx);

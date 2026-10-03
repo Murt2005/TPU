@@ -159,6 +159,7 @@ void model_forward(model *md, const int *ids, int m, float *logits) {
     }
 
     for (int l = 0; l < md->layers; l++) {
+        if (md->layer_hook) md->layer_hook(l);
         matrix *mx = &md->mats[l * 4];
         float *kc = md->k_cache + (size_t)l * md->max_ctx * kvs, *vc = md->v_cache + (size_t)l * md->max_ctx * kvs;
         for (int i = 0; i < m; i++) rms_norm(x + (size_t)i * d, md->input_norm[l], md->eps, d, h + (size_t)i * d);

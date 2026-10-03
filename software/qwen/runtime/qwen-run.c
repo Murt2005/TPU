@@ -16,10 +16,12 @@
  *
  * sim:TB_ISA:IMAGE and mmio:IMAGE load IMAGE into (simulated) DDR3 first. ids come from
  * software/qwen/tokenizer.py; text is printed with the exported vocabulary */
+#include <fcntl.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/select.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -31,6 +33,26 @@ static int argmax(const float *v, int n) {
     for (int j = 1; j < n; j++)
         if (v[j] > v[best]) best = j;
     return best;
+}
+
+/* LED9 flashes as each token goes out (the chat demo): the GHRD's led_pio drives
+ * LEDR[9:1], so LED9 is its bit 8, at 0xFF210040 on the lightweight bridge. on as
+ * a token is printed, off two layers into the next one (~0.1 s), so it costs nothing */
+static volatile uint32_t *leds;
+
+static void led9(int on) {
+    if (leds) *leds = on ? 1u << 8 : 0;
+}
+
+static void led9_off_at_layer_2(int layer) {
+    if (layer == 2) led9(0);
+}
+
+static void leds_map(void) {
+    int fd = open("/dev/mem", O_RDWR | O_SYNC);
+    if (fd < 0) return;
+    void *page = mmap(0, 0x1000, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0xFF210000);
+    if (page != MAP_FAILED) leds = (volatile uint32_t *)((volatile uint8_t *)page + 0x40);
 }
 
 #define EOS_TEXT 151643     /* <|endoftext|> */
@@ -80,6 +102,8 @@ static void serve(model *md, int prefill) {
     char *line = malloc(1 << 20);
     int *ids = malloc(sizeof(int) * (size_t)md->max_ctx);
     float *logits = malloc(sizeof(float) * (size_t)prefill * md->vocab);
+    md->layer_hook = led9_off_at_layer_2;
+    led9(0);
     printf("READY\n");
     fflush(stdout);
     while (next_line(&in, line, 1 << 20, 1) > 0) {
@@ -106,6 +130,7 @@ static void serve(model *md, int prefill) {
         while (made < max_tokens && next != EOS_TEXT && next != EOS_TURN) {
             printf("T %d\n", next);
             fflush(stdout);
+            led9(1);
             made++;
             if (made == max_tokens) break;
             char pending[64];
@@ -115,6 +140,7 @@ static void serve(model *md, int prefill) {
             model_forward(md, &next, 1, logits);
             next = argmax(logits, md->vocab);
         }
+        led9(0);
         printf("E %d %.3f %.3f\n", made, t1 - t0, now_seconds() - t1);
         fflush(stdout);
         if (quit) break;
@@ -210,6 +236,7 @@ int main(int argc, char **argv) {
                     (unsigned long long)image_bytes, d->ddr_low, d->ddr_high);
             return 1;
         }
+        leds_map();
         double t0 = now_seconds();
         c = core_tpu(d, base, image_bytes, load);
         if (load) fprintf(stderr, "%s into DDR3 at %#x: %.1f s\n", load, base, now_seconds() - t0);
