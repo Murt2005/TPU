@@ -129,26 +129,35 @@ loads tile *j*+1's weights while tile *j* computes:
   bit through the skew and across the array. At each PE it computes with
   `weight_next` and promotes it to `weight_current`, on exactly the cycle that tile's data
   arrives there.
-- **Weight bus.** One row-select bus per column, delayed *c* cycles at column
-  *c*. A weight row then reaches every column the same distance ahead of the
-  flip that will use it.
-- **Schedule** (`matmul_engine`). A window of max(m, N) cycles per tile. It
-  streams tile *j*'s m activation rows from position 0, and in the window's
-  last N cycles writes tile *j*+1's N weight rows into `weight_next`. The first
-  tile has a preload window of N cycles, and the last has no weights.
-- **Stalls.** If the next tile isn't in the weight FIFO, the whole window
-  freezes (counted in `PERF_MM_WSTALL`). A freeze only widens the gaps the
-  PEs rely on, so it never breaks timing.
-- **Weight FIFO.** Two slots, refilled the cycle MM releases one. Without
-  that same-cycle refill, windows of N cycles stalled about half a cycle per
-  tile.
+- **Weight bus.** `WEIGHT_LANES` lanes (L), each a row-select bus per column,
+  delayed *c* cycles at column *c*. A weight row then reaches every column the
+  same distance ahead of the flip that will use it.
+- **Weight streams.** A tile's weights go out as a stream of N rows, row *r* at
+  offset *r*: the same pace as the activation wavefront, so row *r* of tile
+  *j*+1 reaches PE row *r* no earlier than tile *j*'s flip there. A stream lasts
+  N cycles whatever the window.
+- **Schedule** (`matmul_engine`). A window of max(m, N / L) cycles per tile. It
+  streams tile *j*'s m activation rows from position 0 and starts tile *j*+1's
+  weight stream N cycles before the window ends, or at its start if the window
+  is shorter. With windows shorter than N, up to L streams overlap, one per
+  lane, and a PE row takes whichever lane addresses it. The first tile has a
+  preload window, and the last has no weights. L = 1 is the original
+  schedule, cycle for cycle.
+- **Stalls.** If the next tile isn't in the weight FIFO when its stream should
+  start, the whole window freezes (counted in `PERF_MM_WSTALL`). Streams
+  already running carry on. A freeze only widens the gaps the PEs rely on, so
+  it never breaks timing.
+- **Weight FIFO.** A ring of L + 1 slots: L streaming, one filling. WT fills L
+  rows a cycle: a DDR3 beat (L = 2 at 128 bits, 4 at 256), or a word of WMEM,
+  which is L banks. A slot MM releases refills the same cycle.
 - **Accumulator.** The same ACC row comes round at most once per window
-  (≥ N ≥ 2 cycles), so a read-modify-write always lands before the next read
-  of that row.
+  (≥ N / L ≥ 2 cycles), so a read-modify-write always lands before the next
+  read of that row.
 
-Measured, in Verilator and on the board: each extra tile costs exactly
-max(m, N) cycles, with no steady-state stalls, so at m ≥ N the array is fed
-every cycle.
+Measured in Verilator: each extra tile costs exactly max(m, N / L) cycles, with
+no steady-state stalls, from WMEM and from DDR3. At N = 8 that's 8 cycles a tile
+at L = 1, 4 at L = 2 and 2 at L = 4 when m is small. Decoding (m = 1) is limited
+by how fast weights arrive, so L sets the speed there.
 
 `pe.sv` carries simulation-only checks (`ifndef SYNTHESIS`, `$fatal`): no
 weight is overwritten before its flip, and there is no flip without a pending

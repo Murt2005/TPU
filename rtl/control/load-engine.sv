@@ -85,12 +85,13 @@ module load_engine #(
     logic [31:0] DDR_address, DDR_bytes;
     assign reading_DDR             = busy && current_opcode == OPCODE_RD_DDR_UB;
     assign DDR_address             = instruction[31:0];
-    localparam int BEAT_SHIFT = $clog2(BEAT_BYTES);
+    localparam int          BEAT_SHIFT  = $clog2(BEAT_BYTES);
+    localparam logic [31:0] OFFSET_MASK = 32'(BEAT_BYTES - 1);       // Quartus won't parse ~ on a size cast
     logic [31:0] DDR_offset;                                  // the first entry's byte within its beat
-    assign DDR_offset              = DDR_address & 32'(BEAT_BYTES - 1);
+    assign DDR_offset              = DDR_address & OFFSET_MASK;
     assign DDR_bytes               = DDR_offset + (32'(instruction[43:32]) + 32'd1) * 32'(ARRAY_SIZE);
     assign DDR_request_out         = queue_pop_out && opcode == OPCODE_RD_DDR_UB;
-    assign DDR_request_address_out = DDR_address & ~32'(BEAT_BYTES - 1);
+    assign DDR_request_address_out = DDR_address & ~OFFSET_MASK;
     assign DDR_request_beats_out   = (DDR_bytes + 32'(BEAT_BYTES - 1)) >> BEAT_SHIFT;
     assign DDR_request_skip_out    = 4'(DDR_offset / 32'(ARRAY_SIZE));
     assign DDR_request_rows_out    = 32'(instruction[43:32]) + 32'd1;

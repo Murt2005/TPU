@@ -181,6 +181,7 @@ An Avalon-MM slave with 12 word registers, a fixed read latency of 1, and
 | 11 | `PERF_MM_SYNC` | R | cycles an MM `WAIT` blocked |
 | 12 | `PROFILE_LEVEL` | R | `{dropped[31:16], events[15:0]}`: whole events the profiler holds, and events lost to a full FIFO since `CLEAR_PROFILE` |
 | 13 | `PROFILE_DATA` | R | the oldest event, 32 bits at a time, low word first; the fourth read pops it |
+| 14 | `BUILD` | R | `{DDR3 beat bytes[31:24], weight lanes[23:16], N[15:0]}`: constants of the build (0 before the register existed) |
 
 **The profiler** (`rtl/common/profiler.sv`) logs one 128-bit event for each
 cycle in which the dispatcher issues or an engine pops or completes an

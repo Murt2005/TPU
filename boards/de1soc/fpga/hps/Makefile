@@ -11,7 +11,7 @@ HERE  := $(abspath .)
 # changing it needs `make clean` (the port is set when the GHRD is first edited)
 DDR_BITS    ?= 256
 PORT_RESETS := $(if $(filter 256,$(DDR_BITS)),1ff,133)
-export TPU_DDR_BITS := $(DDR_BITS)
+
 GHRD  := build/ghrd
 SOF   := $(GHRD)/output_files/soc_system.sof
 RBF   := build/soc_system.rbf
@@ -25,7 +25,7 @@ $(GHRD)/stamp-tpu:
 	rm -rf $(GHRD) build/_cd && mkdir -p build/_cd
 	cd build/_cd && unzip -q "$(CD_ZIP)" "Demonstrations/SOC_FPGA/de1_soc_GHRD/*"
 	mv build/_cd/Demonstrations/SOC_FPGA/de1_soc_GHRD $(GHRD) && rm -rf build/_cd
-	cd $(GHRD) && qsys-script --script=$(HERE)/add-tpu.tcl --search-path="$(HERE),$$"
+	cd $(GHRD) && qsys-script --cmd="set ddr_bits $(DDR_BITS)" --script=$(HERE)/add-tpu.tcl --search-path="$(HERE),$$"
 	python3 patch_top.py $(GHRD)/ghrd_top.v
 	printf '\nset_global_assignment -name SYSTEMVERILOG_FILE $(HERE)/../../top/hex-display.sv\n' >> $(GHRD)/soc_system.qsf
 	# pre-generated qip instead of QSYS_FILE, so the compile needn't find our component;

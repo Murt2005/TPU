@@ -45,6 +45,7 @@ module ddr_probe #(
     localparam logic [3:0] REGISTER_ISSUE_CYCLES   = 4'd13;  // start to last command accepted
     localparam logic [3:0] REGISTER_BEAT_BYTES     = 4'd14;  // 16 or 32
     localparam int         BEAT_SHIFT              = $clog2(BEAT_BITS / 8);
+    localparam logic [31:0] OFFSET_MASK            = 32'(BEAT_BITS / 8 - 1);   // Quartus won't parse ~ on a size cast
 
     logic reset;
     assign reset = ~reset_n;
@@ -94,7 +95,7 @@ module ddr_probe #(
         end else begin
             if (avs_write && !busy)
                 case (avs_address)
-                    REGISTER_ADDRESS:     start_address     <= avs_writedata & ~32'(BEAT_BITS / 8 - 1);
+                    REGISTER_ADDRESS:     start_address     <= avs_writedata & ~OFFSET_MASK;
                     REGISTER_BEATS:       beats             <= avs_writedata;
                     REGISTER_BURST:       burst             <= avs_writedata[7:0];
                     REGISTER_OUTSTANDING: outstanding_limit <= avs_writedata[3:0];
