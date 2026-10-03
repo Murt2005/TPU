@@ -1,0 +1,732 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>__TITLE__</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..100,600..800&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+/* Layout: one reading column for the run summary, then a full-width bench: controls, timeline, the whole core at one clock edge, and the per-cycle tables. Tokens from the TPU walkthrough pages. */
+:root{
+  --bg:#eef1f4; --panel:#ffffff; --ink:#16212b; --muted:#5a6773; --line:#cdd5dc; --soft:#f5f7f9;
+  --accent:#0b6e99; --accent-soft:#d9ecf5; --pulse:#a85c06; --pulse-soft:#f7e6cf;
+  --good:#2f7d4f; --good-soft:#dcefe3; --warn:#9a6b00; --warn-soft:#f6ecd0; --bad:#b8475a; --bad-soft:#f6dfe3;
+  --t0:#2563eb; --t1:#7c3aed; --t2:#0d9488; --t3:#db2777; --t4:#4338ca; --t5:#0e7490; --t6:#dc2626; --t7:#a16207;
+  --actv:#16a34a; --psum:#d97706; --ok:#2f7d4f; --ld:#23806e; --wt:#7b4fb0; --mm:#1f66a8; --act:#b8601a; --edge:#3a4652;
+  --g1:#cfe2f6; --g2:#fbe2b6; --g3:#cdebd9; --g4:#e2d8f6; --g5:#f7d2db;
+  --f-display:"Archivo","Arial Narrow",Arial,sans-serif;
+  --f-body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0e1419; --panel:#151d24; --ink:#dde6ee; --muted:#8c9aa7; --line:#2b3743; --soft:#111920;
+  --accent:#5ab5e2; --accent-soft:#16384a; --pulse:#efa446; --pulse-soft:#3d2c14;
+  --good:#6cc392; --good-soft:#173527; --warn:#e2b24f; --warn-soft:#3a2f12; --bad:#e57a8b; --bad-soft:#3e1f26;
+  --t0:#60a5fa; --t1:#a78bfa; --t2:#2dd4bf; --t3:#f472b6; --t4:#818cf8; --t5:#22d3ee; --t6:#f87171; --t7:#d4a24c;
+  --actv:#4ade80; --psum:#fbbf24; --ok:#6cc392; --ld:#4cc2a8; --wt:#b48ce6; --mm:#5ea8ea; --act:#e8954f; --edge:#9fb0bf;
+  --g1:#1f3d5a; --g2:#4d3814; --g3:#1a4330; --g4:#372a55; --g5:#4d2433; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0e1419; --panel:#151d24; --ink:#dde6ee; --muted:#8c9aa7; --line:#2b3743; --soft:#111920;
+  --accent:#5ab5e2; --accent-soft:#16384a; --pulse:#efa446; --pulse-soft:#3d2c14;
+  --good:#6cc392; --good-soft:#173527; --warn:#e2b24f; --warn-soft:#3a2f12; --bad:#e57a8b; --bad-soft:#3e1f26;
+  --t0:#60a5fa; --t1:#a78bfa; --t2:#2dd4bf; --t3:#f472b6; --t4:#818cf8; --t5:#22d3ee; --t6:#f87171; --t7:#d4a24c;
+  --actv:#4ade80; --psum:#fbbf24; --ok:#6cc392; --ld:#4cc2a8; --wt:#b48ce6; --mm:#5ea8ea; --act:#e8954f; --edge:#9fb0bf;
+  --g1:#1f3d5a; --g2:#4d3814; --g3:#1a4330; --g4:#372a55; --g5:#4d2433; color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 var(--f-body);padding-inline:16px;padding-block:0 64px}
+.wrap{max-width:1100px;margin:0 auto}
+h1,h2{font-family:var(--f-display);font-stretch:80%;line-height:1.1;text-wrap:balance;margin:0}
+h1{font-size:clamp(2rem,5vw,3.1rem);font-weight:800;letter-spacing:-.01em}
+h2{font-size:1.6rem;font-weight:700}
+p{margin:.6em 0}
+code,.mono{font-family:var(--f-mono);font-size:.88em}
+code{background:var(--soft);border:1px solid var(--line);border-radius:3px;padding:0 .3em}
+.eyebrow{font:500 .75rem/1.2 var(--f-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+header{padding-block:36px 18px;border-bottom:2px solid var(--ink);display:grid;gap:12px}
+.lede{font-size:1.05rem;max-width:70ch;margin:0}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{font:500 .8rem var(--f-mono);border:1px solid var(--line);background:var(--panel);padding:3px 8px;border-radius:3px}
+.chip b{color:var(--accent);font-weight:600}
+.chip.ok{border-color:var(--good);background:var(--good-soft)} .chip.ok b{color:var(--good)}
+.chip.no{border-color:var(--bad);background:var(--bad-soft)} .chip.no b{color:var(--bad)}
+.note{font-size:.88rem;color:var(--muted);max-width:75ch}
+.scroll{overflow-x:auto}
+button{font:500 .8rem var(--f-mono);color:var(--ink);background:var(--soft);border:1px solid var(--line);border-radius:3px;padding:4px 8px;cursor:pointer}
+button:hover{border-color:var(--accent)}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+select{font:500 .8rem var(--f-mono);color:var(--ink);background:var(--soft);border:1px solid var(--line);border-radius:3px;padding:3px 6px}
+.bench{background:var(--panel);border:1px solid var(--line);border-radius:4px;margin:20px 0}
+.bench.wide{width:min(1460px,calc(100vw - 32px));margin-left:calc(50% - min(730px,50vw - 16px))}
+.bench-top{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:12px 14px;border-bottom:1px solid var(--line)}
+.bench-top .lbl{font:.72rem var(--f-mono);color:var(--muted);margin-right:4px}
+.controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px 14px;border-bottom:1px solid var(--line)}
+.controls input[type=range]{flex:1;min-width:160px;accent-color:var(--accent)}
+.cyc{font:600 .95rem var(--f-mono);font-variant-numeric:tabular-nums;min-width:22ch}
+.gwrap{padding:8px 14px 0}
+#gantt{display:block;width:100%;min-width:980px;height:auto}
+.syswrap{padding:4px 10px 10px;border-top:1px solid var(--line)}
+#sys{display:block;width:100%;min-width:1180px;height:auto}
+.below{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:18px;padding:14px;border-top:1px solid var(--line)}
+@media (max-width:900px){.below{grid-template-columns:minmax(0,1fr)}}
+.legend2{display:flex;flex-wrap:wrap;gap:6px 14px;padding:8px 14px;font:.78rem var(--f-mono);color:var(--muted);border-top:1px solid var(--line)}
+.legend2 span{display:inline-flex;align-items:center;gap:6px}
+.legend2 i{display:inline-block;width:14px;height:12px;border-radius:2px;border:1.5px solid}
+.events{margin:8px 0 0;padding:0;list-style:none;display:grid;gap:6px;font-size:.86rem}
+.events li{padding-left:12px;border-left:3px solid var(--line)}
+.events li.act{border-color:var(--pulse)}
+.events li.calc{border-color:var(--accent);font-family:var(--f-mono);font-size:.8rem}
+.prog{font:12px var(--f-mono);font-variant-numeric:tabular-nums;border-collapse:collapse;margin-top:6px}
+.prog td,.prog th{padding:3px 6px;white-space:nowrap;text-align:left;border-bottom:1px solid var(--line)}
+.prog th{font:600 .7rem var(--f-mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.prog tr td{color:var(--muted)} .prog tr.sent td{color:var(--ink)}
+.prog tr.now td{background:var(--pulse-soft);color:var(--ink)}
+.prog tr.phase td{color:var(--accent);font-weight:600;background:var(--soft)}
+.progbox{max-height:420px;overflow:auto}
+.tl{font:12px var(--f-mono);font-variant-numeric:tabular-nums;border-collapse:collapse;width:100%}
+.tl td,.tl th{padding:3px 7px;white-space:nowrap;border-bottom:1px solid var(--line);text-align:left}
+.tl th{font:600 .7rem var(--f-mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);position:sticky;top:0;background:var(--panel)}
+.tl tr{cursor:pointer}
+.tl tr.cur td{background:var(--pulse-soft)}
+.tl .x{color:var(--muted);opacity:.5}
+#sys text,#gantt text{font-family:var(--f-mono);fill:var(--ink);font-size:11px}
+#sys .band{font-size:10px;letter-spacing:.14em;fill:var(--muted);font-weight:600}
+#sys .pn{fill:var(--soft);stroke:var(--line);stroke-width:1.2}
+#sys .pn.on{stroke:var(--warn);stroke-width:2}
+#sys .pt{font-family:var(--f-display);font-weight:700;font-size:14.5px;font-stretch:80%;fill:var(--ink)}
+#sys .ps,#gantt .ps{font-size:10px;fill:var(--muted)}
+#sys .cv{font-size:11px;fill:var(--ink)}
+#sys .cv.sm{font-size:10px} #sys .cv.xs{font-size:8.5px}
+#sys .cv.b{font-weight:700;font-size:12.5px}
+#sys .cv.on{font-weight:700;fill:var(--panel);font-size:10px} #sys .cv.dim{fill:var(--muted)}
+#sys .qt{font-weight:700;font-size:11px;fill:var(--panel)}
+#sys .c{stroke:var(--line);stroke-width:.6}
+#sys .c.g1{fill:var(--g1)} #sys .c.g2{fill:var(--g2)} #sys .c.g3{fill:var(--g3)} #sys .c.g4{fill:var(--g4)} #sys .c.g5{fill:var(--g5)}
+section{padding-block:28px 8px}
+.facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(260px,100%),1fr));gap:10px 24px;font-size:.9rem}
+.facts div{min-width:0}
+.facts dt{font:600 .7rem var(--f-mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.facts dd{margin:2px 0 0;font-family:var(--f-mono);font-size:.85rem;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+<div class="wrap">
+<header>
+  <div class="eyebrow" id="eyebrow"></div>
+  <h1 id="title"></h1>
+  <p class="lede" id="lede"></p>
+  <div class="chips" id="chips"></div>
+  <p class="note" id="srcnote"></p>
+</header>
+</div>
+
+<div class="bench wide" id="bench" tabindex="0">
+  <div class="bench-top" id="presets"><span class="lbl">Jump to</span></div>
+  <div class="controls">
+    <button id="prev" aria-label="Previous cycle">◀</button>
+    <button id="play" aria-label="Play">Play</button>
+    <button id="next" aria-label="Next cycle">▶</button>
+    <label class="lbl mono" for="speed" style="font-size:.72rem;color:var(--muted)">speed</label>
+    <select id="speed"><option value="600">slow</option><option value="300" selected>normal</option><option value="80">fast</option><option value="16">very fast</option></select>
+    <input type="range" id="slider" min="0" max="0" value="0" aria-label="Cycle">
+    <span class="cyc" id="cyclbl"></span>
+  </div>
+  <div class="gwrap scroll"><svg id="gantt" viewBox="0 0 1400 176" role="img" aria-label="Timeline of the whole trace: host bus, dispatch, each engine and how many PEs compute each cycle. Click to jump to a cycle."></svg></div>
+  <div class="legend2">
+    <span><i style="border-color:var(--t0);background:color-mix(in srgb,var(--t0) 25%,transparent);margin-right:2px"></i><i style="border-color:var(--t1);background:color-mix(in srgb,var(--t1) 25%,transparent);margin-right:2px"></i><i style="border-color:var(--t2);background:color-mix(in srgb,var(--t2) 25%,transparent);margin-right:2px"></i><i style="border-color:var(--t3);background:color-mix(in srgb,var(--t3) 25%,transparent)"></i>&nbsp;weight tiles, by WMEM tile number (the color repeats every 8)</span>
+    <span><i style="border-color:var(--mm);background:color-mix(in srgb,var(--mm) 70%,transparent)"></i>array lane: height = PEs computing</span>
+  </div>
+  <div class="legend2">
+    <span><i style="border-color:var(--actv);background:color-mix(in srgb,var(--actv) 22%,transparent)"></i>activation</span>
+    <span><i style="border-color:var(--psum);background:color-mix(in srgb,var(--psum) 22%,transparent)"></i>partial sum</span>
+    <span><i style="border-color:var(--warn);border-width:3px"></i>PE switches to the next tile this edge</span>
+    <span><i style="border-color:var(--t1);border-style:dashed"></i>shadow weight waiting</span><span><i style="border-color:var(--t1);border-width:2.4px;background:color-mix(in srgb,var(--t1) 35%,transparent)"></i>shadow being written</span>
+    <span><i style="border-color:var(--ld)"></i>LD</span><span><i style="border-color:var(--wt)"></i>WT</span><span><i style="border-color:var(--mm)"></i>MM</span><span><i style="border-color:var(--act)"></i>ACT</span>
+  </div>
+  <div class="scroll syswrap"><svg id="sys" viewBox="0 0 1400 1500" role="img" aria-label="The whole core at the selected clock edge: host bus, instruction and data FIFOs, dispatcher, the four engine queues and engines, WMEM, unified buffer, accumulator, tile buffer, the systolic array with every PE's activation, partial sum and weights, the activation unit and the results."></svg></div>
+  <div class="below">
+    <div><div class="eyebrow">This cycle</div><ul class="events" id="events"></ul></div>
+    <div><div class="eyebrow" id="proghead">Program</div><div class="scroll progbox" id="progbox"><table class="prog" id="prog"></table></div></div>
+  </div>
+  <div class="scroll" style="border-top:1px solid var(--line);max-height:360px;overflow-y:auto" id="tlbox"><table class="tl" id="tl"></table></div>
+</div>
+
+<div class="wrap">
+<section>
+  <div class="eyebrow">About this trace</div>
+  <dl class="facts" id="facts"></dl>
+  <p class="note">Each step is one clock cycle of the RTL, sampled just before the rising edge: every register as it stands, and every input the edge is about to take. A PE's Σ is the multiply-accumulate it performs at that edge. Keys: ← → step, space plays. Link to a cycle with #c&lt;cycle&gt; on the page's address.</p>
+</section>
+</div>
+
+<script type="application/json" id="data">__DATA__</script>
+<script>
+(function(){
+const D = JSON.parse(document.getElementById('data').textContent);
+const $ = id => document.getElementById(id);
+const K=D.keys, IX={}; K.forEach((k,i)=>IX[k]=i);
+const MT=D.meta, NN=MT.N, LN=[...Array(NN).keys()];
+// rebuild full rows from the delta encoding
+const rows=[]; { let cur=null; for(const d of D.rows){ if(!cur) cur=d.slice(); else { cur=cur.slice(); for(let i=0;i<d.length;i+=2) cur[d[i]]=d[i+1]; } rows.push(cur); } }
+const g=(r,k)=>r[IX[k]];
+const C0=MT.t0;                                  // the trace's first cycle is shown as cycle 0
+const cycOf=t=>t;
+const prog=MT.prog;                             // [hex, disasm, phase]
+const OPN={0:'NOP',1:'WR_WMEM',2:'WR_UB',3:'WR_BIAS',4:'WR_QUANT',5:'RD_DDR_UB',6:'SET_WBASE',7:'SET_OBASE',16:'MATMUL',24:'ACTIVATE',25:'RD_UB',32:'WAIT',33:'SIGNAL'};
+const REG={0:'INSN_LO',1:'INSN_HI',2:'DATA',3:'OUT',4:'STATUS',5:'LEVELS',6:'CTRL',7:'ERR_SEQ',8:'PERF_CYCLES',9:'PERF_MM_BEATS',10:'PERF_MM_WSTALL',11:'PERF_MM_SYNC'};
+const MMS={0:'IDLE',1:'RUN',2:'DRAIN'}, ACS={0:'IDLE',1:'READ',2:'LATCH',3:'MUL',4:'RND',5:'EMIT',6:'WRITE',7:'DRAIN'};
+const ENG=['LD','WT','MM','ACT'], ENGN=['load_engine','weight_engine','matmul_engine','activate_engine'];
+const ECOL=['var(--ld)','var(--wt)','var(--mm)','var(--act)'];
+const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;');
+const neg=v=>String(v).replace('-','−');
+const fmtC=v=>{const a=Math.abs(v); if(a<10000) return neg(v); if(a<1e6) return neg((v/1e3).toFixed(1))+'k'; if(a<1e9) return neg((v/1e6).toFixed(1))+'M'; return neg((v/1e9).toFixed(1))+'G';};
+const nf=v=>Number(v).toLocaleString('en-US');
+const lanes=(r,k)=>LN.map(c=>r[IX[k+c]]);
+const vec=(r,k)=>'['+lanes(r,k).map(neg).join(', ')+']';
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const pk=(a,c)=>'p'+a+'_'+c+'_';
+
+// ---- labels from the workload's map (host/tpu/viz.py) ----
+const TILES=MT.tiles||[], UBR=MT.ub||[], ACCR=MT.acc||[];
+function tileOf(id){ for(const T of TILES){ if(id>=T.first&&id<T.first+T.kt*T.nb){ const j=id-T.first; return {T,b:Math.floor(j/T.kt),k:j%T.kt}; } } return null; }
+const tileDesc=id=>{const q=tileOf(id); if(!q) return `WMEM tile ${id}`; return `${q.T.name} · cols ${NN*q.b}–${NN*q.b+NN-1} · K ${NN*q.k}–${NN*q.k+NN-1}`;};
+const tileShort=id=>{const q=tileOf(id); if(!q) return `t${id}`; return q.T.nb>1?`${q.T.name} b${q.b} k${q.k}`:`${q.T.name} k${q.k}`;};
+const TT=id=>id==null||id<0?'var(--line)':`var(--t${((id%8)+8)%8})`;
+function ubInfo(e){ for(const u of UBR){ if(e>=u.start&&e<u.start+u.m*u.chunks) return {u,i:(e-u.start)%u.m,k:Math.floor((e-u.start)/u.m)}; } return null; }
+const ubLabel=e=>{const q=ubInfo(e); return q?`${q.u.name}${q.i}·k${q.k}`:'';};
+const ubGroup=e=>{const q=ubInfo(e); if(!q) return 'g3'; const base=q.u.kind==='in'?['g1','g2']:['g4','g5']; return base[q.k%2];};
+function accInfo(a){ for(const r of ACCR){ if(a>=r.start&&a<r.start+r.m*r.nb) return {r,b:Math.floor((a-r.start)/r.m),i:(a-r.start)%r.m}; } return null; }
+const accLabel=a=>{const q=accInfo(a); return q?`${q.r.name} row ${q.i} · cols ${NN*q.b}–${NN*q.b+NN-1}`:`ACC row ${a}`;};
+const accShort=a=>{const q=accInfo(a); return q?`${q.r.name}·r${q.i}${q.r.nb>1?'·b'+q.b:''}`:'';};
+const accGroup=a=>{const q=accInfo(a); if(!q) return 'g3'; return q.r.last?'g3':(q.b%2?'g2':'g1');};
+
+// ---- instruction text ----
+const fld=(s,k)=>{const m=s.match(new RegExp('\\b'+k+'=(\\d+)'));return m?+m[1]:0;};
+const opName=i=>prog[i]?prog[i][1].split(' ')[0]:'?';
+function insShort(i){ if(!prog[i]) return '?'; const s=prog[i][1], n=opName(i);
+  if(n==='WAIT'){const t=fld(s,'target'),m=fld(s,'mask');return `WAIT ${ENG[t]} on ${ENG.filter((e,k)=>m>>k&1).join('+')}`;}
+  if(n==='MATMUL') return `MATMUL m=${fld(s,'m')} kt=${fld(s,'k_tiles')} nb=${fld(s,'n_blocks')}${fld(s,'acc')?' +=':''}`;
+  if(n==='ACTIVATE') return `ACTIVATE ${fld(s,'func')?'ReLU':'id'}${fld(s,'rq')?',rq':''}→${['UB','host','DDR'][fld(s,'dst')]}`;
+  if(n==='WR_UB'||n==='WR_WMEM'||n==='WR_BIAS'||n==='WR_QUANT') return `${n} ${fld(s,n==='WR_WMEM'?'n_rows':'n')}`;
+  if(n==='SET_WBASE') return `SET_WBASE ${fld(s,'wbase')}`;
+  if(n==='SIGNAL') return `SIGNAL tag ${fld(s,'tag')}`;
+  return n; }
+const insEng=i=>{const n=opName(i);
+  if(n==='WAIT') return fld(prog[i][1],'target');
+  return {WR_UB:0,WR_WMEM:0,WR_BIAS:0,WR_QUANT:0,RD_DDR_UB:0,SET_WBASE:1,MATMUL:2,ACTIVATE:3,RD_UB:3,SET_OBASE:3}[n] ?? -1;};
+
+// ---- memories as write logs: value at step t = the last write before t ----
+function Log(){ this.h=new Map(); }
+Log.prototype.put=function(a,t,v){ let l=this.h.get(a); if(!l){l=[];this.h.set(a,l);} l.push([t,v]); };
+Log.prototype.at=function(a,t){ const l=this.h.get(a); if(!l) return null; let lo=0,hi=l.length-1,ans=null; while(lo<=hi){const m=(lo+hi)>>1; if(l[m][0]<t){ans=l[m][1];lo=m+1;} else hi=m-1;} return ans; };
+Log.prototype.keys=function(){ return [...this.h.keys()]; };
+const UB=new Log(), ACC=new Log(), WM=new Log();
+(MT.wmem||[]).forEach((row,i)=>WM.put(i,-1,row));
+
+// ---- replay the trace once: small per-cycle snapshots (state before that cycle's edge) ----
+const S=[]; const reads={};
+const maxQ=[0,0,0,0]; let macChecks=0, macBad=0;
+const tileSeq=[];                    // tile id of the k-th tile onto the weight bus
+const outs=[];                       // every OUT word, in order
+const actRecs=[];                    // per-cycle ACT record (shared object for a row)
+(function(){
+  let iHead=0, iTail=0, dIn=0, dOut=0, oRead=0;
+  const eq=[[],[],[],[]], run=[[],[],[],[]], snap={};
+  let slots=[null,null];
+  const colq=LN.map(()=>[]);
+  const peCur=[...Array(NN)].map(()=>Array(NN).fill(-1)), peNext=[...Array(NN)].map(()=>Array(NN).fill(-1));
+  const wCnt=[...Array(NN)].map(()=>Array(NN).fill(0)), sCnt=[...Array(NN)].map(()=>Array(NN).fill(0));
+  let busRows=0, act=null, wmF=0, ubF=0, accF=0, pendWm=-1, slotTileBefore=-1;
+  let prevComp=null;
+  rows.forEach((r,t)=>{ if(g(r,'mm_ubre')) reads[t]=g(r,'mm_ubaddr'); });
+  rows.forEach((r,t)=>{
+    if(g(r,'wt_issue')) wmF=g(r,'wt_tile')*NN+g(r,'wt_row');
+    if(g(r,'act_ubwe')) ubF=g(r,'act_ubaddr'); else if(g(r,'mm_ubre')) ubF=g(r,'mm_ubaddr'); else if(g(r,'ub_we')) ubF=g(r,'ub_waddr');
+    if(g(r,'acc_we')) accF=g(r,'acc_waddr'); else if(g(r,'act_state')) accF=g(r,'act_addr');
+    // the ACT engine's row, filled in as it moves through the activation unit
+    const st=g(r,'act_state');
+    if(st===1 && (!act || act.a!==g(r,'act_addr') || act.done)){ act={a:g(r,'act_addr'),rdub:g(r,'act_rdub'),rq:g(r,'act_rq'),tub:g(r,'act_tub'),relu:g(r,'act_relu'),bias:g(r,'act_bias'),words:[]}; }
+    if(act){
+      if(st===2){ act.acc=lanes(r,'accr'); act.biasv=act.bias?lanes(r,'abias'):LN.map(()=>0); act.latch=lanes(r,'alatch'); act.q=lanes(r,'aq'); }
+      if(st===4){ act.prod=lanes(r,'aprod'); act.rnd=lanes(r,'aquant'); }
+      if(st===6){ act.ub=g(r,'act_ubaddr'); act.ubv=lanes(r,'aub'); }
+    }
+    actRecs.push(act);
+    const comp=[0,1,2,3].map(e=>g(r,'comp'+e));
+    // done count per engine moves the oldest running instruction to finished
+    if(prevComp) for(let e=0;e<4;e++){ let d=(comp[e]-prevComp[e]+65536)%65536; while(d-->0&&run[e].length) run[e].shift(); }
+    prevComp=comp;
+    S.push({iHead,iTail,dIn,dOut,eq:eq.map(q=>[...q]),run:run.map(q=>[...q]),slots:slots.map(s=>s&&{tile:s.tile,rows:s.rows,vals:s.vals.map(x=>x&&x.slice())}),
+      colq:colq.map(q=>q.slice()),nOut:outs.length,oRead,peCur:peCur.map(a=>[...a]),peNext:peNext.map(a=>[...a]),busOrd:Math.floor(busRows/NN),wmF,ubF,accF});
+    for(let e=0;e<4;e++) maxQ[e]=Math.max(maxQ[e], eq[e].length+run[e].length);
+    // ---- the edge ----
+    if(g(r,'ipush')) iTail++;
+    if(g(r,'dpush')) dIn++;
+    if(g(r,'ipop')){ const i=iHead++; for(let e=0;e<4;e++) if(g(r,'qpush')>>e&1) eq[e].push(i);
+      if(opName(i)==='WAIT') snap[i]=[0,1,2,3].map(e=>g(r,'disp'+e)); }
+    for(let e=0;e<4;e++) if(g(r,'qpop')>>e&1){ const i=eq[e].shift(); if(i!=null) run[e].push(i); }
+    if(g(r,'ld_pop')) dOut++;
+    // weight bus: remember which tile row 0 belongs to (the drain slot as MM read it)
+    if(g(r,'wv')&&g(r,'wrow')===0) tileSeq.push(slotTileBefore);
+    slotTileBefore=slots[g(r,'wt_rd')]?slots[g(r,'wt_rd')].tile:-1;
+    if(g(r,'mm_take')) slots[g(r,'wt_rd')]=null;
+    if(pendWm>=0 && g(r,'fw')) WM.put(pendWm,t+1,lanes(r,'fd'));
+    pendWm=-1;
+    if(g(r,'fw')){ const s=g(r,'fslot'); if(slots[s]) slots[s].vals[g(r,'frow')]=lanes(r,'fd'); }
+    if(g(r,'wt_issue')){ const s=g(r,'wt_wr'); if(g(r,'wt_row')===0||!slots[s]) slots[s]={tile:g(r,'wt_tile'),rows:0,vals:LN.map(()=>null)}; slots[s].rows=g(r,'wt_row')+1; pendWm=g(r,'wt_tile')*NN+g(r,'wt_row'); }
+    if(g(r,'wmem_we')) WM.put(g(r,'wmem_waddr'),t+1,lanes(r,'ldr'));
+    if(g(r,'ub_we')) UB.put(g(r,'ub_waddr'),t+1,lanes(r,'ldr'));
+    if(g(r,'act_ubwe')){ UB.put(g(r,'act_ubaddr'),t+1,lanes(r,'aub')); if(act) act.done=1; }
+    if(g(r,'out_push')){ outs.push(g(r,'out_word')); if(act){ act.words.push(g(r,'out_word')); } }
+    if(g(r,'opop')) oRead++;
+    if(g(r,'wv')) busRows++;
+    for(let a=0;a<NN;a++)for(let c=0;c<NN;c++){const q=pk(a,c);
+      if(g(r,q+'v')&&g(r,q+'f')){ peCur[a][c]=sCnt[a][c]++; }
+      if(g(r,q+'ws')){ peNext[a][c]=wCnt[a][c]++; }
+      // the chain check: what this PE takes from above is what the PE above computed last edge
+      if(a>0&&g(r,q+'v')&&t>0){ const up=rows[t-1], qu=pk(a-1,c); if(g(up,qu+'v')){ macChecks++; if(macOut(up,qu)!==g(r,q+'pin')) macBad++; } }
+    }
+    if(g(r,'row_pop')) colq.forEach(q=>q.shift());
+    for(let c=0;c<NN;c++){const q=pk(NN-1,c); if(g(r,q+'v')) colq[c].push(macOut(r,q));}
+    if(g(r,'acc_we')) ACC.put(g(r,'acc_waddr'),t+1,lanes(r,'accw'));
+  });
+  S.snap=snap;
+})();
+function wUse(r,q){return g(r,q+'f')?g(r,q+'wn'):g(r,q+'wc');}
+function macOut(r,q){return (wUse(r,q)*g(r,q+'a')+g(r,q+'pin'))|0;}
+const tileAtOrd=o=>o>=0&&o<tileSeq.length?tileSeq[o]:-1;
+const firstT=f=>{for(let t=0;t<rows.length;t++) if(f(rows[t],t)) return t; return -1;};
+const popsBefore=[]; {let pc=0; rows.forEach(r=>{popsBefore.push(pc); if(g(r,'ipop')) pc++;});}
+let MACS=0; rows.forEach(r=>{for(let a=0;a<NN;a++)for(let c=0;c<NN;c++) MACS+=g(r,pk(a,c)+'v');});
+
+// ---- header ----
+(function(){
+  $('eyebrow').textContent=MT.eyebrow||'';
+  $('title').textContent=MT.title;
+  $('lede').textContent=MT.lede||'';
+  const ch=[[`${NN} × ${NN} array`,''],[`${nf(rows.length)}`,' cycles traced'],[`${nf(MACS)}`,' multiply-accumulates'],
+    [`${(100*MACS/(rows.length*NN*NN)).toFixed(1)}%`,' PEs busy']];
+  let h=ch.map(([b,s])=>`<span class="chip"><b>${b}</b>${s}</span>`).join('');
+  if(MT.check) h+=`<span class="chip ${MT.check.ok?'ok':'no'}"><b>${MT.check.ok?'outputs match':'outputs differ'}</b> ${esc(MT.check.what)}</span>`;
+  h+=`<span class="chip ${macBad?'no':'ok'}"><b>${macBad?macBad+' bad':'every'}</b> partial sum chained (${nf(macChecks)} checked)</span>`;
+  if(MT.hardware) h+=`<span class="chip ${MT.hardware.ok?'ok':'no'}"><b>hardware</b> ${esc(MT.hardware.summary)}</span>`;
+  $('chips').innerHTML=h;
+  $('srcnote').textContent=MT.source||'';
+  const facts=Object.entries(MT.facts||{});
+  $('facts').innerHTML=facts.map(([k,v])=>`<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('');
+  document.title=MT.title;
+})();
+
+// ---- program table ----
+(function(){
+  let h='<thead><tr><th>#</th><th>Encoding</th><th>Instruction</th></tr></thead><tbody>', ph=null;
+  prog.forEach((p,i)=>{ if(p[2]!==ph){ ph=p[2]; h+=`<tr class="phase"><td colspan="3">${esc(ph)}</td></tr>`; }
+    h+=`<tr data-i="${i}"><td>${i+1}</td><td>${p[0]}</td><td>${esc(p[1].replace(/ (acc|wsrc)=0/g,''))}</td></tr>`; });
+  $('prog').innerHTML=h+'</tbody>';
+  $('proghead').textContent=`Program (${prog.length} instructions)`;
+})();
+
+// ---- svg helpers ----
+function rect(x,y,w,h,o={}){return `<rect x="${x}" y="${y}" width="${Math.max(0,w)}" height="${Math.max(0,h)}" rx="${o.rx??4}" ${o.cls?`class="${o.cls}"`:''} ${o.fill?`fill="${o.fill}"`:''} ${o.fo!=null?`fill-opacity="${o.fo}"`:''} ${o.st?`stroke="${o.st}"`:''} ${o.sw?`stroke-width="${o.sw}"`:''} ${o.dash?`stroke-dasharray="${o.dash}"`:''}/>`;}
+function txt(x,y,s,o={}){return `<text x="${x}" y="${y}" ${o.cls?`class="${o.cls}"`:''} ${o.a?`text-anchor="${o.a}"`:''} ${o.fill?`fill="${o.fill}"`:''} ${o.fw?`font-weight="${o.fw}"`:''} ${o.fs?`font-size="${o.fs}"`:''}>${s}</text>`;}
+function chip(x,y,w,h,color,label,o={}){return `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${o.rx??3}" fill="${color}" fill-opacity="${o.fo??0.18}" stroke="${color}" stroke-width="${o.sw??1.3}" ${o.dash?`stroke-dasharray="${o.dash}"`:''}/>`+
+  (label!=null?`<text x="${x+(o.left?6:w/2)}" y="${y+h/2+4}" text-anchor="${o.left?'start':'middle'}" class="${o.cls||'cv'}">${label}</text>`:'');}
+const MK={'var(--edge)':'edge','var(--actv)':'actv','var(--psum)':'psum','var(--wt)':'wt','var(--mm)':'mm','var(--act)':'act','var(--ld)':'ld','var(--line)':'line'};
+const MKDEFS=Object.entries(MK).map(([c,id])=>`<marker id="mk-${id}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="${c}"/></marker>`).join('');
+function arrow(x1,y1,x2,y2,color,o={}){return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${color}" stroke-width="${o.sw??1.6}" ${o.dash?`stroke-dasharray="${o.dash}"`:''} marker-end="url(#mk-${MK[color]||'edge'})"/>`;}
+function line(x1,y1,x2,y2,color,o={}){return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${color}" stroke-width="${o.sw??1}" ${o.dash?`stroke-dasharray="${o.dash}"`:''} ${o.op!=null?`stroke-opacity="${o.op}"`:''}/>`;}
+function panel(x,y,w,h,title,o={}){return rect(x,y,w,h,{cls:'pn'+(o.on?' on':'')})+txt(x+10,y+18,title,{cls:'pt'})+(o.sub?txt(x+w-10,y+18,o.sub,{cls:'ps',a:'end'}):'');}
+function minimap(x,y,h,total,win0,winN,bands,marks,label){ let o=rect(x,y,10,h,{rx:2,fill:'var(--panel)',st:'var(--line)'});
+  const sy=v=>y+Math.min(total,Math.max(0,v))*h/total;
+  bands.forEach(([a,b,col,fo])=>{o+=rect(x+1,sy(a),8,Math.max(.6,sy(b)-sy(a)),{rx:0,fill:col,fo:fo??.55});});
+  o+=rect(x-3,sy(win0),16,Math.max(3,sy(win0+winN)-sy(win0)),{rx:2,fill:'none',st:'var(--ink)',sw:1.4});
+  marks.forEach(([v,col])=>{o+=line(x-5,sy(v),x+15,sy(v),col,{sw:2});});
+  return o+txt(x+5,y+h+11,label,{cls:'ps',a:'middle',fs:8.5}); }
+
+// geometry: control band height follows the deepest queue; the array scales to fit N
+const QMAX=Math.max(...maxQ,4), EY=24+34+QMAX*24+26+10, DY=EY+112+16-312;
+const SC=Math.min(1,8/NN), CW=100*SC, CH=72*SC, GPX=10*SC, GPY=10*SC;
+const AX=100, AY=1030;
+const colX=c=>AX+c*(CW+GPX), rowY=a=>AY+a*(CH+GPY);
+const LW=Math.min(27,216/NN);                    // one int8 lane in WMEM and the UB
+const ALW=Math.min(45,360/NN);                   // one int32 lane in ACC
+const RLW=Math.min(38,304/NN);                   // one lane in the activation unit
+const XS=NN>8?' xs':'';
+const UBD=MT.depths.ub, ACCD=MT.depths.acc, WMD=MT.depths.wmem;
+const ubKeys=UB.keys(), accKeys=ACC.keys();
+const UBMAX=Math.max(1,...ubKeys.map(k=>k+1),...UBR.map(u=>u.start+u.m*u.chunks)), ACCMAX=Math.max(1,...accKeys.map(k=>k+1),...ACCR.map(a=>a.start+a.m*a.nb));
+const WMMAX=Math.max(1,(MT.wmem||[]).length,...WM.keys().map(k=>k+1));
+
+// ---- the system drawing ----
+function drawSystem(t){
+  const r=rows[t], s=S[t];
+  let o='<defs>'+MKDEFS+'</defs>';
+  o+=txt(10,14,'CONTROL',{cls:'band'});
+  // ===== host
+  const busW=g(r,'wr'), busR=g(r,'rd'), ad=g(r,'addr');
+  o+=panel(10,24,160,EY+112-24,MT.host||'Host',{on:busW||busR});
+  o+=txt(20,60,'bus this cycle',{cls:'ps'});
+  if(busW||busR){ const col=busW?(ad===2?'var(--actv)':ad<=1?'var(--ink)':'var(--muted)'):'var(--psum)';
+    o+=chip(20,66,140,22,col,`${busW?'write':'read'} ${REG[ad]||ad}`,{fo:.14}); }
+  else o+=txt(20,82,'idle',{cls:'ps'});
+  const hb=(y,lab,n,tot,col)=>{ let q=txt(20,y,lab,{cls:'ps',fs:9})+txt(160,y+22,`${nf(n)} / ${nf(tot)}`,{cls:'cv sm',a:'end'});
+    q+=rect(20,y+5,90,7,{rx:2,fill:'var(--panel)',st:'var(--line)'})+rect(20,y+5,90*Math.min(1,n/Math.max(1,tot)),7,{rx:2,fill:col,fo:.7}); return q; };
+  o+=hb(106,'instructions',s.iTail,prog.length,'var(--ink)');
+  o+=hb(140,'data words',s.dIn,MT.data_total,'var(--actv)');
+  o+=hb(174,'result words read',s.oRead,Math.max(MT.out_total,s.oRead),'var(--psum)');
+  const dn=g(r,'done'), fe=g(r,'fence');
+  o+=txt(20,214,`DONE ${dn?'●':'○'}   fence ${fe?'●':'○'}`,{cls:'cv'});
+  o+=txt(20,232,`idle ${g(r,'idle')?'●':'○'}   error ${g(r,'err')?'●':'○'}`,{cls:'cv',fill:g(r,'err')?'var(--bad)':null});
+  // ===== instruction FIFO
+  const ifq=[]; for(let i=s.iHead;i<s.iTail;i++) ifq.push(i);
+  const IFN=Math.floor((EY+112-46-30)/23);
+  o+=panel(180,24,200,EY+112-24,'Instruction FIFO',{sub:`${ifq.length} / 512`});
+  o+=arrow(170,60,180,60,'var(--edge)');
+  ifq.slice(0,IFN).forEach((i,k)=>{ const e=insEng(i), col=e<0?'var(--muted)':ECOL[e];
+    o+=chip(188,46+k*23,184,20,col,`#${i+1} ${esc(insShort(i))}`,{left:1,fo:k===0?.28:.12,sw:k===0?2:1.1,cls:'cv sm'}); });
+  if(ifq.length>IFN) o+=txt(280,46+IFN*23+12,`+ ${ifq.length-IFN} more`,{cls:'ps',a:'middle'});
+  if(!ifq.length) o+=txt(280,70,'empty',{cls:'ps',a:'middle'});
+  // ===== dispatcher
+  const ip=g(r,'ipop');
+  o+=panel(390,24,240,150,'dispatch',{on:ip});
+  o+=arrow(380,60,390,60,'var(--edge)');
+  if(ip){ const i=popsBefore[t], tg=[0,1,2,3].filter(e=>g(r,'qpush')>>e&1);
+    o+=chip(400,48,220,24,tg.length?ECOL[tg[0]]:'var(--muted)',`issues #${i+1} ${esc(insShort(i))}`,{left:1,fo:.3,sw:2,cls:'cv sm'});
+    o+=txt(400,90,'→ '+(tg.length?tg.map(e=>ENG[e]+' queue').join(' + '):'stays here (fence)'),{cls:'cv',fw:600});
+  } else if(fe) o+=chip(400,48,220,24,'var(--warn)','SIGNAL fence: waiting for idle',{left:1});
+  else if(!ifq.length) o+=txt(400,64,'nothing to issue',{cls:'ps'});
+  else o+=txt(400,64,`head #${ifq[0]+1} waits (queue full)`,{cls:'ps'});
+  o+=txt(400,112,'sent',{cls:'ps'})+txt(400,130,'done',{cls:'ps'});
+  for(let e=0;e<4;e++){ o+=txt(450+e*45,112,`${ENG[e]} ${g(r,'disp'+e)}`,{cls:'cv',fill:ECOL[e]}); o+=txt(450+e*45,130,`${g(r,'comp'+e)}`,{cls:'cv'}); }
+  o+=txt(400,152,'a WAIT holds its engine until the',{cls:'ps',fs:9.5})+txt(400,165,'named engines finish earlier work',{cls:'ps',fs:9.5});
+  // ===== data FIFO
+  const dq=s.dIn-s.dOut;
+  o+=panel(390,184,240,EY+112-184,'Data FIFO',{sub:`${dq} / 1,024`, on:g(r,'ld_pop')});
+  const DCELLS=Math.min(dq,20*Math.floor((EY+112-184-50)/11));
+  for(let k=0;k<DCELLS;k++) o+=rect(400+(k%20)*11,206+Math.floor(k/20)*11,9.5,9.5,{rx:1.5,fill:'var(--actv)',fo:k===0?.9:.35,st:k===0?'var(--actv)':null});
+  if(dq) o+=txt(400,EY+104,`head: word ${s.dOut+1} → LD`,{cls:'cv sm'});
+  else o+=txt(510,250,busW&&ad===2?'← a word arrives':'empty',{cls:'ps',a:'middle'});
+  // ===== queues + engines
+  for(let e=0;e<4;e++){
+    const x=640+e*188, q=s.eq[e], ru=s.run[e];
+    const items=[...ru.map(i=>[i,1]),...q.map(i=>[i,0])];
+    const head=ru.length?ru[0]:q[0];
+    const waitHead=q.length&&!ru.length&&opName(q[0])==='WAIT';
+    const h=Math.max(56, 34+items.length*24+(waitHead?26:0));
+    o+=rect(x,24,180,h,{cls:'pn'})+rect(x,24,180,24,{fill:ECOL[e],fo:.9,rx:4})+txt(x+10,41,`${ENG[e]} queue`,{cls:'qt'})+txt(x+170,41,`${q.length} queued · ✓${g(r,'comp'+e)}`,{cls:'qt',a:'end'});
+    items.forEach(([i,running],k)=>{ o+=chip(x+8,54+k*24,164,21,ECOL[e],`${running?'▶ ':''}#${i+1} ${esc(insShort(i))}`,{left:1,fo:running?.3:.08,sw:running?2:1,cls:'cv sm'}); });
+    if(waitHead){ const cur=q[0], sn=S.snap[cur]||[0,0,0,0], m=fld(prog[cur][1],'mask');
+      const need=[0,1,2,3].filter(k=>m>>k&1).map(k=>`${ENG[k]} ${g(r,'comp'+k)}/${sn[k]}`); const blocked=[0,1,2,3].some(k=>(m>>k&1)&&((g(r,'comp'+k)-sn[k]+65536)%65536)>32768);
+      o+=chip(x+8,54+items.length*24,164,21,blocked?'var(--warn)':'var(--ok)',`${blocked?'⏳ blocked':'✓ released'}: ${need.join(', ')}`,{left:1,fo:.2,cls:'cv sm'}); }
+    if(!items.length) o+=txt(x+90,66,'empty',{cls:'ps',a:'middle'});
+  }
+  const stateRow=(x,y,list,act,col)=>{let w=(172-(list.length-1)*3)/list.length, out=''; list.forEach((n,k)=>{out+=chip(x+k*(w+3),y,w,18,act===n?col:'var(--line)',n,{fo:act===n?.85:.0,cls:act===n?'cv on':'cv sm dim',sw:1});}); return out;};
+  const eb=(e,lns,st,list,on)=>{const x=640+e*188; let out=rect(x,EY,180,112,{cls:'pn'+(on?' on':'')})+txt(x+10,EY+18,ENGN[e],{cls:'pt',fill:ECOL[e]});
+    out+=stateRow(x+4,EY+26,list,st,ECOL[e]); lns.forEach((l,k)=>{out+=txt(x+10,EY+64+k*16,l,{cls:'cv sm'});}); return out;};
+  const ldStall=g(r,'ld_busy')&&!g(r,'ld_pop')&&!g(r,'ld_ddr')&&!dq;
+  o+=eb(0,[g(r,'ld_busy')?`${OPN[g(r,'ld_op')]||g(r,'ld_op')} · ${g(r,'ld_left')} left`:'waiting for work', g(r,'ld_pop')?'takes a data word':ldStall?'stalled: data FIFO empty':'',
+    g(r,'ub_we')?`writes UB[${g(r,'ub_waddr')}] ${ubLabel(g(r,'ub_waddr'))}`:g(r,'wmem_we')?`writes WMEM[${g(r,'wmem_waddr')}]`:g(r,'par_we')||g(r,'q_we')?`writes ${g(r,'par_we')?'bias':'quant'}[${g(r,'par_waddr')}]`:''],g(r,'ld_busy')?'BUSY':'IDLE',['IDLE','BUSY'],g(r,'ld_pop')||g(r,'ub_we')||g(r,'wmem_we'));
+  o+=eb(1,[`${g(r,'wt_left')} tiles left to fetch`, `WBASE = ${g(r,'wbase')}${g(r,'wt_ddr')?' · from DDR3':''}`, g(r,'wt_issue')?`row ${g(r,'wt_tile')*NN+g(r,'wt_row')} (t${g(r,'wt_tile')} r${g(r,'wt_row')}) → slot ${g(r,'wt_wr')}`:g(r,'wt_left')&&g(r,'wt_full')===3?'both slots full: waits for MM':''],g(r,'wt_issue')?'FETCH':'IDLE',['IDLE','FETCH'],g(r,'wt_issue'));
+  const ms=MMS[g(r,'mm_state')];
+  o+=eb(2,[ms==='RUN'?`window ${g(r,'mm_pos')+1}/${g(r,'mm_len')} · K-tile ${g(r,'mm_k')}/${g(r,'mm_kt')}${g(r,'mm_freeze')?' · frozen':''}`:ms==='DRAIN'?'rows still crossing':g(r,'mm_sync')?'WAIT blocks':'',
+          ms==='RUN'?`${g(r,'mm_acts')?`${g(r,'mm_m')} act rows`:''}${g(r,'mm_acts')&&g(r,'mm_wts')?' + ':''}${g(r,'mm_wts')?'next weights':''}`:'', `${g(r,'inflight')} row(s) in flight`],ms,['IDLE','RUN','DRAIN'],g(r,'mm_ubre')||g(r,'wv'));
+  const as=ACS[g(r,'act_state')];
+  o+=eb(3,[as!=='IDLE'?(g(r,'act_rdub')?`RD_UB entry ${g(r,'act_addr')}`:`ACC row ${g(r,'act_addr')} ${accShort(g(r,'act_addr'))}`):'',
+           g(r,'act_ubwe')?`UB[${g(r,'act_ubaddr')}] ← int8 × ${NN}`:g(r,'out_push')?`OUT ← ${neg(g(r,'out_word'))}`:'', as!=='IDLE'&&!g(r,'act_rdub')?`block ${g(r,'act_blk')} row ${g(r,'act_rib')}`:''],
+           as,['READ','LATCH','MUL','RND','WRITE','EMIT'],g(r,'act_ubwe')||g(r,'out_push'));
+  o+=arrow(630,70,638,70,'var(--edge)');
+
+  o+=`<g transform="translate(0,${DY})">`+txt(10,316,'DATAPATH',{cls:'band'});
+  // ===== WMEM, a window of 3 tiles following WT
+  const wtI=g(r,'wt_issue'), wtRow=g(r,'wt_tile')*NN+g(r,'wt_row');
+  const TBX=59+LW*NN+26, WN=Math.min(3*NN,24), WRH=312/WN, w0=clamp(Math.floor(s.wmF/NN)*NN-NN,0,Math.max(0,WMMAX-WN));
+  o+=panel(10,322,455,372,'WMEM',{sub:`rows ${w0}–${w0+WN-1} of ${nf(WMD)}`,on:wtI});
+  o+=txt(52,354,'row',{cls:'ps',a:'end'}); LN.forEach(c=>{ if(NN<=8||c%2===0) o+=txt(59+LW*c+LW/2-1,354,`c${c}`,{cls:'ps',a:'middle',fs:9}); });
+  for(let k=0;k<WN;k++){ const row=w0+k, tl=Math.floor(row/NN), y=362+k*WRH; const W=WM.at(row,t);
+    o+=txt(52,y+WRH-3,row,{cls:'ps',a:'end',fs:9});
+    LN.forEach(c=>{ o+=rect(59+c*LW,y,LW-2,WRH-1,{rx:1.5,fill:W?TT(tl):'var(--panel)',fo:W?.22:1,st:W?TT(tl):'var(--line)',sw:.6})+(W?txt(59+c*LW+LW/2-1,y+WRH-3.5,neg(W[c]),{cls:'cv xs',a:'middle'}):''); });
+    if(row%NN===0){ o+=line(TBX,y+1,TBX,y+NN*WRH-3,TT(tl),{sw:2.5}); const q=tileOf(tl); o+=txt(TBX+8,y+12,`t${tl}`,{cls:'cv',fw:700,fill:TT(tl)})+(q?txt(TBX+8,y+25,`${q.T.name} · cols ${NN*q.b}–${NN*q.b+NN-1}`,{cls:'ps',fs:9})+(NN*WRH>40?txt(TBX+8,y+37,`K ${NN*q.k}–${NN*q.k+NN-1}`,{cls:'ps',fs:9}):''):''); } }
+  if(wtI&&wtRow>=w0&&wtRow<w0+WN){ const y=362+(wtRow-w0)*WRH; o+=rect(56,y-2,LW*NN+2,WRH+3,{rx:3,fill:'none',st:'var(--wt)',sw:2.4})+txt(61+LW*NN,y+WRH-2,'WT',{cls:'cv sm',fill:'var(--wt)',fw:700}); }
+  o+=minimap(440,362,312,WMMAX,w0,WN,TILES.map(T=>[T.first*NN,(T.first+T.kt*T.nb)*NN,TT(T.first),.45]),[[wtRow,'var(--wt)']],`${nf(WMMAX)} used`);
+  // ===== UB
+  const lw=g(r,'ub_we')?g(r,'ub_waddr'):-1, mr=g(r,'mm_ubre')?g(r,'mm_ubaddr'):-1, aw=g(r,'act_ubwe')?g(r,'act_ubaddr'):-1;
+  const UN=21, u0=clamp(s.ubF-8,0,Math.max(0,UBMAX-UN)), UX=475;
+  o+=panel(UX,322,455,372,'Unified Buffer',{sub:`entries ${u0}–${u0+UN-1} of ${nf(UBD)} (int8 × ${NN})`,on:lw>=0||mr>=0||aw>=0});
+  for(let k=0;k<UN;k++){ const e=u0+k, y=350+k*15, v=UB.at(e,t); const grp=ubGroup(e);
+    o+=txt(UX+42,y+10,e,{cls:'ps',a:'end',fs:9})+txt(UX+52+LW*NN,y+10,ubLabel(e),{cls:'ps',fs:9});
+    LN.forEach(c=>{ o+=rect(UX+48+c*LW,y,LW-2,13,{rx:1.5,cls:'c '+grp,fo:v?1:.25})+(v?txt(UX+48+c*LW+LW/2-1,y+10,neg(v[c]),{cls:'cv xs',a:'middle'}):''); });
+    const tag=(col,lab)=>rect(UX+45,y-2,LW*NN+4,17,{rx:3,fill:'none',st:col,sw:2.4})+txt(UX+420,y+10,lab,{cls:'cv sm',a:'end',fill:col,fw:700});
+    if(e===lw) o+=tag('var(--ld)','← LD writes');
+    if(e===aw) o+=tag('var(--act)','← ACT writes');
+    if(e===mr) o+=tag('var(--mm)','MM reads →');
+  }
+  o+=txt(UX+10,674,UBR.map(u=>`${u.name}: ${u.note}`).join(' · ').slice(0,90),{cls:'ps',fs:9})+txt(UX+10,687,'k: K-chunk of '+NN+' features; entries are K-chunk-major',{cls:'ps',fs:9});
+  { const bands=UBR.map(u=>[u.start,u.start+u.m*u.chunks,u.kind==='in'?'var(--g1)':'var(--g4)',.9]); const mk=[]; if(mr>=0) mk.push([mr,'var(--mm)']); if(lw>=0) mk.push([lw,'var(--ld)']); if(aw>=0) mk.push([aw,'var(--act)']);
+    o+=minimap(UX+430,350,300,UBMAX,u0,UN,bands,mk,`${nf(UBMAX)} used`); }
+  // ===== ACC
+  const accW=g(r,'acc_we')?g(r,'acc_waddr'):-1, actR=g(r,'act_state')===1&&!g(r,'act_rdub')?g(r,'act_addr'):-1;
+  const AN=14, a0=clamp(s.accF-5,0,Math.max(0,ACCMAX-AN)), CX=940;
+  o+=panel(CX,322,450,372,'Accumulator (ACC)',{sub:`rows ${a0}–${a0+AN-1} of ${nf(ACCD)} · int32 × ${NN}`,on:accW>=0});
+  for(let k=0;k<AN;k++){ const a=a0+k, y=346+k*22.5, v=ACC.at(a,t);
+    o+=txt(CX+20,y+14,a,{cls:'ps',a:'end'})+txt(CX+24,y+14,accShort(a),{cls:'ps',fs:8.5});
+    LN.forEach(c=>{ const nv=accW===a?r[IX['accw'+c]]:null;
+      o+=rect(CX+82+c*ALW,y,ALW-2,20,{rx:2,cls:'c '+accGroup(a),fo:v||nv!=null?1:.25})+((nv!=null||v)?txt(CX+82+c*ALW+ALW/2-1,y+14,fmtC(nv!=null?nv:v[c]),{cls:'cv'+(NN>8?' xs':' sm'),a:'middle',fw:nv!=null?700:null}):''); });
+    if(accW===a){ const ow=g(r,'acc_ow'); o+=rect(CX+80,y-2,ALW*NN+3,24,{rx:3,fill:'none',st:'var(--mm)',sw:2.4})+txt(CX+77,y+14,ow?'=':'+=',{cls:'cv sm',a:'end',fill:'var(--mm)',fw:700}); }
+    if(actR===a) o+=rect(CX+80,y-2,ALW*NN+3,24,{rx:3,fill:'none',st:'var(--act)',sw:2.4})+txt(CX+77,y+14,'→',{cls:'cv sm',a:'end',fill:'var(--act)',fw:700});
+  }
+  o+=txt(CX+10,684,`in flight: ${g(r,'inflight')} · = first K-tile, += the rest · → ACT reads`,{cls:'ps'});
+
+  // ===== tile buffer, columns lined up with the array
+  const nx=rows[t+1], rdNext=nx&&g(nx,'wv')?g(nx,'wrow'):-1, rdSlot=g(r,'wt_rd'), TBY=704;
+  const TRH=Math.min(12.5,100/NN);
+  o+=panel(10,TBY,980,248,`Tile buffer (weight_fifo): two ${NN} × ${NN} slots`,{on:g(r,'mm_take')||wtI||rdNext>=0});
+  for(let sl=0;sl<2;sl++){ const y0=TBY+30+sl*108, sv=s.slots[sl], full=g(r,'wt_full')>>sl&1;
+    o+=txt(20,y0+12,`slot ${sl}`,{cls:'cv',fw:700,fill:sv?TT(sv.tile):'var(--muted)'});
+    o+=txt(20,y0+26,sv?`t${sv.tile} · ${full?'full':`${sv.rows}/${NN}`}`:'empty',{cls:'cv sm'});
+    if(sv) o+=txt(20,y0+39,tileShort(sv.tile),{cls:'ps',fs:9});
+    const role=[]; if(g(r,'wt_wr')===sl&&g(r,'wt_left')) role.push('WT fills'); if(rdSlot===sl&&rdNext>=0) role.push('MM reads');
+    role.forEach((x,k)=>{o+=txt(20,y0+52+k*12,x,{cls:'ps',fs:9,fill:x[0]==='W'?'var(--wt)':'var(--mm)'});});
+    for(let rr=0;rr<NN;rr++){ const val=sv&&sv.vals[rr], y=y0+rr*TRH;
+      if(NN<=8||rr%2===0) o+=txt(colX(0)+CW/2-28*SC,y+TRH-3,`r${rr}`,{cls:'ps',a:'end',fs:8});
+      LN.forEach(c=>{ const cx=colX(c)+CW/2;
+        o+=rect(cx-22*SC,y,44*SC,TRH-1.5,{rx:2,fill:val?TT(sv.tile):'var(--panel)',fo:val?.22:1,st:val?TT(sv.tile):'var(--line)',sw:.6})+(val?txt(cx,y+TRH-3.5,neg(val[c]),{cls:'cv xs',a:'middle'}):''); });
+      if(sl===rdSlot&&rr===rdNext) o+=rect(colX(0)+CW/2-25*SC,y-2,colX(NN-1)-colX(0)+50*SC,TRH+2,{rx:3,fill:'none',st:'var(--mm)',sw:2.2})+txt(985,y+TRH-2,'→ bus',{cls:'cv sm',a:'end',fill:'var(--mm)',fw:700});
+      if(nx&&g(nx,'fw')&&g(nx,'fslot')===sl&&g(nx,'frow')===rr) o+=rect(colX(0)+CW/2-25*SC,y-2,colX(NN-1)-colX(0)+50*SC,TRH+2,{rx:3,fill:'none',st:'var(--wt)',sw:2,dash:'4 2'})+txt(985,y+TRH-2,'← WT',{cls:'cv sm',a:'end',fill:'var(--wt)',fw:700});
+    }
+  }
+
+  // ===== the array
+  const APY=960, ABOT=AY+NN*(CH+GPY)+96;
+  o+=panel(10,APY,980,ABOT-APY,`Systolic array (mmu, ${NN} × ${NN} pe)`,{sub:'activations →   partial sums ↓   weights ↓ per column'});
+  o+=txt(20,APY+42,'weight',{cls:'ps'})+txt(20,APY+54,'buses',{cls:'ps'});
+  LN.forEach(c=>{ const src=rows[t-c], x=colX(c);
+    o+=line(x+CW+GPX/2,AY-8,x+CW+GPX/2,rowY(NN-1)+CH,'var(--wt)',{sw:1,dash:'2 3',op:.5});
+    if(src&&g(src,'wv')){ const tl=tileAtOrd(S[t-c].busOrd), rw=g(src,'wrow'), v=src[IX['wd'+c]];
+      o+=chip(x,APY+32,CW,24,TT(tl),NN>8?neg(v):`t${tl} r${rw} · ${neg(v)}`,{fo:.22,sw:1.6,cls:'cv sm'});
+      const yT=rowY(rw)+CH-18*SC; o+=line(x+CW+GPX/2,AY-8,x+CW+GPX/2,yT,'var(--wt)',{sw:2.2})+arrow(x+CW+GPX/2,yT,x+CW-1,yT,'var(--wt)',{sw:2}); }
+    else o+=chip(x,APY+32,CW,24,'var(--line)','idle',{fo:0,cls:'cv sm dim',dash:'3 3'});
+  });
+  LN.forEach(a=>{ const y=rowY(a), q=pk(a,0);
+    o+=txt(18,y+11,`row ${a}`,{cls:'ps',fs:9});
+    if(g(r,q+'v')){ const e=reads[t-1-a]; o+=chip(18,y+16*SC,64,22,'var(--actv)',`${neg(g(r,q+'a'))}`,{fo:.2,sw:1.6,cls:'cv b'});
+      if(NN<=8) o+=txt(50,y+52,e!=null?ubLabel(e)||('UB '+e):'',{cls:'ps',a:'middle',fs:9});
+      if(g(r,q+'f')&&NN<=8) o+=txt(50,y+64,'⇄ next tile',{cls:'cv xs',a:'middle',fill:'var(--warn)'}); }
+    o+=arrow(82,y+28*SC,AX-2,y+28*SC,'var(--actv)',{sw:1.2});
+  });
+  for(let a=0;a<NN;a++)for(let c=0;c<NN;c++){
+    const q=pk(a,c), x=colX(c), y=rowY(a), v=g(r,q+'v'), f=v&&g(r,q+'f'), ws=g(r,q+'ws');
+    const ct=s.peCur[a][c], nt=s.peNext[a][c], useO=f?nt:ct, useT=tileAtOrd(useO);
+    let pe=rect(0,0,100,72,{rx:5,fill:v?TT(useT):'var(--panel)',fo:v?.1:1,st:f?'var(--warn)':(v?TT(useT):'var(--line)'),sw:f?3:(v?1.4:1)});
+    pe+=txt(5,11,`${a},${c}`,{cls:'ps',fs:8.5});
+    if(f) pe+=txt(95,11,`⇄ t${tileAtOrd(nt)}`,{cls:'cv xs',a:'end',fill:'var(--warn)',fw:700});
+    else if(useO>=0) pe+=txt(95,11,`t${useT}`,{cls:'cv xs',a:'end',fill:TT(useT),fw:700});
+    if(v){ pe+=chip(5,16,43,24,'var(--actv)',neg(g(r,q+'a')),{fo:.22,cls:'cv b'}); pe+=chip(52,16,43,24,'var(--psum)',fmtC(macOut(r,q)),{fo:.22,cls:'cv b'}); }
+    else pe+=chip(5,16,43,24,'var(--line)',null,{fo:0,dash:'3 3'})+chip(52,16,43,24,'var(--line)',null,{fo:0,dash:'3 3'});
+    const wv=wUse(r,q);
+    if(useO>=0) pe+=chip(5,44,43,24,TT(useT),neg(wv),{fo:v?.32:.12,sw:v?1.6:1,cls:'cv b'});
+    else pe+=chip(5,44,43,24,'var(--line)','—',{fo:0,cls:'cv sm dim'});
+    if(ws) pe+=chip(52,44,43,24,TT(tileAtOrd(nt+1)),neg(g(r,q+'wd')),{fo:.35,sw:2.4,cls:'cv b'});
+    else if(nt>useO) pe+=chip(52,44,43,24,TT(tileAtOrd(nt)),neg(g(r,q+'wn')),{fo:.12,sw:1.2,dash:'3 2',cls:'cv b'});
+    else pe+=chip(52,44,43,24,'var(--line)',nt>=0?'used':'—',{fo:0,cls:'cv xs dim'});
+    o+=`<g transform="translate(${x},${y}) scale(${SC})">${pe}</g>`;
+    if(c<NN-1) o+=arrow(x+CW+1,y+28*SC,x+CW+GPX-1,y+28*SC,'var(--actv)',{sw:1});
+    if(a<NN-1) o+=arrow(x+73*SC,y+CH+1,x+73*SC,y+CH+GPY-1,'var(--psum)',{sw:1});
+  }
+  const OY=rowY(NN);
+  LN.forEach(c=>{ const x=colX(c), q=pk(NN-1,c);
+    o+=arrow(x+73*SC,OY-GPY+1,x+73*SC,OY+6,'var(--psum)',{sw:1.2});
+    if(g(r,q+'v')) o+=chip(x+46*SC,OY+8,52*SC,20,'var(--psum)',NN>8?'↓':`↓ ${fmtC(macOut(r,q))}`,{fo:.25,sw:1.6,cls:'cv sm'});
+    const cq=s.colq[c]; o+=txt(x+2,OY+21,NN>8?cq.length:`FIFO ${cq.length}`,{cls:'ps',fs:9});
+    if(NN<=8) cq.slice(0,4).forEach((v,k)=>{ o+=chip(x+k*26*SC,OY+34,24*SC,16,'var(--psum)',fmtC(v),{fo:.1,cls:'cv xs'}); });
+  });
+  if(g(r,'row_pop')){ const tg=g(r,'tag'), hi=1<<Math.round(Math.log2(ACCD)); o+=txt(20,OY+72,`all ${NN} column FIFOs have a value → row popped to ACC[${tg&(hi-1)}] (${tg&hi?'overwrite':'add'}) →`,{cls:'cv sm',fill:'var(--mm)',fw:600}); }
+  else o+=txt(20,OY+72,'the accumulator pops a row when every column FIFO has a value',{cls:'ps'});
+
+  // ===== activation unit: the row ACT is working on, each stage from the RTL's own registers
+  const RX=1000, A=actRecs[t], st=g(r,'act_state');
+  const fresh=A&&(st!==0||(t>0&&g(rows[t-1],'act_state')!==0));
+  const stageRow=(k,y,name,cap,vals,on,fill,extra)=>{ let q=chip(RX+8,y+4,64,30,on?'var(--act)':'var(--line)',null,{fo:on?.3:0,sw:on?2.2:1});
+    q+=txt(RX+40,y+17,name,{cls:'cv sm',a:'middle',fw:700,fill:on?'var(--act)':'var(--muted)'})+txt(RX+40,y+29,cap,{cls:'ps',a:'middle',fs:8});
+    if(extra) q+=txt(RX+80,y+9,extra,{cls:'ps',fs:8.5});
+    LN.forEach(c=>{ const vv=vals?vals[c]:null;
+      q+=rect(RX+80+c*RLW,y+13,RLW-2,20,{rx:2,fill:vals?fill:'var(--panel)',fo:vals?(on?.26:.12):1,st:on?'var(--act)':'var(--line)',sw:on?1.2:.7})+(vv!=null?txt(RX+80+c*RLW+RLW/2-1,y+27,fmtC(vv),{cls:'cv xs',a:'middle'}):''); });
+    return q; };
+  o+=panel(RX,TBY,390,300,'Activation unit',{sub:A&&fresh?(A.rdub?`RD_UB · UB ${A.a} → host`:`ACC ${A.a} → ${A.tub?(A.ub!=null?`UB ${A.ub}`:'UB'):'host'}`):'idle',on:st});
+  if(A&&fresh&&A.rdub){ o+=txt(RX+10,TBY+60,'RD_UB: UB entries straight to the out FIFO',{cls:'ps'}); }
+  else {
+    const m0=A&&A.q?A.q.map(w=>w&0xFFFFFF):null, sh=A&&A.q?((A.q[0]>>>24)&63):0;
+    const SS=[['READ','ACC row',A&&A.acc,1,'var(--mm)',A?`ACC ${A.a} ${accShort(A.a)}`:''],
+              ['bias',A&&A.bias?'+ bias':'no bias',A&&A.biasv,0,'var(--muted)',''],
+              ['LATCH',A&&A.relu?'ReLU':'identity',A&&A.latch,2,'var(--act)',''],
+              ['MUL','× M0',A&&A.rq?A.prod:null,3,'var(--act)',A&&A.rq&&m0?`M0 ${nf(m0[0])}, shift ${sh}`:''],
+              ['RND','round',A&&A.rq?A.rnd:null,4,'var(--act)',''],
+              [A&&A.tub?'WRITE':'EMIT',A&&A.tub?'→ UB int8':'→ out FIFO',A?(A.tub?A.ubv:(A.words.length?A.words.concat(LN.map(()=>null)).slice(0,NN):null)):null,A&&A.tub?6:5,'var(--act)','']];
+    const ord=[1,2,3,4,5,6];
+    SS.forEach(([n,cap,vals,code,fill,ex],k)=>{ const on=code&&code===st; const shown=fresh&&vals&&(code===0||ord.indexOf(st)<0||ord.indexOf(code)<=ord.indexOf(st)||A.done)?vals:null;
+      o+=stageRow(k,TBY+28+k*44,n,cap,shown,on,fill,k===0||ex?ex:''); });
+  }
+  o+=txt(RX+10,TBY+292,'READ → LATCH → (MUL → RND) → WRITE/EMIT, one row at a time',{cls:'ps'});
+  // ===== results
+  const RY=TBY+310, OUTN=s.nOut;
+  o+=panel(RX,RY,390,372,'Results',{sub:`out FIFO ${g(r,'out_n')} · ${OUTN} words so far`,on:g(r,'out_push')||g(r,'act_ubwe')});
+  const hreg=UBR.filter(u=>u.kind!=='in'); let yy=RY+38;
+  if(hreg.length){ const u=hreg[hreg.length>1&&ubKeys.length?hreg.length-1:0]; const H=Math.min(u.m,8), NH=u.n_out, half=Math.min(NH,Math.ceil(NH/Math.ceil(NH/20))), cwH=Math.min(18,340/half);
+    o+=txt(RX+10,yy,`${u.name} in the UB now (${u.start}–${u.start+u.m*u.chunks-1}), int8, ${u.m} × ${NH}`,{cls:'ps'}); yy+=8;
+    const bands=Math.min(2,Math.ceil(NH/half));
+    for(let hh=0;hh<bands;hh++){ for(let i=0;i<H;i++){ const y=yy+i*11.5;
+      o+=txt(RX+10,y+9,hh?'':`${u.name}${i}`,{cls:'ps',fs:8.5});
+      for(let j=hh*half;j<Math.min(NH,(hh+1)*half);j++){ const e=u.start+Math.floor(j/NN)*u.m+i, v=UB.at(e,t); const val=v?v[j%NN]:null; const x=RX+30+(j-hh*half)*cwH;
+        o+=rect(x,y,cwH-1,10.6,{rx:1,fill:'var(--act)',fo:val==null?0:val<=0?.04:Math.min(.65,.12+val/40),st:'var(--line)',sw:.4})+(val!=null&&cwH>=14?txt(x+cwH/2-.5,y+8.6,val,{cls:'cv xs',a:'middle'}):''); } }
+      yy+=H*11.5+8; }
+  }
+  const OD=MT.outputs;
+  if(OD){ const wpr=NN*OD.nb, per=OD.m*wpr; yy+=14; o+=txt(RX+10,yy,`${OD.name}: int32 rows as they leave (${OD.m} × ${OD.n_out}${OD.batches>1?` per batch, ${OD.batches} batches`:''})`,{cls:'ps'}); yy+=6;
+    const lines=[]; for(let b=0;b<OD.batches;b++) for(let i=0;i<OD.m;i++){ const vals=[]; for(let j=0;j<OD.n_out;j++){ const blk=Math.floor(j/NN), w=b*per+blk*OD.m*NN+i*NN+(j%NN); vals.push(w<OUTN?outs[w]:null);} lines.push([b,i,vals]); }
+    const room=Math.floor((RY+362-yy)/12.5), start=Math.max(0,lines.findIndex(l=>l[2].some(v=>v==null))-Math.floor(room/2)), show=lines.slice(Math.min(start,Math.max(0,lines.length-room)), Math.min(start,Math.max(0,lines.length-room))+room);
+    show.forEach(([b,i,vals],k)=>{ const got=vals.filter(v=>v!=null); o+=txt(RX+10,yy+12+k*12.5,`${OD.batches>1?`b${b} `:''}y${i}  ${got.length?vals.slice(0,10).map(v=>v==null?'·':neg(v)).join('  ')+(vals.length>10?' …':''):'—'}`,{cls:'cv xs',fill:got.length?'var(--psum)':'var(--muted)',fw:got.length?600:null}); });
+  }
+  // ===== PE key
+  const KY=RY+382, kx=RX+20, ky=KY+30;
+  o+=panel(RX,KY,390,120,'Reading a PE',{});
+  o+=rect(kx,ky,100,72,{rx:5,fill:'var(--panel)',st:'var(--line)'})+chip(kx+5,ky+16,43,24,'var(--actv)','a',{fo:.22,cls:'cv b'})+chip(kx+52,ky+16,43,24,'var(--psum)','Σ',{fo:.22,cls:'cv b'})
+    +chip(kx+5,ky+44,43,24,'var(--t0)','w',{fo:.3,cls:'cv b'})+chip(kx+52,ky+44,43,24,'var(--t1)','w′',{fo:.12,dash:'3 2',cls:'cv b'})+txt(kx+5,ky+11,'r,c',{cls:'ps',fs:8.5})+txt(kx+95,ky+11,'tile',{cls:'cv xs',a:'end'});
+  o+=txt(kx+120,ky+22,'a: activation from the left',{cls:'ps'})+txt(kx+120,ky+36,'Σ: a × w + the sum from above',{cls:'ps'})
+    +txt(kx+120,ky+50,'w: the weight in use',{cls:'ps'})+txt(kx+120,ky+64,'w′: shadow, the next tile\'s weight',{cls:'ps'});
+  o+='</g>';
+  const H=Math.max(ABOT,KY+130)+DY+10;
+  $('sys').setAttribute('viewBox',`0 0 1400 ${H}`);
+  $('sys').innerHTML=o;
+}
+
+// ---- timeline ----
+const GX0=96, GW=1296, cw=GW/rows.length;
+(function(){
+  let o='';
+  const lanesG=['bus','dispatch','LD','WT','MM','array','ACT'];
+  const LY=k=>10+k*20;
+  lanesG.forEach((n,k)=>{ o+=txt(8,LY(k)+13,n,{cls:'ps'})+`<line x1="${GX0}" x2="${GX0+GW}" y1="${LY(k)+18}" y2="${LY(k)+18}" stroke="var(--line)"/>`; });
+  const runs=lanesG.map(()=>[]);
+  const put=(k,t,key,draw)=>{ const R=runs[k], last=R[R.length-1]; if(last&&last.key===key&&last.t1===t) last.t1=t+1; else if(key!=null) R.push({key,t0:t,t1:t+1,draw}); };
+  rows.forEach((r,t)=>{
+    if(g(r,'wr')){ const c=g(r,'addr')===2?'var(--actv)':'var(--ink)'; put(0,t,'w'+c,[c,.55]); }
+    else if(g(r,'rd')){ const c=g(r,'addr')===3?'var(--psum)':'var(--muted)'; put(0,t,'r'+c,[c,.4]); }
+    if(g(r,'ipop')){ const m=g(r,'qpush'); const e=[0,1,2,3].find(k=>m>>k&1); put(1,t,'i'+t,[e!=null?ECOL[e]:'var(--muted)',.85]); }
+    if(g(r,'ld_busy')) put(2,t,'ld',['var(--ld)',.6]);
+    if(g(r,'wt_issue')) put(3,t,'wt',['var(--wt)',.75]);
+    const ms=g(r,'mm_state'); if(ms) put(4,t,'mm'+ms,['var(--mm)',ms===1?.8:.3]);
+    let n=0; for(let a=0;a<NN;a++)for(let c=0;c<NN;c++) n+=g(r,pk(a,c)+'v'); if(n) put(5,t,'a'+n,['var(--mm)',.75,n*16/(NN*NN)]);
+    if(g(r,'act_state')) put(6,t,'act',['var(--act)',.8]);
+  });
+  runs.forEach((R,k)=>R.forEach(({t0,t1,draw})=>{ const x=GX0+t0*cw, w=Math.max(.8,(t1-t0)*cw-(k===1?0:.2));
+    if(k===5){ const h=draw[2]; o+=rect(x,LY(5)+18-h,w,h,{rx:0,fill:draw[0],fo:draw[1]}); }
+    else o+=rect(x,LY(k)+4,w,12,{rx:0,fill:draw[0],fo:draw[1]}); }));
+  const raw=rows.length/12, mag=10**Math.floor(Math.log10(Math.max(1,raw))), step=[1,2,5,10].map(m=>m*mag).find(v=>v>=raw)||mag*10;
+  for(let c=0;c<rows.length;c+=step){ o+=`<line x1="${GX0+c*cw}" x2="${GX0+c*cw}" y1="148" y2="152" stroke="var(--muted)"/>`+txt(GX0+c*cw,164,nf(c),{cls:'ps',a:'middle',fs:9}); }
+  o+=txt(GX0+GW,174,'cycles from the start of the trace',{cls:'ps',a:'end',fs:9});
+  o+=`<rect id="gcur" x="0" y="6" width="${Math.max(cw,2)}" height="146" fill="var(--warn)" fill-opacity=".35" stroke="var(--warn)" stroke-width="1.2"/>`;
+  o+=`<rect id="ghit" x="${GX0}" y="0" width="${GW}" height="168" fill="transparent" style="cursor:pointer"/>`;
+  $('gantt').innerHTML=o;
+  $('ghit').addEventListener('click',ev=>{const b=$('gantt').getBoundingClientRect(); const vx=(ev.clientX-b.left)*1400/b.width; T=clamp(Math.floor((vx-GX0)/cw),0,rows.length-1); stop(); render();});
+})();
+
+let T=0, timer=null;
+// presets: the moments worth stepping to, found in the trace
+const presets=[];
+(function(){
+  const add=(n,t)=>{ if(t>=0&&!presets.some(p=>p[1]===t)) presets.push([n,t]); };
+  add('Start',0);
+  add('Input reaches the UB',firstT(r=>g(r,'ub_we')));
+  add('WT fills a tile',firstT(r=>g(r,'wt_issue')));
+  add('First wavefront',firstT(r=>g(r,pk(0,0)+'v')));
+  add('Array full',firstT(r=>g(r,pk(NN-1,NN-1)+'v')));
+  add('First ACC write',firstT(r=>g(r,'acc_we')));
+  add('ACT starts',firstT(r=>g(r,'act_state')===1));
+  add('ACT writes the UB',firstT(r=>g(r,'act_ubwe')));
+  let k=0; rows.forEach((r,t)=>{ if(g(r,'qpop')>>2&1){ const i=S[t].eq[2][0]; if(i!=null&&opName(i)==='MATMUL'&&k<6){ k++; add(`MATMUL #${i+1}`,t); } } });
+  add('First OUT word',firstT(r=>g(r,'out_push')));
+  let lastDone=-1; rows.forEach((r,t)=>{ if(g(r,'done')&&t>0&&!g(rows[t-1],'done')) lastDone=t; });
+  add('DONE',lastDone);
+  presets.sort((a,b)=>a[1]-b[1]);
+  presets.forEach(([n,t])=>{const b=document.createElement('button'); b.textContent=n; b.onclick=()=>{stop(); T=t; render();}; $('presets').appendChild(b);});
+})();
+
+function events(t){
+  const r=rows[t], p=t>0?rows[t-1]:null, E=[], s=S[t];
+  const add=(x,c)=>E.push([x,c||'act']);
+  if(g(r,'wr')){ const a=g(r,'addr'); add(`Host writes ${REG[a]||a}`+(a===6?' (RESET or CLEAR_DONE)':a===2?`: data word ${s.dIn+1}`:a===1?`: completes instruction #${s.iTail+1}`:'')+(g(r,'wreq')?' (held: FIFO full)':''),''); }
+  if(g(r,'rd')) add(`Host reads ${REG[g(r,'addr')]||g(r,'addr')}`+(g(r,'addr')===4?' (polling for DONE)':g(r,'addr')===3?' (popping a result word)':''),'');
+  if(g(r,'ipop')){ const i=popsBefore[t]; add(`Dispatcher issues #${i+1} ${insShort(i)} → ${ENG.filter((e,k)=>g(r,'qpush')>>k&1).join(' + ')||'fence'}`); }
+  for(let e=0;e<4;e++) if(g(r,'qpop')>>e&1){ const i=s.eq[e][0]; if(i!=null) add(`${ENG[e]} takes #${i+1} ${insShort(i)} from its queue`,''); }
+  if(p) for(let e=0;e<4;e++){ if(g(r,'comp'+e)!==g(p,'comp'+e)) add(`${ENG[e]} completes an instruction (count ${g(r,'comp'+e)})`,''); }
+  if(g(r,'mm_sync')) add('MM waits: a WAIT at its queue head is not satisfied yet','');
+  if(g(r,'ld_busy')&&!g(r,'ld_pop')&&!g(r,'ld_ddr')&&s.dIn===s.dOut) add('LD is mid-instruction but the data FIFO is empty: it waits for the host\'s next DATA word','');
+  if(g(r,'ub_we')) add(`LD writes UB entry ${g(r,'ub_waddr')} ${ubLabel(g(r,'ub_waddr'))} ← ${vec(r,'ldr')}`,'calc');
+  if(g(r,'wmem_we')) add(`LD writes WMEM row ${g(r,'wmem_waddr')} ← ${vec(r,'ldr')}`,'calc');
+  if(g(r,'wt_issue')) add(`WT reads WMEM row ${g(r,'wt_tile')*NN+g(r,'wt_row')} (tile t${g(r,'wt_tile')}, ${tileDesc(g(r,'wt_tile'))}, row ${g(r,'wt_row')}) for slot ${g(r,'wt_wr')}`);
+  if(p && g(r,'mm_state')!==g(p,'mm_state')) add(`MM → ${MMS[g(r,'mm_state')]}`+(g(r,'mm_state')===1?` (windows of max(m, N) = ${g(r,'mm_len')} cycles)`:g(r,'mm_state')===2?': waiting for in-flight rows to reach the accumulator':''),'');
+  if(g(r,'mm_state')===1 && !g(r,'mm_acts') && g(r,'mm_wts') && g(r,'mm_pos')===0) add('Prologue window: preload the first tile into the shadow registers, no activations yet','');
+  if(g(r,'mm_freeze')) add('MM frozen: the next tile is not in the tile buffer yet (WSTALL)','');
+  if(g(r,'mm_ubre')) add(`MM reads UB entry ${g(r,'mm_ubaddr')} ${ubLabel(g(r,'mm_ubaddr'))} for K-tile ${g(r,'mm_k')}; its row goes to ACC ${g(r,'tagv')&(ACCD-1)}`);
+  const nx=rows[t+1]; if(nx&&g(nx,'wv')) add(`MM reads row ${g(nx,'wrow')} of slot ${g(r,'wt_rd')} onto the weight bus`);
+  if(g(r,'wv')) add(`Weight bus: t${tileAtOrd(s.busOrd)} row ${g(r,'wrow')} ${vec(r,'wd')}; column c gets its value c cycles later and PE (${g(r,'wrow')}, c) writes it into its shadow`);
+  if(g(r,'mm_take')) add('MM releases a tile-buffer slot (its last row is being read)','');
+  const pes=[]; for(let a=0;a<NN;a++)for(let c=0;c<NN;c++) pes.push([a,c,pk(a,c)]);
+  const macs=pes.filter(([a,c,q])=>g(r,q+'v')); if(macs.length) add(`${macs.length} of ${NN*NN} PEs multiply-accumulate at this edge`,'');
+  const sw=pes.filter(([a,c,q])=>g(r,q+'v')&&g(r,q+'f'));
+  if(sw.length){ const tl=tileAtOrd(s.peNext[sw[0][0]][sw[0][1]]); add(`Tile t${tl} (${tileDesc(tl)}) reaches ${sw.map(([a,c])=>a+','+c).join(' · ')}: shadow → weight`,'calc'); }
+  for(let c=0;c<NN;c++){const q=pk(NN-1,c); if(g(r,q+'v')) add(`Column ${c}'s sum leaves the bottom row: ${neg(macOut(r,q))}`,'calc');}
+  if(g(r,'row_pop')){ const hi=ACCD; add(`Accumulator pops a full row for ACC row ${g(r,'tag')&(hi-1)} (${g(r,'tag')&hi?'overwrite':'add'})`); }
+  if(g(r,'acc_we')) add(`ACC[${g(r,'acc_waddr')}] ← ${vec(r,'accw')} (${g(r,'acc_ow')?'first K-tile overwrites':'K-tile added to the running sum'})`,'calc');
+  if(p && g(r,'act_state')!==g(p,'act_state')){ const st=ACS[g(r,'act_state')]; const msg={READ:g(r,'act_rdub')?`reads UB entry ${g(r,'act_addr')}`:`reads ACC row ${g(r,'act_addr')} and its bias/quant entry ${g(r,'act_par')}`,LATCH:'adds the bias, applies FUNC',MUL:'multiplies by M0',RND:'adds half, shifts, clamps to int8',WRITE:'writes the UB',EMIT:'pushes words to the out FIFO',DRAIN:'waits for the DDR3 writes',IDLE:'done'}[st]; add(`ACT ${st}: ${msg}`); }
+  if(g(r,'act_ubwe')) add(`ACT writes UB entry ${g(r,'act_ubaddr')} ← ${vec(r,'aub')} ${ubLabel(g(r,'act_ubaddr'))}`,'calc');
+  if(g(r,'out_push')) add(`Out FIFO ← ${neg(g(r,'out_word'))}`,'calc');
+  if(!E.length) add(g(r,'mm_state')===2?'MM drains: rows still crossing the array':'No change this cycle','');
+  return E;
+}
+
+// the cycle table renders a window around the current cycle
+function tlRows(){
+  const x='<span class="x">·</span>', a0=Math.max(0,T-60), a1=Math.min(rows.length,T+90);
+  let h='<thead><tr><th>cycle</th><th>bus</th><th>dispatch</th><th>LD</th><th>WT</th><th>MM</th><th>array in (row: a)</th><th>MACs</th><th>ACC</th><th>ACT</th><th>done</th></tr></thead><tbody>';
+  for(let t=a0;t<a1;t++){ const r=rows[t];
+    const ai=LN.filter(k=>g(r,pk(k,0)+'v')).map(k=>`${k}:${g(r,pk(k,0)+'a')}${g(r,pk(k,0)+'f')?'*':''}`).join(' ');
+    let m=0; for(let a=0;a<NN;a++)for(let c=0;c<NN;c++) m+=g(r,pk(a,c)+'v');
+    h+=`<tr data-t="${t}" ${t===T?'class="cur"':''}><td>${t}</td><td>${g(r,'wr')?'W '+(REG[g(r,'addr')]||''):g(r,'rd')?'R '+(REG[g(r,'addr')]||''):x}</td>`+
+       `<td>${g(r,'ipop')?opName(popsBefore[t]):x}</td>`+
+       `<td>${g(r,'ub_we')?'UB['+g(r,'ub_waddr')+']':g(r,'wmem_we')?'WM['+g(r,'wmem_waddr')+']':g(r,'ld_busy')?'busy':x}</td>`+
+       `<td>${g(r,'wt_issue')?'t'+g(r,'wt_tile')+' r'+g(r,'wt_row'):x} <span class="x">${['··','■·','·■','■■'][g(r,'wt_full')]}</span></td>`+
+       `<td>${MMS[g(r,'mm_state')]}${g(r,'mm_state')===1?' '+g(r,'mm_pos'):''}${g(r,'mm_ubre')?' ub'+g(r,'mm_ubaddr'):''}${g(r,'wv')?' w'+g(r,'wrow'):''}</td>`+
+       `<td>${ai||x}</td><td>${m||x}</td><td>${g(r,'acc_we')?'['+g(r,'acc_waddr')+'] '+vec(r,'accw'):g(r,'row_pop')?'pop':x}</td>`+
+       `<td>${ACS[g(r,'act_state')]==='IDLE'?x:ACS[g(r,'act_state')]}${g(r,'out_push')?' '+g(r,'out_word'):''}</td><td>${[0,1,2,3].map(e=>g(r,'comp'+e)).join(' ')}</td></tr>`; }
+  $('tl').innerHTML=h+'</tbody>';
+  const cur=$('tl').querySelector('tr.cur'); if(cur){ const box=$('tlbox'); box.scrollTop=cur.offsetTop-box.clientHeight/2; }
+}
+$('tl').addEventListener('click',ev=>{const tr=ev.target.closest('tr[data-t]'); if(tr){stop();T=+tr.dataset.t;render();}});
+
+function render(){
+  const r=rows[T];
+  $('slider').value=T;
+  $('cyclbl').textContent=`cycle ${nf(T)} / ${nf(rows.length-1)}`;
+  drawSystem(T);
+  $('gcur').setAttribute('x',GX0+T*cw-.5);
+  $('events').innerHTML=events(T).map(([s,c])=>`<li class="${c}">${s}</li>`).join('');
+  const sentN=popsBefore[T]+(g(r,'ipop')?1:0);
+  $('prog').querySelectorAll('tr[data-i]').forEach(tr=>{const i=+tr.dataset.i; tr.classList.toggle('sent', i<sentN); tr.classList.toggle('now', !!(g(r,'ipop')&&i===popsBefore[T]));});
+  const now=$('prog').querySelector('tr.now'); if(now){ const box=$('progbox'); box.scrollTop=now.offsetTop-box.clientHeight/2; }
+  tlRows();
+}
+function stop(){ if(timer){clearInterval(timer);timer=null;} $('play').textContent='Play'; }
+function play(){ if(timer){stop();return;} if(T>=rows.length-1)T=0; $('play').textContent='Pause'; timer=setInterval(()=>{ if(T>=rows.length-1){stop();return;} T++; render(); },+$('speed').value); }
+$('slider').max=rows.length-1;
+$('prev').onclick=()=>{stop(); if(T>0){T--;render();}};
+$('next').onclick=()=>{stop(); if(T<rows.length-1){T++;render();}};
+$('slider').oninput=e=>{stop();T=+e.target.value;render();};
+$('play').onclick=play;
+$('speed').onchange=()=>{ if(timer){ stop(); play(); } };
+$('bench').addEventListener('keydown',e=>{ if(e.target.tagName==='INPUT'||e.target.tagName==='SELECT')return; if(e.key==='ArrowRight'){$('next').click();e.preventDefault();} if(e.key==='ArrowLeft'){$('prev').click();e.preventDefault();} if(e.key===' '){play();e.preventDefault();} });
+window.__vizCheck={macChecks,macBad,rows:rows.length,tiles:tileSeq.length};
+const start=presets.find(p=>p[0]==='Array full')||presets.find(p=>p[0]==='First wavefront')||presets[0];
+T=start?start[1]:0;
+const hm=location.hash.match(/^#c(\d+)$/); if(hm) T=clamp(+hm[1],0,rows.length-1);
+render();
+})();
+</script>

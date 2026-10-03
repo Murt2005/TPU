@@ -2,7 +2,8 @@
 // stdin carries 'W' addr u32 (write, no reply), 'R' addr (read, 4-byte reply),
 // 'D' addr u32 len u32 bytes (DDR3 write, no reply), 'G' addr u32 len u32 (DDR3
 // read, len bytes back), 'M' mode (DDR3 timing, no reply), 'T' n u32 (run n
-// cycles, no reply) and 'Q' (quit); on start
+// cycles, no reply), 'V' len u16 path (start a VCD of every cycle at path, or
+// with len 0 stop it; a TB_TRACE build only, no reply) and 'Q' (quit); on start
 // it writes its build parameters as 5 u32 words.
 // the DDR3 model behind tpu_top's master is the FPGA-to-SDRAM port as the core
 // sees it: one in-order port, at most 14 bursts pending, no read backpressure,
@@ -17,12 +18,23 @@
 #include <deque>
 #include <memory>
 #include <random>
+#include <string>
 #include <unordered_map>
 #include <vector>
 #include "Vtpu_top.h"
 #include "verilated.h"
+#ifdef TB_TRACE
+#include "verilated_vcd_c.h"
+#endif
 
 static std::unique_ptr<Vtpu_top> dut;
+
+#ifdef TB_TRACE
+// one sample per clock, just before the rising edge, timestamped with the cycle:
+// the registers as they stand and every input that edge is about to take
+static std::unique_ptr<VerilatedVcdC> vcd;
+static bool vcd_on = false;
+#endif
 
 namespace ddr {
     std::unordered_map<uint32_t, std::vector<uint8_t>> pages;   // 4 KB pages, zero until written
@@ -120,6 +132,9 @@ static void tick() {
     dut->clk = 0;
     ddr::drive();
     dut->eval();
+#ifdef TB_TRACE
+    if (vcd_on) vcd->dump(ddr::now);
+#endif
     ddr::sample();
     dut->clk = 1;
     dut->eval();
@@ -174,6 +189,28 @@ int main(int argc, char** argv) {
             for (uint32_t i = 0; i < cycles; i++) tick();
             continue;
         }
+        if (cmd == 'V') {
+            uint16_t length;
+            if (!get(&length, 2)) break;
+            std::string path(length, '\0');
+            if (length && !get(path.data(), length)) break;
+#ifdef TB_TRACE
+            if (length) {
+                if (vcd) { fprintf(stderr, "tb_isa: one VCD per run\n"); return 2; }
+                Verilated::traceEverOn(true);
+                vcd = std::make_unique<VerilatedVcdC>();
+                dut->trace(vcd.get(), 99);
+                vcd->open(path.c_str());
+                vcd_on = true;
+            } else if (vcd) {
+                vcd_on = false;
+                vcd->close();
+            }
+#else
+            if (length) { fprintf(stderr, "tb_isa: built without TB_TRACE (make viz-sim)\n"); return 2; }
+#endif
+            continue;
+        }
         if (cmd == 'M') {
             uint8_t mode;
             if (!get(&mode, 1)) break;
@@ -210,6 +247,10 @@ int main(int argc, char** argv) {
         }
     }
     dut->final();
+#ifdef TB_TRACE
+    if (vcd) vcd->close();
+    vcd.reset();
+#endif
     dut.reset();   // before Verilator's own statics go, or exit aborts on a mutex
     return 0;
 }

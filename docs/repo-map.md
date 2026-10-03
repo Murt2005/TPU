@@ -65,6 +65,9 @@ Everything under `rtl/` is board-neutral. See
 | `tpu/isa_waits.py` | per-engine read/write sets; `check_waits`, `insert_waits` |
 | `tpu/isa_device.py` | `IsaDevice`; `IsaSimLink` (Verilator), `IsaSerialLink` and `BoardConsole` (the board's console: login, launch, paced `upload()`, baud switching), `open_link()` |
 | `tpu/golden.py` | reference numerics: exact int matmul, wrap, requant |
+| `tpu/trace.py` | a `make viz-sim` VCD → one record per clock cycle (the signals the page draws) |
+| `tpu/viz.py` | `run_workload(..., visualize_internals=True)`: run, check against the model, trace in Verilator, write the page |
+| `tpu/viz_template.html` | the cycle-by-cycle page: timeline, the whole core at one clock edge, events, program |
 
 ## `tests/`
 
@@ -77,7 +80,7 @@ Everything under `rtl/` is board-neutral. See
 | `isa/test_isa_model.py` | the model against independent references (`make model-test`) |
 | `isa/test_isa_rtl.py` | the RTL against the model, word for word (`make rtl-test`), or the board with `serial:<port>` |
 | `isa/isa_progs.py` | random legal programs for the concurrency tests |
-| `verilator/tb-isa.cpp` | `tpu_top` as a register-level transport for `isa_device.py` |
+| `verilator/tb-isa.cpp` | `tpu_top` as a register-level transport for `isa_device.py`; built with `-DTB_TRACE` (`make viz-sim`) it also writes a VCD |
 | `verilator/tb-isa-selftest.cpp` | runs the self-test top and reads its LEDs, HEX and capture slots back |
 
 See [`verification.md`](verification.md).
@@ -93,6 +96,13 @@ See [`verification.md`](verification.md).
 | `de1soc/` | MNIST on the board's ARM: `make_data.py`, `mnist-tpu.c`, `Makefile`, `README.md` |
 
 See [`mnist.md`](mnist.md).
+
+## `software/viz/`
+
+| Path | What |
+|---|---|
+| `visualize.py` | workloads (`mlp`, `matmul`, `mnist`) with `--visualize-internals`; `make viz` |
+| `README.md` | how to run it, what the page shows, sim vs board |
 
 ## `docs/`
 

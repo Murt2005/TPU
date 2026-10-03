@@ -25,6 +25,27 @@ rtl-sim: | $(SIM_DIR)
 		$(CORE_RTL) $(TEST_DIR)/verilator/tb-isa.cpp -o tb_isa > /dev/null
 	@echo "rtl-sim: $(RTL_SIM) (N=$(N))"
 
+# tb_isa with VCD tracing, for the cycle-by-cycle visualizer (software/viz)
+VIZ_SIM_DIR := $(SIM_DIR)/verilator/trace_n$(N)
+VIZ_SIM     := $(VIZ_SIM_DIR)/tb_isa
+
+viz-sim: | $(SIM_DIR)
+	@mkdir -p $(VIZ_SIM_DIR)
+	@$(VERILATOR) --cc --exe --build -j $(JOBS) -Wall --trace --Mdir $(VIZ_SIM_DIR) verilator.vlt \
+		--top-module tpu_top \
+		-GARRAY_SIZE=$(N) -GWMEM_ROWS=$(WMEM_ROWS) -GUB_DEPTH=$(UB_DEPTH) \
+		-GACC_DEPTH=$(ACC_DEPTH) -GPARAMETER_DEPTH=$(PARAM_DEPTH) \
+		-CFLAGS "-std=c++17 -DTB_TRACE -DTB_N=$(N) -DTB_WMEM_ROWS=$(WMEM_ROWS) \
+		         -DTB_UB_DEPTH=$(UB_DEPTH) -DTB_ACC_DEPTH=$(ACC_DEPTH) \
+		         -DTB_PARAM_DEPTH=$(PARAM_DEPTH)" \
+		$(CORE_RTL) $(TEST_DIR)/verilator/tb-isa.cpp -o tb_isa > /dev/null
+	@echo "viz-sim: $(VIZ_SIM) (N=$(N))"
+
+# a workload through the traced model, and its cycle-by-cycle page
+WORKLOAD ?= mlp
+viz: viz-sim
+	@python3 software/viz/visualize.py $(WORKLOAD) --n $(N) --visualize-internals $(VIZ_ARGS)
+
 # the RTL against the model, word for word
 rtl-test: rtl-sim
 	@python3 $(TEST_DIR)/isa/test_isa_rtl.py $(RTL_SIM)
@@ -65,4 +86,4 @@ ddr-probe-sim: | $(SIM_DIR)
 		$(TEST_DIR)/verilator/tb-ddr-probe.cpp -o tb_ddr_probe > /dev/null
 	@$(DDR_PROBE_SIM)
 
-.PHONY: model-test rtl-sim rtl-test sim-test selftest-rom selftest-sim ddr-probe-sim
+.PHONY: model-test rtl-sim viz-sim viz rtl-test sim-test selftest-rom selftest-sim ddr-probe-sim

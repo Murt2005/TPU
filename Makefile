@@ -49,6 +49,8 @@ list:
 	@echo "  make model-test | make rtl-test [N=4] | make rtl-sim [N=4]"
 	@echo "make selftest-sim the DE1-SoC self-test ROM in Verilator [ST_SLOTS=21]"
 	@echo "make ddr-probe-sim the DE1-SoC DDR3 bandwidth probe against a model of the FPGA-to-SDRAM port"
+	@echo "make viz          a workload's cycle-by-cycle page from the traced Verilator model"
+	@echo "  make viz [N=4] [WORKLOAD=mlp|matmul|mnist] [VIZ_ARGS='--batches 2']"
 	@echo "make lint         verilator lint: tpu_top at N = 8 and 4, tpu_selftest"
 	@echo "make check        all of the above"
 	@echo "make clean"

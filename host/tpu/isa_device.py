@@ -65,6 +65,13 @@ class IsaSimLink:
         """run the model `cycles` clocks: its clock otherwise only moves with register accesses"""
         self._buf += b"T" + struct.pack("<I", cycles)
 
+    def trace(self, path):
+        """start a VCD of every cycle at path (a `make viz-sim` build), or stop it with None"""
+        raw = os.path.abspath(path).encode() if path else b""
+        self._buf += b"V" + struct.pack("<H", len(raw)) + raw
+        if not path:
+            self.flush()
+
     def ddr_read(self, address, count):
         """bytes from DDR3, as the host's loads see them"""
         self._buf += b"G" + struct.pack("<II", address, count)

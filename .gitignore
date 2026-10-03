@@ -1,6 +1,8 @@
 # simulation build output (make)
 sim/
 *.vcd
+# cycle-by-cycle pages written by software/viz/visualize.py
+*-viz.html
 
 # downloaded MNIST idx files (software/mnist/train_mnist.py fetches these; ~11 MB)
 software/mnist/data/
