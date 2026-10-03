@@ -78,6 +78,41 @@ are held until the whole program is queued, so the console link never enters.
   any host work or handoffs. 16×16 or 100 MHz doubles the appetite to
   800 MB/s, exactly the port's measured peak.
 
+### Qwen2.5-0.5B: the TPU against a Mac
+
+Generating one token at a time, one stream, greedy, after a 5-token prompt;
+measured 2026-10-02. On the board, `qwen-run --core mmio`
+([`../software/qwen/`](../software/qwen/README.md)). On the Mac (an M2 Pro,
+16 GB), the same C runtime with its int8 reference matmul, and PyTorch 2.14
+with `transformers` 5.18.
+
+| Where | Arithmetic | Time per token | Tokens/s | vs the TPU |
+|---|---|---|---|---|
+| **TPU on the DE1-SoC** (8×8, 50 MHz) | int8, weights streamed from DDR3 | 1.37 s | **0.73** | 1× |
+| Mac, `qwen-run --core ref` (1 CPU core, plain C loops) | the same int8 arithmetic | 0.052 s | 19.3 | 26× |
+| Mac, PyTorch on the CPU (6 threads) | float32 | 0.047 s | 21.5 | 29× |
+| Mac, PyTorch on the GPU (MPS) | float32 | 0.019 s | 52.7 | 72× |
+
+Generating one token at a time reads every weight once a token (494 MB at
+int8), so speed is set by how fast weights reach the multipliers:
+- **The TPU:** the 8×8 array takes one 8-byte weight row a cycle at
+  50 MHz, which is 400 MB/s. Its peak is 64 multiply-adds a cycle,
+  3.2 G/s. The DDR3 port could deliver 800 MB/s; the array is the limit.
+- **The Mac:** its memory system delivers hundreds of GB/s. The
+  single-threaded C loop moves about 9.5 GB/s of int8 weights (about 9.5 G
+  multiply-adds/s), and the GPU about 100 GB/s of float32 weights (2 GB a
+  token).
+
+The design does what it set out to do: the array never waits for weights,
+and every result is exact. But a 2013-era Cyclone V with the smallest array
+its DSP blocks allow, at a conservative clock, is far from a current laptop:
+- **Bigger or faster:** 16×16 or 100 MHz each double throughput, to about
+  1.5 tokens/s. Both together reach about 3, the most the DDR3 port allows.
+- **Prompts go faster:** 16 prompt tokens share one pass over the weights,
+  so about 6 tokens/s.
+- **Power** is where an FPGA could compare better, per watt. It hasn't been
+  measured on either side.
+
 Resources and timing are in [`de1soc.md`](de1soc.md) §1.
 
 ## History: the pico2-ice and the first core
