@@ -8,15 +8,21 @@ forward between timestamps.
 
 the result is columnar-by-key: `keys` names each column, `rows` holds one list per
 cycle. packed per-column buses become one key per lane (wd0..wd{N-1}), and PE
-(r, c)'s ports are p{r}_{c}_<port>
+(r, c)'s ports are p{r}_{c}_<port>. with L weight lanes the weight bus and WT's fill
+carry L rows: wd{k*N + c} is lane k's column c, wv{k} and wrow{k} its valid and row
 """
+
+import math
 
 T = "tpu_top."
 C = T + "u_core."
 
 
-def _spec(n):
+def _spec(n, weight_lanes=1):
     """(key, VCD path, lanes, lane width, signed). lanes 0 is a plain scalar"""
+    slots = weight_lanes + 1
+    slot_width = 1 if slots <= 2 else math.ceil(math.log2(slots))
+    row_width = max(1, math.ceil(math.log2(n)))
     s = [
         # the host bus (Avalon-MM slave) and the FIFOs behind it
         ("wr", T + "avs_write", 0, 1, False), ("rd", T + "avs_read", 0, 1, False),
@@ -52,11 +58,11 @@ def _spec(n):
         ("wt_issue", C + "u_weight_engine.issuing_read", 0, 1, False),
         ("wt_ddr", C + "u_weight_engine.from_DDR", 0, 1, False),
         ("wbase", C + "u_weight_engine.weight_base", 0, 32, False),
-        ("fw", C + "fill_write_enable", 0, 1, False), ("fslot", C + "fill_slot", 0, 1, False),
-        ("frow", C + "fill_row", 0, 8, False), ("fd", C + "fill_data", n, 8, True),
-        ("wt_full", C + "u_weight_fifo.slot_full", 0, 2, False),
-        ("wt_rd", C + "u_weight_fifo.drain_slot_index", 0, 1, False),
-        ("wt_wr", C + "u_weight_fifo.fill_slot_index", 0, 1, False),
+        ("fw", C + "fill_write_enable", 0, 1, False), ("fslot", C + "fill_slot", 0, slot_width, False),
+        ("frow", C + "fill_row", 0, 8, False), ("fd", C + "fill_data", n * weight_lanes, 8, True),
+        ("wt_full", C + "u_weight_fifo.slot_full", 0, slots, False),
+        ("wt_rd", C + "u_weight_fifo.drain_slot_index", 0, slot_width, False),
+        ("wt_wr", C + "u_weight_fifo.fill_slot_index", 0, slot_width, False),
         # MM
         ("mm_state", C + "u_matmul_engine.state", 0, 2, False),
         ("mm_pos", C + "u_matmul_engine.window_position", 0, 9, False),
@@ -73,9 +79,13 @@ def _spec(n):
         ("mm_freeze", C + "u_matmul_engine.window_frozen", 0, 1, False),
         ("mm_take", C + "tile_take", 0, 1, False),
         ("mm_sync", C + "performance_sync_stall", 0, 1, False),
-        ("wv", C + "weight_valid", 0, 1, False),
-        ("wrow", C + "weight_row_select", 0, 8, False),
-        ("wd", C + "weight_data", n, 8, True),
+        ("wv", C + "weight_valid", weight_lanes, 1, False),
+        ("wrow", C + "weight_row_select", weight_lanes, row_width, False),
+        ("wd", C + "weight_data", n * weight_lanes, 8, True),
+        # MM's weight streams: what each lane reads this cycle (its row on the bus next cycle)
+        ("lissue", C + "u_matmul_engine.lane_issue", weight_lanes, 1, False),
+        ("lslot", C + "u_matmul_engine.lane_slot", weight_lanes, slot_width, False),
+        ("lrow", C + "u_matmul_engine.lane_row", weight_lanes, row_width, False),
         ("tagp", C + "tag_push", 0, 1, False), ("tagv", C + "row_tag", 0, 16, False),
         ("inflight", C + "u_matmul_engine.rows_in_flight", 0, 8, False),
         # accumulator
@@ -148,9 +158,9 @@ def _bits(s):
     return int(s, 2) if s else 0
 
 
-def read_vcd(path, n):
+def read_vcd(path, n, weight_lanes=1):
     """-> (keys, rows, first cycle): every key in _spec, one row per cycle"""
-    spec = _spec(n)
+    spec = _spec(n, weight_lanes)
     keys, decoders = [], {}          # VCD path -> [(column, lane, width, signed)]
     for key, vpath, lanes, width, signed in spec:
         if lanes:

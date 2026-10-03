@@ -18,6 +18,7 @@ Ctrl-C quits, and qwen-run on the board with it.
 import argparse
 import json
 import os
+import signal
 import subprocess
 import sys
 import threading
@@ -243,6 +244,10 @@ def make_handler(chat):
     return Handler
 
 
+def interrupted(signum, frame):
+    raise KeyboardInterrupt
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     where = ap.add_mutually_exclusive_group(required=True)
@@ -268,6 +273,9 @@ def main():
     if not args.no_browser:
         webbrowser.open(url)
     try:
+        # stopped from outside (kill, a task runner): quit the same way as Ctrl-C, so the
+        # board's qwen-run gets its Q and the console comes back to a shell
+        signal.signal(signal.SIGTERM, interrupted)
         server.serve_forever()
     except KeyboardInterrupt:
         pass

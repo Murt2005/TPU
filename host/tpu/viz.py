@@ -130,6 +130,7 @@ def run_workload(build, link_spec, visualize_internals=False, out=None, viz_sim=
             raise ValueError(f"{binary} is N={sim.n}, the run was N={n}")
         wl = build(sim.n)
         dev = IsaDevice(sim)
+        lanes = dev.weight_lanes()
         for address, data in wl.ddr:
             sim.ddr_write(address, data)
         fd, vcd = tempfile.mkstemp(suffix=".vcd", prefix="tpu-trace-")
@@ -148,7 +149,7 @@ def run_workload(build, link_spec, visualize_internals=False, out=None, viz_sim=
                 sim.trace(None)
     finally:
         sim.close()
-    keys, rows, t0 = read_vcd(vcd, sim.n)
+    keys, rows, t0 = read_vcd(vcd, sim.n, lanes)
     os.unlink(vcd)
     ix = {k: i for i, k in enumerate(keys)}
     done = [i for i in range(1, len(rows)) if rows[i][ix["done"]] and not rows[i - 1][ix["done"]]]
@@ -183,7 +184,7 @@ def run_workload(build, link_spec, visualize_internals=False, out=None, viz_sim=
         source += (f" The board ran the same programs over {hw['link']}: its output words "
                    f"{'are identical to' if hw['outputs'] == souts else 'DIFFER from'} the simulation's.")
     meta = {
-        "N": sim.n, "t0": t0, "title": wl.title, "lede": wl.lede,
+        "N": sim.n, "lanes": lanes, "t0": t0, "title": wl.title, "lede": wl.lede,
         "eyebrow": f"TPU · {wl.name} · Verilator sim · {time.strftime('%Y-%m-%d')}",
         "source": source, "host": "Host (ARM)" if hw else "Host",
         "prog": prog,

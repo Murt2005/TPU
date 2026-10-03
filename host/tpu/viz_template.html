@@ -165,6 +165,7 @@ const D = JSON.parse(document.getElementById('data').textContent);
 const $ = id => document.getElementById(id);
 const K=D.keys, IX={}; K.forEach((k,i)=>IX[k]=i);
 const MT=D.meta, NN=MT.N, LN=[...Array(NN).keys()];
+const LANES=MT.lanes||1, SLOTS=LANES+1, LK=[...Array(LANES).keys()];   // weight lanes; the tile buffer's slots
 // rebuild full rows from the delta encoding
 const rows=[]; { let cur=null; for(const d of D.rows){ if(!cur) cur=d.slice(); else { cur=cur.slice(); for(let i=0;i<d.length;i+=2) cur[d[i]]=d[i+1]; } rows.push(cur); } }
 const g=(r,k)=>r[IX[k]];
@@ -181,6 +182,8 @@ const neg=v=>String(v).replace('-','−');
 const fmtC=v=>{const a=Math.abs(v); if(a<10000) return neg(v); if(a<1e6) return neg((v/1e3).toFixed(1))+'k'; if(a<1e9) return neg((v/1e6).toFixed(1))+'M'; return neg((v/1e9).toFixed(1))+'G';};
 const nf=v=>Number(v).toLocaleString('en-US');
 const lanes=(r,k)=>LN.map(c=>r[IX[k+c]]);
+const laneRow=(r,k,lane)=>LN.map(c=>r[IX[k+(lane*NN+c)]]);              // lane's N values of a lanes x N bus
+const gl=(r,k,lane)=>r[IX[k+lane]];
 const vec=(r,k)=>'['+lanes(r,k).map(neg).join(', ')+']';
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
 const pk=(a,c)=>'p'+a+'_'+c+'_';
@@ -231,11 +234,12 @@ const actRecs=[];                    // per-cycle ACT record (shared object for 
 (function(){
   let iHead=0, iTail=0, dIn=0, dOut=0, oRead=0;
   const eq=[[],[],[],[]], run=[[],[],[],[]], snap={};
-  let slots=[null,null];
+  let slots=Array(SLOTS).fill(null);
+  const laneTile=LK.map(()=>-1);                   // the tile each lane's stream is sending
   const colq=LN.map(()=>[]);
   const peCur=[...Array(NN)].map(()=>Array(NN).fill(-1)), peNext=[...Array(NN)].map(()=>Array(NN).fill(-1));
   const wCnt=[...Array(NN)].map(()=>Array(NN).fill(0)), sCnt=[...Array(NN)].map(()=>Array(NN).fill(0));
-  let busRows=0, act=null, wmF=0, ubF=0, accF=0, pendWm=-1, slotTileBefore=-1;
+  let act=null, wmF=0, ubF=0, accF=0, pendWm=-1;
   let prevComp=null;
   rows.forEach((r,t)=>{ if(g(r,'mm_ubre')) reads[t]=g(r,'mm_ubaddr'); });
   rows.forEach((r,t)=>{
@@ -256,7 +260,7 @@ const actRecs=[];                    // per-cycle ACT record (shared object for 
     if(prevComp) for(let e=0;e<4;e++){ let d=(comp[e]-prevComp[e]+65536)%65536; while(d-->0&&run[e].length) run[e].shift(); }
     prevComp=comp;
     S.push({iHead,iTail,dIn,dOut,eq:eq.map(q=>[...q]),run:run.map(q=>[...q]),slots:slots.map(s=>s&&{tile:s.tile,rows:s.rows,vals:s.vals.map(x=>x&&x.slice())}),
-      colq:colq.map(q=>q.slice()),nOut:outs.length,oRead,peCur:peCur.map(a=>[...a]),peNext:peNext.map(a=>[...a]),busOrd:Math.floor(busRows/NN),wmF,ubF,accF});
+      colq:colq.map(q=>q.slice()),nOut:outs.length,oRead,peCur:peCur.map(a=>[...a]),peNext:peNext.map(a=>[...a]),laneTile:[...laneTile],wmF,ubF,accF});
     for(let e=0;e<4;e++) maxQ[e]=Math.max(maxQ[e], eq[e].length+run[e].length);
     // ---- the edge ----
     if(g(r,'ipush')) iTail++;
@@ -266,19 +270,18 @@ const actRecs=[];                    // per-cycle ACT record (shared object for 
     for(let e=0;e<4;e++) if(g(r,'qpop')>>e&1){ const i=eq[e].shift(); if(i!=null) run[e].push(i); }
     if(g(r,'ld_pop')) dOut++;
     // weight bus: remember which tile row 0 belongs to (the drain slot as MM read it)
-    if(g(r,'wv')&&g(r,'wrow')===0) tileSeq.push(slotTileBefore);
-    slotTileBefore=slots[g(r,'wt_rd')]?slots[g(r,'wt_rd')].tile:-1;
+    // a stream starts: its tile is next in the order every PE flips through
+    for(const k of LK) if(gl(r,'lissue',k)&&gl(r,'lrow',k)===0){ const sv=slots[gl(r,'lslot',k)]; const tl=sv?sv.tile:-1; tileSeq.push(tl); laneTile[k]=tl; }
     if(g(r,'mm_take')) slots[g(r,'wt_rd')]=null;
-    if(pendWm>=0 && g(r,'fw')) WM.put(pendWm,t+1,lanes(r,'fd'));
+    if(pendWm>=0 && g(r,'fw')) for(const k of LK) WM.put(pendWm+k,t+1,laneRow(r,'fd',k));
     pendWm=-1;
-    if(g(r,'fw')){ const s=g(r,'fslot'); if(slots[s]) slots[s].vals[g(r,'frow')]=lanes(r,'fd'); }
-    if(g(r,'wt_issue')){ const s=g(r,'wt_wr'); if(g(r,'wt_row')===0||!slots[s]) slots[s]={tile:g(r,'wt_tile'),rows:0,vals:LN.map(()=>null)}; slots[s].rows=g(r,'wt_row')+1; pendWm=g(r,'wt_tile')*NN+g(r,'wt_row'); }
+    if(g(r,'fw')){ const s=g(r,'fslot'); if(slots[s]) for(const k of LK) slots[s].vals[g(r,'frow')+k]=laneRow(r,'fd',k); }
+    if(g(r,'wt_issue')){ const s=g(r,'wt_wr'); if(g(r,'wt_row')===0||!slots[s]) slots[s]={tile:g(r,'wt_tile'),rows:0,vals:LN.map(()=>null)}; slots[s].rows=g(r,'wt_row')+LANES; pendWm=g(r,'wt_tile')*NN+g(r,'wt_row'); }
     if(g(r,'wmem_we')) WM.put(g(r,'wmem_waddr'),t+1,lanes(r,'ldr'));
     if(g(r,'ub_we')) UB.put(g(r,'ub_waddr'),t+1,lanes(r,'ldr'));
     if(g(r,'act_ubwe')){ UB.put(g(r,'act_ubaddr'),t+1,lanes(r,'aub')); if(act) act.done=1; }
     if(g(r,'out_push')){ outs.push(g(r,'out_word')); if(act){ act.words.push(g(r,'out_word')); } }
     if(g(r,'opop')) oRead++;
-    if(g(r,'wv')) busRows++;
     for(let a=0;a<NN;a++)for(let c=0;c<NN;c++){const q=pk(a,c);
       if(g(r,q+'v')&&g(r,q+'f')){ peCur[a][c]=sCnt[a][c]++; }
       if(g(r,q+'ws')){ peNext[a][c]=wCnt[a][c]++; }
@@ -345,7 +348,8 @@ function minimap(x,y,h,total,win0,winN,bands,marks,label){ let o=rect(x,y,10,h,{
 // geometry: control band height follows the deepest queue; the array scales to fit N
 const QMAX=Math.max(...maxQ,4), EY=24+34+QMAX*24+26+10, DY=EY+112+16-312;
 const SC=Math.min(1,8/NN), CW=100*SC, CH=72*SC, GPX=10*SC, GPY=10*SC;
-const AX=100, AY=1030;
+const TBY=704, TRH=Math.min(12.5,100/NN), SLOT_H=NN*TRH+20, TBH=30+SLOTS*SLOT_H, APY=TBY+TBH+8;
+const AX=100, AY=APY+70;
 const colX=c=>AX+c*(CW+GPX), rowY=a=>AY+a*(CH+GPY);
 const LW=Math.min(27,216/NN);                    // one int8 lane in WMEM and the UB
 const ALW=Math.min(45,360/NN);                   // one int32 lane in ACC
@@ -428,7 +432,7 @@ function drawSystem(t){
   o+=eb(1,[`${g(r,'wt_left')} tiles left to fetch`, `WBASE = ${g(r,'wbase')}${g(r,'wt_ddr')?' · from DDR3':''}`, g(r,'wt_issue')?`row ${g(r,'wt_tile')*NN+g(r,'wt_row')} (t${g(r,'wt_tile')} r${g(r,'wt_row')}) → slot ${g(r,'wt_wr')}`:g(r,'wt_left')&&g(r,'wt_full')===3?'both slots full: waits for MM':''],g(r,'wt_issue')?'FETCH':'IDLE',['IDLE','FETCH'],g(r,'wt_issue'));
   const ms=MMS[g(r,'mm_state')];
   o+=eb(2,[ms==='RUN'?`window ${g(r,'mm_pos')+1}/${g(r,'mm_len')} · K-tile ${g(r,'mm_k')}/${g(r,'mm_kt')}${g(r,'mm_freeze')?' · frozen':''}`:ms==='DRAIN'?'rows still crossing':g(r,'mm_sync')?'WAIT blocks':'',
-          ms==='RUN'?`${g(r,'mm_acts')?`${g(r,'mm_m')} act rows`:''}${g(r,'mm_acts')&&g(r,'mm_wts')?' + ':''}${g(r,'mm_wts')?'next weights':''}`:'', `${g(r,'inflight')} row(s) in flight`],ms,['IDLE','RUN','DRAIN'],g(r,'mm_ubre')||g(r,'wv'));
+          ms==='RUN'?`${g(r,'mm_acts')?`${g(r,'mm_m')} act rows`:''}${g(r,'mm_acts')&&g(r,'mm_wts')?' + ':''}${g(r,'mm_wts')?'next weights':''}`:'', `${g(r,'inflight')} row(s) in flight · ${LK.filter(k=>gl(r,'lissue',k)).length}/${LANES} weight lanes busy`],ms,['IDLE','RUN','DRAIN'],g(r,'mm_ubre')||LK.some(k=>gl(r,'wv',k)));
   const as=ACS[g(r,'act_state')];
   o+=eb(3,[as!=='IDLE'?(g(r,'act_rdub')?`RD_UB entry ${g(r,'act_addr')}`:`ACC row ${g(r,'act_addr')} ${accShort(g(r,'act_addr'))}`):'',
            g(r,'act_ubwe')?`UB[${g(r,'act_ubaddr')}] ← int8 × ${NN}`:g(r,'out_push')?`OUT ← ${neg(g(r,'out_word'))}`:'', as!=='IDLE'&&!g(r,'act_rdub')?`block ${g(r,'act_blk')} row ${g(r,'act_rib')}`:''],
@@ -476,33 +480,35 @@ function drawSystem(t){
   o+=txt(CX+10,684,`in flight: ${g(r,'inflight')} · = first K-tile, += the rest · → ACT reads`,{cls:'ps'});
 
   // ===== tile buffer, columns lined up with the array
-  const nx=rows[t+1], rdNext=nx&&g(nx,'wv')?g(nx,'wrow'):-1, rdSlot=g(r,'wt_rd'), TBY=704;
-  const TRH=Math.min(12.5,100/NN);
-  o+=panel(10,TBY,980,248,`Tile buffer (weight_fifo): two ${NN} × ${NN} slots`,{on:g(r,'mm_take')||wtI||rdNext>=0});
-  for(let sl=0;sl<2;sl++){ const y0=TBY+30+sl*108, sv=s.slots[sl], full=g(r,'wt_full')>>sl&1;
+  const nx=rows[t+1], reading=LK.filter(k=>gl(r,'lissue',k));
+  o+=panel(10,TBY,980,TBH,`Tile buffer (weight_fifo): ${SLOTS} slots of ${NN} × ${NN}`,{sub:`${LANES} weight lane${LANES>1?'s':''}: WT fills ${LANES} row${LANES>1?'s':''} a cycle`,on:g(r,'mm_take')||wtI||reading.length});
+  for(let sl=0;sl<SLOTS;sl++){ const y0=TBY+30+sl*SLOT_H, sv=s.slots[sl], full=g(r,'wt_full')>>sl&1;
     o+=txt(20,y0+12,`slot ${sl}`,{cls:'cv',fw:700,fill:sv?TT(sv.tile):'var(--muted)'});
     o+=txt(20,y0+26,sv?`t${sv.tile} · ${full?'full':`${sv.rows}/${NN}`}`:'empty',{cls:'cv sm'});
     if(sv) o+=txt(20,y0+39,tileShort(sv.tile),{cls:'ps',fs:9});
-    const role=[]; if(g(r,'wt_wr')===sl&&g(r,'wt_left')) role.push('WT fills'); if(rdSlot===sl&&rdNext>=0) role.push('MM reads');
+    const lanesHere=reading.filter(k=>gl(r,'lslot',k)===sl);
+    const role=[]; if(g(r,'wt_wr')===sl&&g(r,'wt_left')) role.push('WT fills'); if(lanesHere.length) role.push(`MM: lane ${lanesHere.join(',')}`);
     role.forEach((x,k)=>{o+=txt(20,y0+52+k*12,x,{cls:'ps',fs:9,fill:x[0]==='W'?'var(--wt)':'var(--mm)'});});
     for(let rr=0;rr<NN;rr++){ const val=sv&&sv.vals[rr], y=y0+rr*TRH;
       if(NN<=8||rr%2===0) o+=txt(colX(0)+CW/2-28*SC,y+TRH-3,`r${rr}`,{cls:'ps',a:'end',fs:8});
       LN.forEach(c=>{ const cx=colX(c)+CW/2;
         o+=rect(cx-22*SC,y,44*SC,TRH-1.5,{rx:2,fill:val?TT(sv.tile):'var(--panel)',fo:val?.22:1,st:val?TT(sv.tile):'var(--line)',sw:.6})+(val?txt(cx,y+TRH-3.5,neg(val[c]),{cls:'cv xs',a:'middle'}):''); });
-      if(sl===rdSlot&&rr===rdNext) o+=rect(colX(0)+CW/2-25*SC,y-2,colX(NN-1)-colX(0)+50*SC,TRH+2,{rx:3,fill:'none',st:'var(--mm)',sw:2.2})+txt(985,y+TRH-2,'→ bus',{cls:'cv sm',a:'end',fill:'var(--mm)',fw:700});
-      if(nx&&g(nx,'fw')&&g(nx,'fslot')===sl&&g(nx,'frow')===rr) o+=rect(colX(0)+CW/2-25*SC,y-2,colX(NN-1)-colX(0)+50*SC,TRH+2,{rx:3,fill:'none',st:'var(--wt)',sw:2,dash:'4 2'})+txt(985,y+TRH-2,'← WT',{cls:'cv sm',a:'end',fill:'var(--wt)',fw:700});
+      if(lanesHere.some(k=>gl(r,'lrow',k)===rr)) o+=rect(colX(0)+CW/2-25*SC,y-2,colX(NN-1)-colX(0)+50*SC,TRH+2,{rx:3,fill:'none',st:'var(--mm)',sw:2.2})+txt(985,y+TRH-2,`→ lane ${lanesHere.find(k=>gl(r,'lrow',k)===rr)}`,{cls:'cv sm',a:'end',fill:'var(--mm)',fw:700});
+      if(nx&&g(nx,'fw')&&g(nx,'fslot')===sl&&rr>=g(nx,'frow')&&rr<g(nx,'frow')+LANES) o+=rect(colX(0)+CW/2-25*SC,y-2,colX(NN-1)-colX(0)+50*SC,TRH+2,{rx:3,fill:'none',st:'var(--wt)',sw:2,dash:'4 2'})+txt(985,y+TRH-2,'← WT',{cls:'cv sm',a:'end',fill:'var(--wt)',fw:700});
     }
   }
 
   // ===== the array
-  const APY=960, ABOT=AY+NN*(CH+GPY)+96;
+  const ABOT=AY+NN*(CH+GPY)+96;
   o+=panel(10,APY,980,ABOT-APY,`Systolic array (mmu, ${NN} × ${NN} pe)`,{sub:'activations →   partial sums ↓   weights ↓ per column'});
   o+=txt(20,APY+42,'weight',{cls:'ps'})+txt(20,APY+54,'buses',{cls:'ps'});
   LN.forEach(c=>{ const src=rows[t-c], x=colX(c);
     o+=line(x+CW+GPX/2,AY-8,x+CW+GPX/2,rowY(NN-1)+CH,'var(--wt)',{sw:1,dash:'2 3',op:.5});
-    if(src&&g(src,'wv')){ const tl=tileAtOrd(S[t-c].busOrd), rw=g(src,'wrow'), v=src[IX['wd'+c]];
-      o+=chip(x,APY+32,CW,24,TT(tl),NN>8?neg(v):`t${tl} r${rw} · ${neg(v)}`,{fo:.22,sw:1.6,cls:'cv sm'});
-      const yT=rowY(rw)+CH-18*SC; o+=line(x+CW+GPX/2,AY-8,x+CW+GPX/2,yT,'var(--wt)',{sw:2.2})+arrow(x+CW+GPX/2,yT,x+CW-1,yT,'var(--wt)',{sw:2}); }
+    const live=src?LK.filter(k=>gl(src,'wv',k)):[], ch=24/Math.max(1,LANES>2?2:LANES), per=LANES>2?2:1;
+    if(live.length) live.forEach((k,j)=>{ const tl=S[t-c].laneTile[k], rw=gl(src,'wrow',k), v=src[IX['wd'+(k*NN+c)]];
+        const cx=x+(j%per)*CW/per, cy=APY+32+Math.floor(j/per)*ch;
+        o+=chip(cx,cy,CW/per-1,ch-1,TT(tl),NN>8||LANES>1?neg(v):`t${tl} r${rw} · ${neg(v)}`,{fo:.22,sw:1.6,cls:'cv '+(LANES>1?'xs':'sm')});
+        const yT=rowY(rw)+CH-18*SC; o+=line(x+CW+GPX/2,AY-8,x+CW+GPX/2,yT,'var(--wt)',{sw:2.2})+arrow(x+CW+GPX/2,yT,x+CW-1,yT,'var(--wt)',{sw:2}); });
     else o+=chip(x,APY+32,CW,24,'var(--line)','idle',{fo:0,cls:'cv sm dim',dash:'3 3'});
   });
   LN.forEach(a=>{ const y=rowY(a), q=pk(a,0);
@@ -666,8 +672,8 @@ function events(t){
   if(g(r,'mm_state')===1 && !g(r,'mm_acts') && g(r,'mm_wts') && g(r,'mm_pos')===0) add('Prologue window: preload the first tile into the shadow registers, no activations yet','');
   if(g(r,'mm_freeze')) add('MM frozen: the next tile is not in the tile buffer yet (WSTALL)','');
   if(g(r,'mm_ubre')) add(`MM reads UB entry ${g(r,'mm_ubaddr')} ${ubLabel(g(r,'mm_ubaddr'))} for K-tile ${g(r,'mm_k')}; its row goes to ACC ${g(r,'tagv')&(ACCD-1)}`);
-  const nx=rows[t+1]; if(nx&&g(nx,'wv')) add(`MM reads row ${g(nx,'wrow')} of slot ${g(r,'wt_rd')} onto the weight bus`);
-  if(g(r,'wv')) add(`Weight bus: t${tileAtOrd(s.busOrd)} row ${g(r,'wrow')} ${vec(r,'wd')}; column c gets its value c cycles later and PE (${g(r,'wrow')}, c) writes it into its shadow`);
+  for(const k of LK) if(gl(r,'lissue',k)) add(`MM reads row ${gl(r,'lrow',k)} of slot ${gl(r,'lslot',k)} onto weight lane ${k}${gl(r,'lrow',k)===0?' (a new stream: the next tile)':''}`);
+  for(const k of LK) if(gl(r,'wv',k)) add(`Weight lane ${k}: t${s.laneTile[k]} row ${gl(r,'wrow',k)} [${laneRow(r,'wd',k).map(neg).join(', ')}]; column c gets it c cycles later and PE (${gl(r,'wrow',k)}, c) writes it into its shadow`);
   if(g(r,'mm_take')) add('MM releases a tile-buffer slot (its last row is being read)','');
   const pes=[]; for(let a=0;a<NN;a++)for(let c=0;c<NN;c++) pes.push([a,c,pk(a,c)]);
   const macs=pes.filter(([a,c,q])=>g(r,q+'v')); if(macs.length) add(`${macs.length} of ${NN*NN} PEs multiply-accumulate at this edge`,'');
@@ -694,7 +700,7 @@ function tlRows(){
        `<td>${g(r,'ipop')?opName(popsBefore[t]):x}</td>`+
        `<td>${g(r,'ub_we')?'UB['+g(r,'ub_waddr')+']':g(r,'wmem_we')?'WM['+g(r,'wmem_waddr')+']':g(r,'ld_busy')?'busy':x}</td>`+
        `<td>${g(r,'wt_issue')?'t'+g(r,'wt_tile')+' r'+g(r,'wt_row'):x} <span class="x">${['··','■·','·■','■■'][g(r,'wt_full')]}</span></td>`+
-       `<td>${MMS[g(r,'mm_state')]}${g(r,'mm_state')===1?' '+g(r,'mm_pos'):''}${g(r,'mm_ubre')?' ub'+g(r,'mm_ubaddr'):''}${g(r,'wv')?' w'+g(r,'wrow'):''}</td>`+
+       `<td>${MMS[g(r,'mm_state')]}${g(r,'mm_state')===1?' '+g(r,'mm_pos'):''}${g(r,'mm_ubre')?' ub'+g(r,'mm_ubaddr'):''}${LK.filter(k=>gl(r,'wv',k)).map(k=>' w'+gl(r,'wrow',k)).join('')}</td>`+
        `<td>${ai||x}</td><td>${m||x}</td><td>${g(r,'acc_we')?'['+g(r,'acc_waddr')+'] '+vec(r,'accw'):g(r,'row_pop')?'pop':x}</td>`+
        `<td>${ACS[g(r,'act_state')]==='IDLE'?x:ACS[g(r,'act_state')]}${g(r,'out_push')?' '+g(r,'out_word'):''}</td><td>${[0,1,2,3].map(e=>g(r,'comp'+e)).join(' ')}</td></tr>`; }
   $('tl').innerHTML=h+'</tbody>';
