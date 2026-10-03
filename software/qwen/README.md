@@ -224,6 +224,30 @@ uncached window.
 - **Program overhead.** About 75 ms a token. Pre-queued programs released by
   a doorbell register would cut it.
 
+## Profiling
+
+`qwen-run --profile FILE` records the core's instruction profiler
+(`rtl/common/profiler.sv`). It logs every program as pushed and a timestamped
+event for each dispatch, pop and completion, drained while the ARM polls.
+`software/viz/profile_page.py FILE` turns the file into a zoomable engine
+timeline with breakdowns per matrix and per token ([`software/viz`](../viz/README.md)).
+`BoardConsole.download()` brings the file back over the console.
+
+On the board (2026-10-02, a 4-token prompt then 4 tokens, 485 programs, nothing
+dropped):
+
+| Per decoded token | |
+|---|---|
+| core cycles, first program to last | 1.37 s, the same as the ARM's wall clock |
+| MM busy | 90%, at 100% of its ideal tile rate (tiles × max(m, 8)) |
+| core idle between programs | 9%, the ARM's own work and its DDR3 copies in and out |
+| share by matrix | gate/up 38%, down 26%, head 24%, q/k/v 8%, o 5% |
+
+The longest gaps come before `down` (the ARM reads gate/up's 9,728 int32
+outputs from the uncached DDR3 window and applies SiLU) and before `qkv` (norms
+and attention). A 4-row prompt pass costs 1.65 s, about one token: up to 8 rows,
+a tile costs the same 8 cycles.
+
 ## A chat in the browser
 
 ```sh

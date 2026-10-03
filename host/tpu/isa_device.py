@@ -211,6 +211,36 @@ class BoardConsole:
             if fast:
                 self.set_baud(self.BAUD)
 
+    def download(self, remote, local, fast=True):
+        """copy a file from the board: hex over the console (this busybox has hexdump
+        but no base64), md5 checked. the console has no flow control, so a fast
+        transfer can drop bytes: then it's done again at the base rate"""
+        try:
+            return self._download(remote, local, fast)
+        except RuntimeError:
+            if not fast:
+                raise
+            return self._download(remote, local, False)
+
+    def _download(self, remote, local, fast):
+        import hashlib
+        if fast:
+            self.set_baud(self.FAST_BAUD)
+        try:
+            md5 = self.run(f"md5sum {remote}", 1.0).split()
+            want = next((w for w in md5 if len(w) == 32), None)
+            text = self.run_until_prompt(f"hexdump -v -e '32/1 \"%02x\" \"\\n\"' {remote}; echo HEXEND",
+                                         timeout=1800.0)
+            body = text.split("\n", 1)[1].rsplit("HEXEND", 1)[0]
+            data = bytes.fromhex("".join(body.split()))
+            if hashlib.md5(data).hexdigest() != want:
+                raise RuntimeError(f"download of {remote}: md5 mismatch ({len(data)} bytes)")
+            open(local, "wb").write(data)
+            return len(data)
+        finally:
+            if fast:
+                self.set_baud(self.BAUD)
+
     def _wait_prompt(self, timeout=10.0):
         buf = b""
         end = time.time() + timeout
