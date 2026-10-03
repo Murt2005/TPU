@@ -238,8 +238,12 @@ standard library and pyserial, so it runs in the repo's `.venv`.
   `qwen-run --serve` on the board over the console, and streams the reply
   back token by token, with the prompt time and tokens/s under each reply.
 - **Two modes:** **Chat** keeps the conversation as "User: … / Assistant:"
-  lines and stops a reply where the model starts the user's next line.
-  **Complete** continues your text as-is.
+  turns under a one-line preamble. **Complete** continues your text as-is.
+- **Ending a reply:** the base model writes the next turns itself, so chat
+  mode ends a reply where "User:" or "Assistant:" starts. What's shown is
+  kept, and `chat.py` sends `S` to `qwen-run --serve`, which stops before
+  the next token instead of running on to the limit.
+- **Quitting:** Ctrl-C quits `chat.py`, and `qwen-run` on the board with it.
 - **The base model completes text rather than following instructions.** It
   answers short questions ("Name three primary colors." → "Three primary
   colors are red, blue, and yellow.") but rambles on longer ones.

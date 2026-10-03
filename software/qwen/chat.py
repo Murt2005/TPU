@@ -10,8 +10,10 @@ then open http://localhost:8000. It needs the standard library and pyserial (the
 repo's .venv), not PyTorch. --board needs the board booted through
 u-boot.scr (mem=256M, the port live) and /mnt/boot/qwen/ holding qwen-run,
 qwen-host.bin, qwen-vocab.bin and qwen-ddr.bin. The base model continues text
-rather than following instructions; chat mode frames each turn as
-"User: ... / Assistant:" and stops a reply where the model starts the user's next line.
+rather than following instructions; chat mode frames the conversation
+as "User: ... / Assistant:" turns under a one-line preamble, and ends a reply where
+the model starts another turn: what's shown is kept, and the board is told to stop.
+Ctrl-C quits, and qwen-run on the board with it.
 """
 import argparse
 import json
@@ -90,12 +92,14 @@ class Chat:
         self.backend, self.tok = backend, tokenizer
         self.lock = threading.Lock()
 
-    def stream(self, prompt, max_tokens, stop=None):
-        """yields text pieces as tokens arrive, then a dict of stats"""
+    def stream(self, prompt, max_tokens, stops=()):
+        """yields text pieces as tokens arrive, then a dict of stats. at the first
+        of `stops` the reply ends there: what's shown so far is final, and the
+        board is told to stop rather than run on to max_tokens"""
         ids = self.tok.encode(prompt)
         with self.lock:
             self.backend.send(f"G {max_tokens} " + ",".join(map(str, ids)))
-            made, shown, first_at, t0, stopped = [], "", None, time.time(), False
+            made, shown, t0, stopped = [], "", time.time(), False
             while True:
                 line = self.backend.readline()
                 if not line:
@@ -104,22 +108,22 @@ class Chat:
                     continue
                 kind, *rest = line.split()
                 if kind == "T":
+                    if stopped:                         # the reply is over: drain until E
+                        continue
                     made.append(int(rest[0]))
-                    first_at = first_at or time.time()
                     text = self.tok.decode(made)
                     if text.endswith("�"):       # half a UTF-8 character: wait for the rest
                         continue
-                    if stop and not stopped:
-                        cut = text.find(stop)
-                        if cut >= 0:
-                            text, stopped = text[:cut], True
-                    if not stopped or len(text) > len(shown):
-                        if text.startswith(shown) and len(text) > len(shown):
-                            yield text[len(shown):]
-                            shown = text
+                    cuts = [text.find(s) for s in stops if s and s in text]
+                    if cuts:
+                        text, stopped = text[:min(cuts)].rstrip(), True
+                        self.backend.send("S")
+                    if text.startswith(shown) and len(text) > len(shown):
+                        yield text[len(shown):]
+                        shown = text
                 elif kind == "E":
                     count, prompt_s, gen_s = int(rest[0]), float(rest[1]), float(rest[2])
-                    yield dict(tokens=count, prompt_tokens=len(ids), prompt_seconds=prompt_s,
+                    yield dict(tokens=count, prompt_tokens=len(ids), prompt_seconds=prompt_s, stopped=stopped,
                                generate_seconds=gen_s,
                                tokens_per_second=(count - 1) / gen_s if count > 1 and gen_s > 0 else 0.0,
                                backend=self.backend.name)
@@ -162,6 +166,8 @@ button[type=submit] { background:var(--accent); color:#fff; border-color:var(--a
 <script>
 const log = document.getElementById('log'), form = document.getElementById('f'), promptBox = document.getElementById('prompt');
 const send = document.getElementById('send'); let history = [];
+// the base model completes text: a framing line makes the turns read as a conversation
+const PREAMBLE = 'The following is a conversation between a user and a helpful, concise assistant.\n\n';
 fetch('/info').then(r => r.json()).then(i => document.getElementById('backend').textContent = i.backend);
 function bubble(cls, text) { const d = document.createElement('div'); d.className = 'msg ' + cls; d.textContent = text;
   log.appendChild(d); log.scrollTop = log.scrollHeight; return d; }
@@ -171,16 +177,22 @@ form.onsubmit = e => {
   e.preventDefault(); const text = promptBox.value.trim(); if (!text || send.disabled) return;
   const mode = document.getElementById('mode').value, max = document.getElementById('max').value;
   bubble('user', text); promptBox.value = ''; send.disabled = true;
-  let prompt = text, stop = '';
-  if (mode === 'chat') { history.push('User: ' + text); prompt = history.join('\n') + '\nAssistant:'; stop = '\nUser'; }
+  const params = new URLSearchParams({max});
+  let prompt = text;
+  if (mode === 'chat') {
+    history.push('User: ' + text);
+    prompt = PREAMBLE + history.join('\n') + '\nAssistant:';
+    for (const s of ['\nUser', '\nAssistant', 'User:']) params.append('stop', s);
+  }
+  params.set('prompt', prompt);
   const bot = bubble('bot', ''); let reply = '';
-  const es = new EventSource('/generate?' + new URLSearchParams({prompt, max, stop}));
+  const es = new EventSource('/generate?' + params);
   es.onmessage = ev => { const m = JSON.parse(ev.data);
     if (m.text !== undefined) { reply += m.text; bot.textContent = reply; log.scrollTop = log.scrollHeight; }
     if (m.done) { es.close(); send.disabled = false;
-      if (mode === 'chat') history.push('Assistant:' + reply);
+      if (mode === 'chat') history.push('Assistant:' + reply.trimEnd());
       const s = document.createElement('div'); s.className = 'stats';
-      s.textContent = `${m.done.prompt_tokens}-token prompt in ${m.done.prompt_seconds.toFixed(1)} s · ${m.done.tokens} tokens at ${m.done.tokens_per_second.toFixed(2)} tokens/s`;
+      s.textContent = `${m.done.prompt_tokens}-token prompt in ${m.done.prompt_seconds.toFixed(1)} s · ${m.done.tokens} tokens at ${m.done.tokens_per_second.toFixed(2)} tokens/s` + (m.done.stopped ? ' · stopped at the next turn' : '');
       bot.appendChild(s); }
     if (m.error) { es.close(); send.disabled = false; bot.textContent = 'error: ' + m.error; } };
   es.onerror = () => { es.close(); send.disabled = false; };
@@ -211,14 +223,14 @@ def make_handler(chat):
                 self.wfile.write(body)
             elif url.path == "/generate":
                 q = urllib.parse.parse_qs(url.query)
-                prompt, stop = q.get("prompt", [""])[0], q.get("stop", [""])[0] or None
+                prompt, stops = q.get("prompt", [""])[0], q.get("stop", [])
                 max_tokens = max(1, min(512, int(q.get("max", ["48"])[0])))
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
                 self.send_header("Cache-Control", "no-cache")
                 self.end_headers()
                 try:
-                    for piece in chat.stream(prompt, max_tokens, stop):
+                    for piece in chat.stream(prompt, max_tokens, stops):
                         msg = dict(done=piece) if isinstance(piece, dict) else dict(text=piece)
                         self.wfile.write(f"data: {json.dumps(msg)}\n\n".encode())
                         self.wfile.flush()
@@ -255,7 +267,13 @@ def main():
     print(f"{backend.name}: {url}", flush=True)
     if not args.no_browser:
         webbrowser.open(url)
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        backend.send("Q")                    # qwen-run exits; on the board the shell gets the console back
+        time.sleep(1)
 
 
 if __name__ == "__main__":

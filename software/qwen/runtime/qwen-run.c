@@ -10,9 +10,9 @@
  *            [--serve]                        answer requests on stdin (chat.py), weights loaded once
  *
  * --serve speaks lines: in "G <max tokens> <id>,<id>,..." (a fresh context each
- * time) or "Q"; out "READY" once, then per request "T <id>" for each token as
- * it's made and "E <tokens> <prompt seconds> <generate seconds>" at the end.
- * generation stops at <|endoftext|> or <|im_end|>
+ * time), "S" (stop the reply being made) or "Q"; out "READY" once, then per
+ * request "T <id>" for each token as it's made and "E <tokens> <prompt seconds>
+ * <generate seconds>" at the end. generation also stops at <|endoftext|> or <|im_end|>
  *
  * sim:TB_ISA:IMAGE and mmio:IMAGE load IMAGE into (simulated) DDR3 first. ids come from
  * software/qwen/tokenizer.py; text is printed with the exported vocabulary */
@@ -20,7 +20,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/select.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include "qwen.h"
 
@@ -34,25 +36,55 @@ static int argmax(const float *v, int n) {
 #define EOS_TEXT 151643     /* <|endoftext|> */
 #define EOS_TURN 151645     /* <|im_end|> */
 
-/* chat.py's requests: one prompt in, its tokens out as they're made */
+/* stdin, a line at a time, read with read() so a stop can be polled for between
+ * tokens without blocking (select) and without stdio's buffer hiding bytes */
+typedef struct { char buf[1 << 20]; size_t len; } input;
+
+/* the next whole line into line, or 0 if none is complete; wait = block for one */
+static int next_line(input *in, char *line, size_t max, int wait) {
+    for (;;) {
+        for (size_t i = 0; i < in->len; i++)
+            if (in->buf[i] == '\n' || in->buf[i] == '\r') {
+                size_t n = i < max - 1 ? i : max - 1;
+                memcpy(line, in->buf, n);
+                line[n] = 0;
+                memmove(in->buf, in->buf + i + 1, in->len - i - 1);
+                in->len -= i + 1;
+                if (n) return 1;                         /* skip empty lines */
+                i = (size_t)-1;
+            }
+        if (!wait) {
+            fd_set fds;
+            struct timeval now = {0, 0};
+            FD_ZERO(&fds);
+            FD_SET(0, &fds);
+            if (select(1, &fds, NULL, NULL, &now) <= 0) return 0;
+        }
+        ssize_t got = read(0, in->buf + in->len, sizeof in->buf - in->len);
+        if (got <= 0) return -1;
+        in->len += (size_t)got;
+        if (!wait) {
+            /* one read's worth, then look again without waiting */
+            for (size_t i = 0; i < in->len; i++)
+                if (in->buf[i] == '\n' || in->buf[i] == '\r') goto again;
+            return 0;
+        }
+    again:;
+    }
+}
+
+/* chat.py's requests: one prompt in, its tokens out as they're made; "S" between
+ * tokens stops the reply early (chat.py's stop sequence turned up) */
 static void serve(model *md, int prefill) {
+    static input in;
     char *line = malloc(1 << 20);
     int *ids = malloc(sizeof(int) * (size_t)md->max_ctx);
     float *logits = malloc(sizeof(float) * (size_t)prefill * md->vocab);
     printf("READY\n");
     fflush(stdout);
-    size_t len = 0;
-    for (;;) {
-        int ch = getchar();
-        if (ch == EOF) break;
-        if (ch != '\n' && ch != '\r') {
-            if (len < (1 << 20) - 1) line[len++] = (char)ch;
-            continue;
-        }
-        line[len] = 0;
-        len = 0;
+    while (next_line(&in, line, 1 << 20, 1) > 0) {
         if (line[0] == 'Q') break;
-        if (line[0] != 'G') continue;
+        if (line[0] != 'G') continue;                    /* a stray stop, or noise */
         char *p = line + 1;
         int max_tokens = (int)strtol(p, &p, 10), n = 0;
         while (*p && n < md->max_ctx) {
@@ -70,17 +102,22 @@ static void serve(model *md, int prefill) {
             model_forward(md, ids + at, m, logits);
         }
         double t1 = now_seconds();
-        int next = argmax(logits + (size_t)(m - 1) * md->vocab, md->vocab), made = 0;
+        int next = argmax(logits + (size_t)(m - 1) * md->vocab, md->vocab), made = 0, quit = 0;
         while (made < max_tokens && next != EOS_TEXT && next != EOS_TURN) {
             printf("T %d\n", next);
             fflush(stdout);
             made++;
             if (made == max_tokens) break;
+            char pending[64];
+            int got = next_line(&in, pending, sizeof pending, 0);
+            if (got < 0) { quit = 1; break; }
+            if (got > 0 && (pending[0] == 'S' || pending[0] == 'Q')) { quit = pending[0] == 'Q'; break; }
             model_forward(md, &next, 1, logits);
             next = argmax(logits, md->vocab);
         }
         printf("E %d %.3f %.3f\n", made, t1 - t0, now_seconds() - t1);
         fflush(stdout);
+        if (quit) break;
     }
     free(line);
     free(ids);
