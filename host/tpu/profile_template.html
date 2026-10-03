@@ -103,7 +103,7 @@ td .meter{display:inline-block;height:8px;border-radius:2px;background:var(--mm)
     <div><h2>Engines</h2><div class="tbox"><table id="teng"></table></div></div>
     <div><h2>Longest programs</h2><div class="tbox scrolly"><table id="tprog"></table></div></div>
   </div>
-  <p class="note">Scroll on the timeline to zoom at the cursor, drag to pan, double-click to see the whole run; click a table row to zoom there. Bars thinner than a pixel merge into per-pixel occupancy. The amber part of a bar is the time that engine was blocked before completing it: a WAIT's is the wait itself, a MATMUL's its weight stalls.</p>
+  <p class="note">Scroll on the timeline to zoom at the cursor, drag to pan, double-click to see the whole run; click a table row to zoom there. Bars thinner than a pixel merge into per-pixel occupancy. An outlined box is a WAIT: the engine idles until the engines it names have finished. The amber strip on a solid bar is time the engine stalled inside that instruction, such as a MATMUL's weight stalls.</p>
 </section>
 </div>
 <div class="tip" id="tip" hidden></div>
@@ -151,8 +151,8 @@ if(D.dropped||D.missing) h+=`<span class="chip no"><b>incomplete</b> ${D.dropped
 $('chips').innerHTML=h; $('srcnote').textContent=D.source||''; document.title=D.title;
 
 // ---- legend ----
-$('legend').innerHTML=[['var(--host)','host: core idle between programs'],['var(--ld)','LD'],['var(--wt)','WT'],['var(--act)','ACT'],['var(--sync)','blocked (WAIT, stall)']]
-  .map(([c,l])=>`<span><i style="background:${c}"></i>${l}</span>`).join('')+KINDS.map(k=>`<span><i style="background:${KCOL(k)}"></i>MM: ${esc(k)}</span>`).join('');
+$('legend').innerHTML=[['var(--host)','host: core idle between programs'],['var(--ld)','LD'],['var(--wt)','WT'],['var(--act)','ACT'],['var(--sync)','stalled inside an instruction']]
+  .map(([c,l])=>`<span><i style="background:${c}"></i>${l}</span>`).join('')+`<span><i style="border:1.5px solid var(--sync);background:none"></i>WAIT: waiting for another engine</span>`+KINDS.map(k=>`<span><i style="background:${KCOL(k)}"></i>MM: ${esc(k)}</span>`).join('');
 
 // ---- the timeline ----
 const LANES=['host','dispatch','LD','WT','MM','ACT'], LH=36, TOP=34, LX=76;
@@ -178,7 +178,9 @@ function drawTL(){
   (D.marks||[]).forEach(m=>{ const p=P[m.program]; if(!p||p.start==null) return; const X=sx(p.start-p.gap); if(X<LX||X>W) return; x.fillRect(X,8,1.5,TOP+LANES.length*LH-8); x.fillText(m.label,X+4,18); });
   hitList=[];
   const bins=LANES.map(()=>new Float32Array(Math.ceil(w)+2)), binsB=LANES.map(()=>new Float32Array(Math.ceil(w)+2)), binCol=LANES.map(()=>Array(Math.ceil(w)+2).fill(null));
-  const put=(lane,s,t,color,blocked,hit)=>{ if(t<v0||s>v1) return; const X0=sx(s), X1=sx(t), y=TOP+lane*LH+5, hh=LH-10;
+  const put=(lane,s,t,color,blocked,hit,outline)=>{ if(t<v0||s>v1) return; const X0=sx(s), X1=sx(t), y=TOP+lane*LH+5, hh=LH-10;
+    if(outline){ const a=Math.max(LX,X0), b=Math.min(W-12,X1); if(b-a>=1.5){ x.strokeStyle=col(color); x.lineWidth=1; x.strokeRect(a+.5,y+.5,b-a-1,hh-1); }
+      if(hit) hitList.push([lane,a-1,b+1,hit]); return; }
     if(X1-X0>=1.5){ x.fillStyle=col(color); x.globalAlpha=.85; x.fillRect(Math.max(LX,X0),y,Math.min(W-12,X1)-Math.max(LX,X0),hh); x.globalAlpha=1;
       if(blocked>0){ const bw=Math.min(X1-X0,blocked*w/(v1-v0)); x.fillStyle=col('var(--sync)'); x.fillRect(Math.max(LX,X1-bw),y,Math.min(W-12,X1)-Math.max(LX,X1-bw),hh*.35); }
       if(hit) hitList.push([lane,Math.max(LX,X0),Math.min(W-12,X1),hit]); }
@@ -186,7 +188,7 @@ function drawTL(){
       if(hit) hitList.push([lane,X0-1,X1+1,hit]); } };
   hostBars.forEach(([s,t,p])=>put(0,s,t,'var(--host)',0,{host:p}));
   P.forEach((p,i)=>{ if(p.start!=null) put(1,p.start,p.start+Math.max(1,p.count),'var(--muted)',0,{prog:i}); });
-  R.forEach((r,k)=>{ const o=op(r[3]); if(o==='WAIT'){ if(r[6]>0) put(laneOf(r[0]),r[4]-r[6],r[4],'var(--sync)',0,{row:k}); return; } put(laneOf(r[0]),r[4],Math.max(r[5],r[4]+1),colorOf(r),r[6],{row:k}); });
+  R.forEach((r,k)=>{ const o=op(r[3]); if(o==='WAIT'){ if(r[6]>0) put(laneOf(r[0]),r[4]-r[6],r[4],'var(--sync)',0,{row:k},true); return; } put(laneOf(r[0]),r[4],Math.max(r[5],r[4]+1),colorOf(r),r[6],{row:k}); });
   bins.forEach((b,lane)=>{ const y=TOP+lane*LH+5, hh=LH-10; for(let i=0;i<b.length;i++){ if(!b[i]) continue; const occ=Math.min(1,b[i]); x.fillStyle=col(binCol[lane][i]||'var(--mm)'); x.globalAlpha=.25+.6*occ; x.fillRect(LX+i,y+hh*(1-occ),1,hh*occ); x.globalAlpha=1;
     if(binsB[lane][i]>0){ x.fillStyle=col('var(--sync)'); x.fillRect(LX+i,y,1,hh*.35*Math.min(1,binsB[lane][i])); } } });
   $('range').textContent=`${nf(v0)} – ${nf(v1)} · ${fmtT(v1-v0)}`;
@@ -219,7 +221,7 @@ function describe(h){
   if(h.host!=null){ const p=P[h.host]; return `<b>host</b> · core idle ${nf(p.gap)} cycles (${fmtT(p.gap)})<br>before program ${h.host+1}: ${esc(p.label)}`; }
   if(h.prog!=null){ const p=P[h.prog]; return `<b>program ${h.prog+1}</b> · ${esc(p.label)}<br>${p.count} instructions, ${nf(p.tiles)} tiles<br>${nf(p.start)} → ${nf(p.end)} (${fmtT(p.end-p.start)})`; }
   const r=R[h.row], p=P[r[1]], txt=p.words?p.words[r[2]]:op(r[3]);
-  return `<b>${ENG[r[0]]}</b> · program ${r[1]+1} (${esc(p.label)}) #${r[2]+1}<br>${esc(txt)}<br>popped ${nf(r[4])}, completed ${nf(r[5])}: ${nf(r[5]-r[4])} cycles<br>blocked ${nf(r[6])} cycles before completing${r[6]===65535?' (saturated)':''}`;
+  return `<b>${ENG[r[0]]}</b> · program ${r[1]+1} (${esc(p.label)}) #${r[2]+1}<br>${esc(txt)}<br>popped ${nf(r[4])}, completed ${nf(r[5])}: ${nf(r[5]-r[4])} cycles<br>${op(r[3])==='WAIT'?'waited':'blocked'} ${nf(r[6])} cycles${r[6]===524287&&op(r[3])!=='WAIT'?' (saturated)':''}`;
 }
 $('all').onclick=()=>setView(T0,T1);
 $('zin').onclick=()=>{ const c=(v0+v1)/2, s=(v1-v0)/4; setView(c-s,c+s); };
